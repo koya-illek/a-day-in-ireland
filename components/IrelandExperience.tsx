@@ -81,7 +81,7 @@ function StationMarker({
 
 export default function IrelandExperience({ initialSnapshot }: { initialSnapshot: LiveSnapshot }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date(initialSnapshot.generatedAt));
   const [layers, setLayers] = useState<Set<Layer>>(
     () => new Set(["weather", "rain", "wind", "warnings", "places", "sea"])
   );
