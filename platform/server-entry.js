@@ -52,7 +52,11 @@ const fetchTrains = async () => {
 
 const fetchRivers = async () => {
   const response = await fetch("https://waterlevel.ie/geojson/latest/", {
-    cf: { cacheEverything: true, cacheTtl: 900 }
+    headers: {
+      "accept": "application/json",
+      "referer": "https://waterlevel.ie/",
+      "user-agent": "A-Day-in-Ireland/2.0 (+https://a-day-in-ireland.koya-illek.chatgpt.site)"
+    }
   });
   if (!response.ok) throw new Error(`OPW returned ${response.status}`);
   const body = await response.json();
@@ -161,6 +165,9 @@ const livingLayers = async (request) => {
     fetchRivers(),
     fetchTraffic()
   ]);
+  if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
+  if (rivers.status === "rejected") console.error("OPW river refresh failed", rivers.reason);
+  if (traffic.status === "rejected") console.error("TII traffic refresh failed", traffic.reason);
   return json({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],

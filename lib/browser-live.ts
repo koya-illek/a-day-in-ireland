@@ -135,20 +135,30 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
     if (!response.ok) return previous;
     const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers" | "traffic"> & {
       generatedAt: string;
+      sourceStatus?: {
+        trains: "live" | "unavailable";
+        rivers: "live" | "unavailable";
+        traffic: "context" | "unavailable";
+      };
     };
     if (!Array.isArray(next.trains) || !Array.isArray(next.rivers) || !Array.isArray(next.traffic)) {
       return previous;
     }
+    const now = Date.now();
+    const trains = next.sourceStatus?.trains === "unavailable" ? previous.trains : next.trains;
+    const rivers = (next.sourceStatus?.rivers === "unavailable" ? previous.rivers : next.rivers)
+      .filter((river) => now - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000);
+    const traffic = next.sourceStatus?.traffic === "unavailable" ? previous.traffic : next.traffic;
     return {
       ...previous,
-      trains: next.trains,
-      rivers: next.rivers,
-      traffic: next.traffic,
+      trains,
+      rivers,
+      traffic,
       summary: {
         ...previous.summary,
-        runningTrains: next.trains.filter((train) => train.status === "running").length,
-        riverStations: next.rivers.filter((river) => river.fresh).length,
-        busiestRoad: [...next.traffic].sort(
+        runningTrains: trains.filter((train) => train.status === "running").length,
+        riverStations: rivers.length,
+        busiestRoad: [...traffic].sort(
           (a, b) => b.averageDailyTraffic - a.averageDailyTraffic
         )[0] ?? null
       }
