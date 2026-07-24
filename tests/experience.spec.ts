@@ -6,6 +6,7 @@ test("renders the living map and live observations", async ({ page }) => {
   await expect(page.getByLabel("Live map of Ireland")).toBeVisible();
   await expect(page.getByText("Today so far")).toBeVisible();
   await expect(page.locator(".station-marker").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /Movement/ })).toBeVisible();
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
@@ -24,6 +25,21 @@ test("explore layers and station details are interactive", async ({ page }) => {
 test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
-  await expect(page.getByText(/Weather data © Met Éireann/)).toBeVisible();
+  await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
+  await expect(page.getByText("More than weather.")).toBeVisible();
   expect(await page.locator(".timeline-point").count()).toBeGreaterThanOrEqual(20);
+});
+
+test("movement and water presets expose the new v2 layers", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /Movement/ }).click();
+  await expect(page.locator(".traffic-marker").first()).toBeVisible();
+  if (await page.locator(".train-marker").count()) {
+    await page.locator(".train-marker").first().click();
+    await expect(page.locator(".detail-train")).toBeVisible();
+  }
+  await page.getByRole("button", { name: /Water/ }).click();
+  await expect(page.locator(".river-marker").first()).toBeVisible();
+  await page.locator(".river-marker").first().click();
+  await expect(page.locator(".detail-river")).toBeVisible();
 });

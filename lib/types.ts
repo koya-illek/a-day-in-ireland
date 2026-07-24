@@ -20,6 +20,36 @@ export type WeatherWarning = {
   expiry: string;
 };
 
+export type TrainPosition = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  status: "running" | "not-started";
+  direction: string;
+  message: string;
+  observedAt: string;
+};
+
+export type RiverReading = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  level: number;
+  observedAt: string;
+  fresh: boolean;
+};
+
+export type TrafficCounter = {
+  id: string;
+  name: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+  averageDailyTraffic: number;
+  category: string;
+};
+
 export type LiveSnapshot = {
   generatedAt: string;
   sourceStatus: "live" | "partial" | "fallback";
@@ -34,11 +64,17 @@ export type LiveSnapshot = {
     waveHeight: number | null;
     seaTemperature: number | null;
   }>;
+  trains: TrainPosition[];
+  rivers: RiverReading[];
+  traffic: TrafficCounter[];
   summary: {
     warmest: StationReading | null;
     wettest: StationReading | null;
     windiest: StationReading | null;
     reporting: number;
+    runningTrains: number;
+    riverStations: number;
+    busiestRoad: TrafficCounter | null;
   };
   timeline: Array<{
     time: string;

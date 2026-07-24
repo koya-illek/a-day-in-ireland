@@ -86,7 +86,13 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     stations,
     warnings: previous.warnings.filter((warning) => new Date(warning.expiry).getTime() > now),
     marine: previous.marine.filter((buoy) => now - new Date(buoy.observedAt).getTime() < 3 * 60 * 60 * 1000),
-    summary: { warmest: top("temperature"), wettest: top("rainfall"), windiest: top("windSpeed"), reporting: fresh.length },
+    summary: {
+      ...previous.summary,
+      warmest: top("temperature"),
+      wettest: top("rainfall"),
+      windiest: top("windSpeed"),
+      reporting: fresh.length
+    },
     timeline: [...buckets].map(([time, values]) => ({
       time,
       temperature: values.temp.length ? values.temp.reduce((a, b) => a + b, 0) / values.temp.length : null,
@@ -94,4 +100,36 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
       windSpeed: values.wind.length ? values.wind.reduce((a, b) => a + b, 0) / values.wind.length : null
     }))
   };
+}
+
+export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveSnapshot> {
+  try {
+    const response = await fetch("/api/living", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000)
+    });
+    if (!response.ok) return previous;
+    const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers" | "traffic"> & {
+      generatedAt: string;
+    };
+    if (!Array.isArray(next.trains) || !Array.isArray(next.rivers) || !Array.isArray(next.traffic)) {
+      return previous;
+    }
+    return {
+      ...previous,
+      trains: next.trains,
+      rivers: next.rivers,
+      traffic: next.traffic,
+      summary: {
+        ...previous.summary,
+        runningTrains: next.trains.filter((train) => train.status === "running").length,
+        riverStations: next.rivers.filter((river) => river.fresh).length,
+        busiestRoad: [...next.traffic].sort(
+          (a, b) => b.averageDailyTraffic - a.averageDailyTraffic
+        )[0] ?? null
+      }
+    };
+  } catch {
+    return previous;
+  }
 }

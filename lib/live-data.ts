@@ -1,4 +1,11 @@
-import type { LiveSnapshot, StationReading, WeatherWarning } from "./types";
+import type {
+  LiveSnapshot,
+  RiverReading,
+  StationReading,
+  TrafficCounter,
+  TrainPosition,
+  WeatherWarning
+} from "./types";
 
 const STATIONS = [
   { id: "malin-head", endpoint: "malin-head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
@@ -117,11 +124,188 @@ async function fetchMarine() {
   }
 }
 
+const textValue = (xml: string, name: string) => {
+  const match = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(xml);
+  return (match?.[1] ?? "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .trim();
+};
+
+async function fetchTrains(): Promise<TrainPosition[]> {
+  try {
+    const response = await fetch(
+      "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+      { next: { revalidate: 60 }, signal: AbortSignal.timeout(7000) }
+    );
+    if (!response.ok) return [];
+    const xml = await response.text();
+    const observedAt = new Date().toISOString();
+    return [...xml.matchAll(/<objTrainPositions>([\s\S]*?)<\/objTrainPositions>/g)]
+      .map((match) => {
+        const latitude = numberOrNull(textValue(match[1], "TrainLatitude"));
+        const longitude = numberOrNull(textValue(match[1], "TrainLongitude"));
+        if (
+          latitude === null ||
+          longitude === null ||
+          latitude < 51.2 ||
+          latitude > 55.6 ||
+          longitude < -10.8 ||
+          longitude > -5.2
+        ) return null;
+        return {
+          id: textValue(match[1], "TrainCode"),
+          latitude,
+          longitude,
+          status: textValue(match[1], "TrainStatus") === "R" ? "running" as const : "not-started" as const,
+          direction: textValue(match[1], "Direction"),
+          message: textValue(match[1], "PublicMessage").replaceAll("\\n", " · "),
+          observedAt
+        };
+      })
+      .filter((train): train is TrainPosition => train !== null);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRivers(): Promise<RiverReading[]> {
+  try {
+    const response = await fetch("https://waterlevel.ie/geojson/latest/", {
+      next: { revalidate: 900 },
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!response.ok) return [];
+    const body = (await response.json()) as {
+      features?: Array<{
+        properties?: Record<string, unknown>;
+        geometry?: { coordinates?: number[] };
+      }>;
+    };
+    const readings = (body.features ?? [])
+      .filter((item) => item.properties?.sensor_ref === "0001")
+      .map((item) => {
+        const [longitude, latitude] = item.geometry?.coordinates ?? [];
+        const level = numberOrNull(item.properties?.value);
+        const observedAt = String(item.properties?.datetime ?? "");
+        const stationNumber = Number.parseInt(String(item.properties?.station_ref ?? ""), 10);
+        if (
+          !Number.isFinite(latitude) ||
+          !Number.isFinite(longitude) ||
+          level === null ||
+          !observedAt ||
+          stationNumber > 41000
+        ) return null;
+        return {
+          id: String(item.properties?.station_ref ?? ""),
+          name: String(item.properties?.station_name ?? "River gauge"),
+          latitude,
+          longitude,
+          level,
+          observedAt,
+          fresh: Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000
+        };
+      })
+      .filter((reading): reading is RiverReading => reading !== null && reading.fresh);
+
+    const cells = new Map<string, RiverReading>();
+    for (const reading of readings) {
+      const key = `${Math.round(reading.longitude * 4)}:${Math.round(reading.latitude * 5)}`;
+      const current = cells.get(key);
+      if (!current || new Date(reading.observedAt) > new Date(current.observedAt)) cells.set(key, reading);
+    }
+    return [...cells.values()].slice(0, 90);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchTraffic(): Promise<TrafficCounter[]> {
+  try {
+    const headers = {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-requested-with": "XMLHttpRequest",
+      "origin": "https://trafficdata.tii.ie",
+      "referer": "https://trafficdata.tii.ie/publicmultinodemap.asp"
+    };
+    const sitesBody = new URLSearchParams();
+    sitesBody.set("array", "0");
+    sitesBody.set("hasLocation", "1");
+    sitesBody.set("isPed", "0");
+    ["id", "location", "name", "description", "parameters"].forEach((field) =>
+      sitesBody.append("fields[]", field)
+    );
+    const aadtBody = new URLSearchParams({
+      isSignedOff: "1",
+      latestYear: "1",
+      "siteCriteria[group]": "NRA"
+    });
+    const [sitesResponse, aadtResponse] = await Promise.all([
+      fetch("https://trafficdata.tii.ie/dataserver/public/sites", {
+        method: "POST",
+        headers,
+        body: sitesBody,
+        next: { revalidate: 21_600 },
+        signal: AbortSignal.timeout(9000)
+      }),
+      fetch("https://trafficdata.tii.ie/dataserver/public/aadt", {
+        method: "POST",
+        headers,
+        body: aadtBody,
+        next: { revalidate: 21_600 },
+        signal: AbortSignal.timeout(9000)
+      })
+    ]);
+    if (!sitesResponse.ok || !aadtResponse.ok) return [];
+    const sites = (await sitesResponse.json()) as { data?: Record<string, Record<string, unknown>> };
+    const aadts = (await aadtResponse.json()) as { data?: Record<string, number> };
+    const counters = Object.values(sites.data ?? {}).flatMap((site) => {
+      const location = site.location as { lat?: number; lng?: number } | undefined;
+      const parameters = site.parameters as Record<string, string> | undefined;
+      const averageDailyTraffic = aadts.data?.[String(site.id)];
+      if (
+        !location ||
+        !Number.isFinite(location.lat) ||
+        !Number.isFinite(location.lng) ||
+        !Number.isFinite(averageDailyTraffic) ||
+        parameters?.state === "4"
+      ) return [];
+      return [{
+        id: String(site.id),
+        name: String(site.name ?? "Traffic counter"),
+        description: String(site.description ?? ""),
+        latitude: location.lat as number,
+        longitude: location.lng as number,
+        averageDailyTraffic: averageDailyTraffic as number,
+        category: String(parameters?.category ?? "National road")
+      } satisfies TrafficCounter];
+    });
+
+    const cells = new Map<string, TrafficCounter>();
+    for (const counter of counters) {
+      const key = `${Math.round(counter.longitude * 5)}:${Math.round(counter.latitude * 6)}`;
+      const current = cells.get(key);
+      if (!current || counter.averageDailyTraffic > current.averageDailyTraffic) cells.set(key, counter);
+    }
+    return [...cells.values()]
+      .sort((a, b) => b.averageDailyTraffic - a.averageDailyTraffic)
+      .slice(0, 90);
+  } catch {
+    return [];
+  }
+}
+
 export async function getLiveSnapshot(): Promise<LiveSnapshot> {
-  const [stationResults, warnings, marine] = await Promise.all([
+  const [stationResults, warnings, marine, trains, rivers, traffic] = await Promise.all([
     Promise.all(STATIONS.map(fetchStation)),
     fetchWarnings(),
-    fetchMarine()
+    fetchMarine(),
+    fetchTrains(),
+    fetchRivers(),
+    fetchTraffic()
   ]);
   const results = stationResults.filter((value): value is StationResult => value !== null);
   const stations = results.map((result) => result.reading);
@@ -148,11 +332,17 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     stations,
     warnings,
     marine,
+    trains,
+    rivers,
+    traffic,
     summary: {
       warmest: by("temperature"),
       wettest: by("rainfall"),
       windiest: by("windSpeed"),
-      reporting: fresh.length
+      reporting: fresh.length,
+      runningTrains: trains.filter((train) => train.status === "running").length,
+      riverStations: rivers.length,
+      busiestRoad: [...traffic].sort((a, b) => b.averageDailyTraffic - a.averageDailyTraffic)[0] ?? null
     },
     timeline: [...timelineByTime.entries()].map(([time, values]) => ({
       time,

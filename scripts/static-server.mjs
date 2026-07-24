@@ -13,6 +13,11 @@ const types = {
 
 createServer((request, response) => {
   const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+  if (pathname.startsWith("/api/")) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ unavailable: true }));
+    return;
+  }
   const requested = normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, requested === "/" ? "index.html" : requested);
   if (!existsSync(file) && !extname(file)) file = join(root, "index.html");
@@ -22,5 +27,11 @@ createServer((request, response) => {
     return;
   }
   response.setHeader("Content-Type", types[extname(file)] ?? "application/octet-stream");
-  createReadStream(file).pipe(response);
+  const stream = createReadStream(file);
+  stream.on("error", () => {
+    if (!response.headersSent) response.writeHead(500);
+    response.end();
+  });
+  response.on("error", () => stream.destroy());
+  stream.pipe(response);
 }).listen(3000, "127.0.0.1");
