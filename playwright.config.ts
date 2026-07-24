@@ -5,7 +5,7 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   use: { baseURL: "http://127.0.0.1:3000", trace: "retain-on-failure" },
   webServer: {
-    command: "npx serve dist -l 3000",
+    command: "node scripts/static-server.mjs",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: true,
     timeout: 120_000
