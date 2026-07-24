@@ -5,6 +5,7 @@ import { geoMercator, geoPath } from "d3-geo";
 import { feature } from "topojson-client";
 import landTopology from "world-atlas/land-50m.json";
 import type { LiveSnapshot, StationReading } from "../lib/types";
+import { refreshWeather } from "../lib/browser-live";
 
 type Layer = "weather" | "rain" | "wind" | "warnings" | "places" | "sea";
 
@@ -92,17 +93,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useEffect(() => {
     const clock = window.setInterval(() => setNow(new Date()), 1000);
-    const refresh = window.setInterval(async () => {
-      try {
-        const response = await fetch("/api/live");
-        if (!response.ok) return;
-        const next = (await response.json()) as LiveSnapshot;
-        setSnapshot(next);
-        setLastUpdated(new Date(next.generatedAt));
-      } catch {
-        // The existing snapshot remains visible when an upstream source is unavailable.
-      }
-    }, 60_000);
+    const update = () => {
+      setSnapshot((current) => {
+        void refreshWeather(current).then((next) => {
+          setSnapshot(next);
+          setLastUpdated(new Date(next.generatedAt));
+        });
+        return current;
+      });
+    };
+    update();
+    const refresh = window.setInterval(update, 5 * 60_000);
     return () => {
       window.clearInterval(clock);
       window.clearInterval(refresh);

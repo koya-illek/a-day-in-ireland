@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:cloudflare": "opennextjs-cloudflare build",
     "start": "next start",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",
@@ -20,7 +19,6 @@
     "world-atlas": "^2.0.2"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.20.2",
     "@eslint/eslintrc": "^3.3.1",
     "@playwright/test": "^1.54.1",
     "@types/d3-geo": "^3.1.0",
@@ -30,6 +28,7 @@
     "@types/topojson-client": "^3.1.5",
     "eslint": "^9.28.0",
     "eslint-config-next": "^15.4.4",
+    "serve": "^14.2.4",
     "typescript": "^5.8.3"
   },
   "overrides": {

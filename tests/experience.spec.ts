@@ -21,12 +21,9 @@ test("explore layers and station details are interactive", async ({ page }) => {
   await expect(page.locator(".station-card")).toBeVisible();
 });
 
-test("live API has provenance fields and observations", async ({ request }) => {
-  const response = await request.get("/api/live");
-  expect(response.ok()).toBeTruthy();
-  const body = await response.json();
-  expect(body.generatedAt).toBeTruthy();
-  expect(body.stations.length).toBeGreaterThan(3);
-  expect(body.timeline.length).toBeGreaterThan(0);
-  expect(Array.isArray(body.marine)).toBeTruthy();
+test("page exposes live freshness and source provenance", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
+  await expect(page.getByText(/Weather data © Met Éireann/)).toBeVisible();
+  await expect(page.locator(".timeline-point")).toHaveCount(23);
 });
