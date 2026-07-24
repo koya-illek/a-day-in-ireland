@@ -534,6 +534,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <p>Hourly observations from reporting Met Éireann stations.</p>
         </div>
         <div className="timeline-chart">
+          {snapshot.timeline.length === 0 && (
+            <p className="timeline-empty">The day is just beginning. Hourly observations will gather here as stations report.</p>
+          )}
           {snapshot.timeline.map((point) => {
             const height = point.temperature === null ? 4 : Math.max(10, Math.min(96, (point.temperature + 4) * 3.2));
             return (

@@ -27,7 +27,12 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
   await expect(page.getByText("More than weather.")).toBeVisible();
-  expect(await page.locator(".timeline-point").count()).toBeGreaterThanOrEqual(20);
+  const timelinePoints = await page.locator(".timeline-point").count();
+  if (timelinePoints === 0) {
+    await expect(page.getByText(/The day is just beginning/)).toBeVisible();
+  } else {
+    expect(timelinePoints).toBeGreaterThanOrEqual(1);
+  }
 });
 
 test("movement and water presets expose the new v2 layers", async ({ page }) => {

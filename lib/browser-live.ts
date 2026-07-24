@@ -1,15 +1,16 @@
 import type { LiveSnapshot, StationReading } from "./types";
+import { parseLatestObservations } from "./latest-observations";
 
 const STATIONS = [
-  ["malin-head", "Malin Head", 55.371, -7.339],
-  ["finner", "Finner", 54.494, -8.243],
-  ["belmullet", "Belmullet", 54.228, -10.007],
-  ["athenry", "Athenry", 53.289, -8.786],
-  ["dublin-airport", "Dublin", 53.428, -6.241],
-  ["gurteen", "Gurteen", 53.034, -8.005],
-  ["valentia", "Valentia", 51.938, -10.241],
-  ["cork-airport", "Cork", 51.847, -8.486],
-  ["johnstown-castle", "Wexford", 52.298, -6.497]
+  ["malin-head", "Malin Head", "Malin Head", 55.371, -7.339],
+  ["finner", "Finner", "Finner Camp", 54.494, -8.243],
+  ["belmullet", "Belmullet", "Belmullet", 54.228, -10.007],
+  ["athenry", "Athenry", "Athenry", 53.289, -8.786],
+  ["dublin-airport", "Dublin", "Dublin Airport", 53.428, -6.241],
+  ["gurteen", "Gurteen", "Gurteen", 53.034, -8.005],
+  ["valentia", "Valentia", "Valentia Observatory", 51.938, -10.241],
+  ["cork-airport", "Cork", "Cork Airport", 51.847, -8.486],
+  ["johnstown-castle", "Wexford", "Johnstown Castle", 52.298, -6.497]
 ] as const;
 
 const numeric = (value: unknown) => {
@@ -26,7 +27,7 @@ function timestamp(date: string, time: string) {
 
 export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapshot> {
   const results = await Promise.all(
-    STATIONS.map(async ([endpoint, name, latitude, longitude]) => {
+    STATIONS.map(async ([endpoint, name, , latitude, longitude]) => {
       try {
         const response = await fetch(`https://prodapi.metweb.ie/observations/${endpoint}/today`, {
           cache: "no-store",
@@ -65,8 +66,31 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     })
   );
   const valid = results.filter((result): result is NonNullable<typeof result> => result !== null);
-  if (!valid.length) return { ...previous, sourceStatus: "fallback" };
-  const stations = valid.map((result) => result.reading);
+  let fallbackStations: StationReading[] = [];
+  if (valid.length < STATIONS.length) {
+    try {
+      const response = await fetch("https://www.met.ie/latest-reports/observations/download", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(7000)
+      });
+      if (response.ok) {
+        fallbackStations = parseLatestObservations(
+          await response.text(),
+          STATIONS.map(([id, name, csvName, latitude, longitude]) => ({
+            id, name, csvName, latitude, longitude
+          }))
+        );
+      }
+    } catch {
+      // Keep the previous snapshot if both official observation feeds are unavailable.
+    }
+  }
+  if (!valid.length && !fallbackStations.length) return { ...previous, sourceStatus: "fallback" };
+  const validIds = new Set(valid.map((result) => result.reading.id));
+  const stations = [
+    ...valid.map((result) => result.reading),
+    ...fallbackStations.filter((station) => !validIds.has(station.id))
+  ];
   const fresh = stations.filter((station) => station.fresh);
   const top = (field: "temperature" | "rainfall" | "windSpeed") =>
     [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;

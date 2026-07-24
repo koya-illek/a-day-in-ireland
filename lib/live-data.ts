@@ -6,17 +6,18 @@ import type {
   TrainPosition,
   WeatherWarning
 } from "./types";
+import { parseLatestObservations } from "./latest-observations";
 
 const STATIONS = [
-  { id: "malin-head", endpoint: "malin-head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
-  { id: "finner", endpoint: "finner", name: "Finner", latitude: 54.494, longitude: -8.243 },
-  { id: "belmullet", endpoint: "belmullet", name: "Belmullet", latitude: 54.228, longitude: -10.007 },
-  { id: "athenry", endpoint: "athenry", name: "Athenry", latitude: 53.289, longitude: -8.786 },
-  { id: "dublin-airport", endpoint: "dublin-airport", name: "Dublin", latitude: 53.428, longitude: -6.241 },
-  { id: "gurteen", endpoint: "gurteen", name: "Gurteen", latitude: 53.034, longitude: -8.005 },
-  { id: "valentia", endpoint: "valentia", name: "Valentia", latitude: 51.938, longitude: -10.241 },
-  { id: "cork-airport", endpoint: "cork-airport", name: "Cork", latitude: 51.847, longitude: -8.486 },
-  { id: "johnstown-castle", endpoint: "johnstown-castle", name: "Wexford", latitude: 52.298, longitude: -6.497 }
+  { id: "malin-head", endpoint: "malin-head", csvName: "Malin Head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
+  { id: "finner", endpoint: "finner", csvName: "Finner Camp", name: "Finner", latitude: 54.494, longitude: -8.243 },
+  { id: "belmullet", endpoint: "belmullet", csvName: "Belmullet", name: "Belmullet", latitude: 54.228, longitude: -10.007 },
+  { id: "athenry", endpoint: "athenry", csvName: "Athenry", name: "Athenry", latitude: 53.289, longitude: -8.786 },
+  { id: "dublin-airport", endpoint: "dublin-airport", csvName: "Dublin Airport", name: "Dublin", latitude: 53.428, longitude: -6.241 },
+  { id: "gurteen", endpoint: "gurteen", csvName: "Gurteen", name: "Gurteen", latitude: 53.034, longitude: -8.005 },
+  { id: "valentia", endpoint: "valentia", csvName: "Valentia Observatory", name: "Valentia", latitude: 51.938, longitude: -10.241 },
+  { id: "cork-airport", endpoint: "cork-airport", csvName: "Cork Airport", name: "Cork", latitude: 51.847, longitude: -8.486 },
+  { id: "johnstown-castle", endpoint: "johnstown-castle", csvName: "Johnstown Castle", name: "Wexford", latitude: 52.298, longitude: -6.497 }
 ] as const;
 
 const numberOrNull = (value: unknown): number | null => {
@@ -93,6 +94,19 @@ async function fetchWarnings(): Promise<WeatherWarning[]> {
         onset: String(row.onset ?? ""),
         expiry: String(row.expiry ?? "")
       }));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchLatestStationFallback(): Promise<StationReading[]> {
+  try {
+    const response = await fetch("https://www.met.ie/latest-reports/observations/download", {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) return [];
+    return parseLatestObservations(await response.text(), STATIONS);
   } catch {
     return [];
   }
@@ -299,8 +313,9 @@ async function fetchTraffic(): Promise<TrafficCounter[]> {
 }
 
 export async function getLiveSnapshot(): Promise<LiveSnapshot> {
-  const [stationResults, warnings, marine, trains, rivers, traffic] = await Promise.all([
+  const [stationResults, fallbackStations, warnings, marine, trains, rivers, traffic] = await Promise.all([
     Promise.all(STATIONS.map(fetchStation)),
+    fetchLatestStationFallback(),
     fetchWarnings(),
     fetchMarine(),
     fetchTrains(),
@@ -308,7 +323,11 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     fetchTraffic()
   ]);
   const results = stationResults.filter((value): value is StationResult => value !== null);
-  const stations = results.map((result) => result.reading);
+  const resultIds = new Set(results.map((result) => result.reading.id));
+  const stations = [
+    ...results.map((result) => result.reading),
+    ...fallbackStations.filter((station) => !resultIds.has(station.id))
+  ];
   const fresh = stations.filter((station) => station.fresh);
   const by = (field: "temperature" | "rainfall" | "windSpeed") =>
     [...fresh]

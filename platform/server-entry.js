@@ -156,17 +156,12 @@ const fetchTraffic = async () => {
 };
 
 const livingLayers = async (request) => {
-  const cache = caches.default;
-  const cacheKey = new Request(new URL("/api/living", request.url), request);
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
-
   const [trains, rivers, traffic] = await Promise.allSettled([
     fetchTrains(),
     fetchRivers(),
     fetchTraffic()
   ]);
-  const response = json({
+  return json({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: rivers.status === "fulfilled" ? rivers.value : [],
@@ -177,8 +172,6 @@ const livingLayers = async (request) => {
       traffic: traffic.status === "fulfilled" ? "context" : "unavailable"
     }
   });
-  await cache.put(cacheKey, response.clone());
-  return response;
 };
 
 export default {
@@ -187,7 +180,8 @@ export default {
     if (url.pathname === "/api/living") {
       try {
         return await livingLayers(request);
-      } catch {
+      } catch (error) {
+        console.error("Living layers failed", error);
         return json({ error: "Live layers are temporarily unavailable." }, 503);
       }
     }
