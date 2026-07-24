@@ -189,7 +189,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span className="brand-mark" aria-hidden="true">É</span>
           <span><b>A Day in Ireland</b><small>See Ireland happening</small></span>
         </a>
-        <div className="live-state" title={`Snapshot generated ${lastUpdated.toLocaleString("en-IE")}`}>
+        <div className="live-state" title={`Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}>
           <span className={`live-dot ${snapshot.sourceStatus}`} />
           <span>{snapshot.sourceStatus === "live" ? "Live observations" : "Partial observations"}</span>
           <time>{formatTime(lastUpdated)}</time>
@@ -323,7 +323,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <aside className={`warning-strip ${activeWarning.level.toLowerCase()}`} aria-label="Active weather warning">
           <span>{activeWarning.level}</span>
           <div><b>{activeWarning.headline}</b><small>{activeWarning.description}</small></div>
-          <time>Until {new Date(activeWarning.expiry).toLocaleString("en-IE", { weekday: "short", hour: "2-digit", minute: "2-digit" })}</time>
+          <time>Until {new Date(activeWarning.expiry).toLocaleString("en-IE", {
+            weekday: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "Europe/Dublin"
+          })}</time>
         </aside>
       )}
 
