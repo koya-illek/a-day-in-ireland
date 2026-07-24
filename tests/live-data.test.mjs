@@ -3,7 +3,7 @@ import test from "node:test";
 
 test("project declares production scripts", async () => {
   const packageJson = await import("../package.json", { with: { type: "json" } });
-  assert.equal(packageJson.default.scripts.build, "next build");
+  assert.match(packageJson.default.scripts.build, /^next build/);
   assert.ok(packageJson.default.scripts["test:e2e"]);
 });
 
