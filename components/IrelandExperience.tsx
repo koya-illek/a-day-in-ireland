@@ -570,7 +570,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             ["sea", "Sea conditions", "Near-real-time Marine Institute buoy observations"],
             ["trains", "Moving trains", "Current Iarnród Éireann train positions"],
             ["traffic", "Road traffic", "Latest signed-off average daily volume from TII counters"],
-            ["rivers", "River levels", "Fresh OPW gauge readings, updated about every 15 minutes"],
+            ["rivers", "River levels", "Latest fresh OPW readings; stale gauges expire automatically"],
             ["places", "Places", "Major towns and cities"]
           ] as Array<[Layer, string, string]>).map(([id, label, detail]) => (
             <button key={id} className={layers.has(id) ? "active" : ""} onClick={() => toggleLayer(id)} aria-pressed={layers.has(id)}>
@@ -580,7 +580,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
         <div className="source-note">
           <p className="eyebrow">About the data</p>
-          <p>Live layers refresh automatically. Road volume is contextual AADT, not live congestion. River levels are local gauge readings, not flood warnings. Missing or stale readings are never shown as zero.</p>
+          <p>Weather and rail refresh automatically. Road volume is contextual AADT, not live congestion. River readings expire after three hours if OPW refresh is unavailable; they are local measurements, not flood warnings. Missing data is never shown as zero.</p>
           <a href="https://www.met.ie/about-us/specialised-services/open-data" target="_blank" rel="noreferrer">Met Éireann open data ↗</a>
           <a href="https://trafficdata.tii.ie/" target="_blank" rel="noreferrer">TII traffic data ↗</a>
           <a href="https://waterlevel.ie/page/api/" target="_blank" rel="noreferrer">OPW water levels ↗</a>

@@ -11,7 +11,7 @@ A living, near-real-time portrait of weather, water and movement across Ireland.
 - TII traffic-counter locations and latest signed-off average annual daily traffic, licensed under CC BY 4.0.
 - Solar position and daylight state are calculated locally.
 
-Live weather refreshes every five minutes, train positions every minute, and OPW river levels are refreshed on a fifteen-minute upstream cache. TII AADT is context rather than live congestion. Missing or stale values are not represented as zero.
+Live weather refreshes every five minutes and train positions every minute. OPW normally publishes river levels about every fifteen minutes; deployed readings automatically expire after three hours if an upstream refresh is unavailable. TII AADT is context rather than live congestion. Missing or stale values are not represented as zero.
 
 ## Development
 
