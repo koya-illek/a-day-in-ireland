@@ -20,21 +20,38 @@ const PLACES = [
 ];
 
 const formatTime = (date: Date) =>
-  new Intl.DateTimeFormat("en-IE", { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+  new Intl.DateTimeFormat("en-IE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/Dublin"
+  }).format(date);
 
 const formatDate = (date: Date) =>
-  new Intl.DateTimeFormat("en-IE", { weekday: "long", day: "numeric", month: "long" }).format(date);
+  new Intl.DateTimeFormat("en-IE", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "Europe/Dublin"
+  }).format(date);
+
+const irelandHour = (date: Date) =>
+  Number.parseInt(
+    new Intl.DateTimeFormat("en-IE", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: "Europe/Dublin"
+    }).format(date),
+    10
+  ) % 24;
 
 function solarProgress(now: Date) {
-  const start = new Date(now);
-  start.setHours(5, 0, 0, 0);
-  const end = new Date(now);
-  end.setHours(22, 0, 0, 0);
-  return Math.max(0, Math.min(1, (now.getTime() - start.getTime()) / (end.getTime() - start.getTime())));
+  const hour = irelandHour(now) + now.getUTCMinutes() / 60;
+  return Math.max(0, Math.min(1, (hour - 5) / 17));
 }
 
 function nationalNarrative(snapshot: LiveSnapshot, now: Date) {
-  const hour = now.getHours();
+  const hour = irelandHour(now);
   const period = hour < 6 ? "A quiet night across the island." : hour < 12 ? "Ireland is waking." : hour < 18 ? "The day is in motion." : hour < 22 ? "Evening is settling in." : "The island grows quieter.";
   const warm = snapshot.summary.warmest;
   const rain = snapshot.summary.wettest;
@@ -151,7 +168,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const daylight = solarProgress(now);
   const sunX = 120 + daylight * 760;
   const sunY = 145 - Math.sin(daylight * Math.PI) * 105;
-  const isNight = now.getHours() < 6 || now.getHours() >= 21;
+  const currentHour = irelandHour(now);
+  const isNight = currentHour < 6 || currentHour >= 21;
   const activeWarning = snapshot.warnings[0] ?? null;
 
   const toggleLayer = useCallback((layer: Layer) => {
