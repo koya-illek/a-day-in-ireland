@@ -1,9 +1,9 @@
-const json = (body, status = 200) =>
+const json = (body, status = 200, cacheSeconds = 60) =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=60, s-maxage=60, stale-while-revalidate=300",
+      "cache-control": `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds * 2}`,
       "access-control-allow-origin": "*"
     }
   });
@@ -94,102 +94,312 @@ const fetchRivers = async () => {
   return [...cells.values()].slice(0, 90);
 };
 
-const fetchTraffic = async () => {
-  const headers = {
-    "content-type": "application/x-www-form-urlencoded",
-    "x-requested-with": "XMLHttpRequest",
-    "origin": "https://trafficdata.tii.ie",
-    "referer": "https://trafficdata.tii.ie/publicmultinodemap.asp"
-  };
-  const sitesBody = new URLSearchParams();
-  sitesBody.set("array", "0");
-  sitesBody.set("hasLocation", "1");
-  sitesBody.set("isPed", "0");
-  ["id", "location", "name", "description", "parameters"].forEach((field) =>
-    sitesBody.append("fields[]", field)
-  );
-  const [sitesResponse, aadtResponse] = await Promise.all([
-    fetch("https://trafficdata.tii.ie/dataserver/public/sites", {
-      method: "POST",
-      headers,
-      body: sitesBody,
-      cf: { cacheEverything: true, cacheTtl: 21_600 }
-    }),
-    fetch("https://trafficdata.tii.ie/dataserver/public/aadt", {
-      method: "POST",
-      headers,
-      body: new URLSearchParams({
-        isSignedOff: "1",
-        latestYear: "1",
-        "siteCriteria[group]": "NRA"
-      }),
-      cf: { cacheEverything: true, cacheTtl: 21_600 }
-    })
-  ]);
-  if (!sitesResponse.ok || !aadtResponse.ok) throw new Error("TII traffic request failed");
-  const sites = await sitesResponse.json();
-  const aadts = await aadtResponse.json();
-  const cells = new Map();
-  for (const site of Object.values(sites.data ?? {})) {
-    const averageDailyTraffic = aadts.data?.[String(site.id)];
-    if (
-      !site.location ||
-      !Number.isFinite(site.location.lat) ||
-      !Number.isFinite(site.location.lng) ||
-      !Number.isFinite(averageDailyTraffic) ||
-      site.parameters?.state === "4"
-    ) continue;
-    const counter = {
-      id: String(site.id),
-      name: String(site.name ?? "Traffic counter"),
-      description: String(site.description ?? ""),
-      latitude: site.location.lat,
-      longitude: site.location.lng,
-      averageDailyTraffic,
-      category: String(site.parameters?.category ?? "National road")
-    };
-    const key = `${Math.round(counter.longitude * 5)}:${Math.round(counter.latitude * 6)}`;
-    const current = cells.get(key);
-    if (!current || counter.averageDailyTraffic > current.averageDailyTraffic) {
-      cells.set(key, counter);
-    }
-  }
-  return [...cells.values()]
-    .sort((a, b) => b.averageDailyTraffic - a.averageDailyTraffic)
-    .slice(0, 90);
+const numeric = (value) => {
+  const parsed = Number.parseFloat(String(value ?? ""));
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
-const livingLayers = async (request) => {
-  const [trains, rivers, traffic] = await Promise.allSettled([
+const freshEnough = (value, hours = 6) =>
+  Date.now() - new Date(value).getTime() < hours * 60 * 60 * 1000;
+
+const fetchWeatherBuoys = async () => {
+  const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const query = `station_id,longitude,latitude,time,WindSpeed,WaveHeight,WavePeriod,SeaTemperature&time>=${since}T00:00:00Z&orderByMax("station_id,time")`;
+  const response = await fetch(
+    `https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json?${encodeURI(query)}`,
+    { cf: { cacheEverything: true, cacheTtl: 900 } }
+  );
+  if (!response.ok) throw new Error(`Marine weather buoys returned ${response.status}`);
+  const body = await response.json();
+  return (body.table?.rows ?? []).map((row) => ({
+    id: String(row[0]),
+    name: `Offshore buoy ${String(row[0])}`,
+    kind: "weather-buoy",
+    longitude: Number(row[1]),
+    latitude: Number(row[2]),
+    observedAt: String(row[3]),
+    windSpeedKnots: numeric(row[4]),
+    waveHeight: numeric(row[5]),
+    wavePeriod: numeric(row[6]),
+    seaTemperature: numeric(row[7])
+  })).filter((reading) => freshEnough(reading.observedAt));
+};
+
+const coastalSources = [
+  {
+    dataset: "smartbay_metbuoy",
+    name: "SmartBay Met Buoy",
+    variables: ["time", "latitude", "longitude", "wind_speed"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: null, wavePeriod: null, seaTemperature: null
+    })
+  },
+  {
+    dataset: "sentinel_lehanagh",
+    name: "Lehanagh Pool Observatory",
+    variables: ["time", "latitude", "longitude", "Wind_Speed", "SBE_Temp_Avg"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: null, wavePeriod: null, seaTemperature: numeric(row[4])
+    })
+  },
+  {
+    dataset: "compass_mace_head",
+    name: "Mace Head Observatory",
+    variables: ["time", "latitude", "longitude", "wind_speed", "sbe_temp_avg", "SignificantWaveHeight", "MeanWavePeriod_Tm02"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: numeric(row[5]), wavePeriod: numeric(row[6]), seaTemperature: numeric(row[4])
+    })
+  }
+];
+
+const fetchCoastalBuoy = async (source) => {
+  const query = `${source.variables.join(",")}&orderByMax("time")`;
+  const response = await fetch(
+    `https://erddap.marine.ie/erddap/tabledap/${source.dataset}.json?${encodeURI(query)}`,
+    { cf: { cacheEverything: true, cacheTtl: 900 } }
+  );
+  if (!response.ok) throw new Error(`${source.name} returned ${response.status}`);
+  const body = await response.json();
+  const row = body.table?.rows?.[0];
+  if (!row) return null;
+  const reading = source.map(row);
+  if (!freshEnough(reading.observedAt)) return null;
+  return { id: source.dataset, name: source.name, kind: "coastal-observatory", ...reading };
+};
+
+const fetchMarine = async () => {
+  const results = await Promise.allSettled([
+    fetchWeatherBuoys(),
+    ...coastalSources.map(fetchCoastalBuoy)
+  ]);
+  const weather = results[0].status === "fulfilled" ? results[0].value : [];
+  const coastal = results.slice(1).flatMap((result) =>
+    result.status === "fulfilled" && result.value ? [result.value] : []
+  );
+  return [...weather, ...coastal];
+};
+
+const parseRadarTime = (id) => {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(id);
+  return match
+    ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`
+    : new Date().toISOString();
+};
+
+const fetchRadar = async () => {
+  const response = await fetch("https://gdal.met.ie/api/maps/radar", {
+    cf: { cacheEverything: true, cacheTtl: 300 }
+  });
+  if (!response.ok) throw new Error(`Met Éireann radar returned ${response.status}`);
+  const rows = await response.json();
+  return rows.slice(-7).flatMap((row) => {
+    const id = String(row.src ?? "");
+    const modifiedTime = Number(row.modifiedTime);
+    if (!/^\d{12}$/.test(id) || !Number.isFinite(modifiedTime)) return [];
+    const server = String(row.server ?? "https://gdal.met.ie").replace(/\/$/, "");
+    return [{
+      id,
+      observedAt: parseRadarTime(id),
+      modifiedTime,
+      tileTemplate: `${server}/api/maps/radar/${id}/{x}/{y}/{z}/${modifiedTime}`
+    }];
+  });
+};
+
+const eirMonths = {
+  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+};
+
+const eirTimestamp = (value) => {
+  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}:\d{2}:\d{2})$/.exec(value);
+  return match && eirMonths[match[2]]
+    ? `${match[3]}-${eirMonths[match[2]]}-${match[1]}T${match[4]}Z`
+    : null;
+};
+
+const fetchGridRows = async (chartType, areas) => {
+  const day = new Date().toISOString().slice(0, 10);
+  const url = new URL("https://www.smartgriddashboard.com/api/chart/");
+  url.search = new URLSearchParams({
+    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day", dateFrom: day, dateTo: day, areas
+  }).toString();
+  const response = await fetch(url, {
+    cf: { cacheEverything: true, cacheTtl: chartType === "frequency" ? 60 : 300 }
+  });
+  if (!response.ok) throw new Error(`EirGrid ${chartType} returned ${response.status}`);
+  return (await response.json()).Rows ?? [];
+};
+
+const latestGridValue = (rows, field) => {
+  const row = [...rows].reverse().find(
+    (item) =>
+      String(item.FieldName) === field &&
+      item.Value !== null &&
+      item.Value !== undefined &&
+      item.Value !== "" &&
+      Number.isFinite(Number(item.Value))
+  );
+  return row ? { value: Number(row.Value), observedAt: eirTimestamp(String(row.EffectiveTime)) } : null;
+};
+
+const fetchGrid = async () => {
+  const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
+    await Promise.all([
+      fetchGridRows("demand", "demandactual"),
+      fetchGridRows("generation", "generationactual"),
+      fetchGridRows("wind", "windactual"),
+      fetchGridRows("co2", "co2intensity,co2emission"),
+      fetchGridRows("frequency", "frequency"),
+      fetchGridRows("interconnection", "interconnection")
+    ]);
+  const demand = latestGridValue(demandRows, "SYSTEM_DEMAND");
+  const generation = latestGridValue(generationRows, "GEN_EXP");
+  const wind = latestGridValue(windRows, "WIND_ACTUAL");
+  const intensity = latestGridValue(carbonRows, "CO2_INTENSITY");
+  const emissions = latestGridValue(carbonRows, "CO2_EMISSIONS");
+  const frequency = latestGridValue(frequencyRows, "SYS_FREQUENCY");
+  const interconnector = latestGridValue(interconnectionRows, "INTER_NET");
+  const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
+    .map((item) => item?.observedAt).filter(Boolean).sort();
+  if (!timestamps.length) return null;
+  return {
+    observedAt: timestamps[0] ?? null,
+    demandMW: demand?.value ?? null,
+    generationMW: generation?.value ?? null,
+    windMW: wind?.value ?? null,
+    windSharePercent: wind && demand && demand.value > 0 ? wind.value / demand.value * 100 : null,
+    carbonIntensity: intensity?.value ?? null,
+    carbonEmissions: emissions?.value ?? null,
+    frequencyHz: frequency?.value ?? null,
+    interconnectorMW: interconnector?.value ?? null
+  };
+};
+
+const airLocations = [
+  ["dublin-air", "Dublin", 53.35, -6.26],
+  ["belfast-air", "Belfast", 54.60, -5.93],
+  ["cork-air", "Cork", 51.90, -8.48],
+  ["galway-air", "Galway", 53.27, -9.06],
+  ["limerick-air", "Limerick", 52.66, -8.63],
+  ["waterford-air", "Waterford", 52.26, -7.11],
+  ["derry-air", "Derry", 55.00, -7.31]
+];
+
+const fetchAirQuality = async () => {
+  const url = new URL("https://air-quality-api.open-meteo.com/v1/air-quality");
+  url.search = new URLSearchParams({
+    latitude: airLocations.map((item) => item[2]).join(","),
+    longitude: airLocations.map((item) => item[3]).join(","),
+    current: "european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,uv_index,grass_pollen",
+    timezone: "GMT"
+  }).toString();
+  const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 1800 } });
+  if (!response.ok) throw new Error(`Open-Meteo air quality returned ${response.status}`);
+  const bodies = await response.json();
+  return airLocations.flatMap(([id, name, latitude, longitude], index) => {
+    const current = bodies[index]?.current;
+    if (!current?.time) return [];
+    return [{
+      id, name, latitude, longitude, observedAt: `${current.time}:00Z`,
+      europeanAqi: numeric(current.european_aqi), pm25: numeric(current.pm2_5),
+      pm10: numeric(current.pm10), nitrogenDioxide: numeric(current.nitrogen_dioxide),
+      ozone: numeric(current.ozone), uvIndex: numeric(current.uv_index),
+      grassPollen: numeric(current.grass_pollen)
+    }];
+  });
+};
+
+const fetchAurora = async () => {
+  const [auroraResponse, kpResponse] = await Promise.all([
+    fetch("https://services.swpc.noaa.gov/json/ovation_aurora_latest.json", {
+      cf: { cacheEverything: true, cacheTtl: 900 }
+    }),
+    fetch("https://services.swpc.noaa.gov/json/planetary_k_index_1m.json", {
+      cf: { cacheEverything: true, cacheTtl: 300 }
+    })
+  ]);
+  if (!auroraResponse.ok) throw new Error(`NOAA aurora returned ${auroraResponse.status}`);
+  const body = await auroraResponse.json();
+  const probabilities = (body.coordinates ?? [])
+    .filter((point) => point[0] >= 349 && point[0] <= 355 && point[1] >= 51 && point[1] <= 56)
+    .map((point) => Number(point[2])).filter(Number.isFinite);
+  if (!probabilities.length) return null;
+  let kpIndex = null;
+  if (kpResponse.ok) {
+    const rows = await kpResponse.json();
+    kpIndex = numeric(rows.at(-1)?.estimated_kp);
+  }
+  return {
+    observedAt: String(body["Observation Time"] ?? ""),
+    forecastAt: String(body["Forecast Time"] ?? ""),
+    probability: Math.max(...probabilities),
+    kpIndex
+  };
+};
+
+const livingLayers = async () => {
+  const [trains, rivers] = await Promise.allSettled([
     fetchTrains(),
-    fetchRivers(),
-    fetchTraffic()
+    fetchRivers()
   ]);
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (rivers.status === "rejected") console.error("OPW river refresh failed", rivers.reason);
-  if (traffic.status === "rejected") console.error("TII traffic refresh failed", traffic.reason);
   return json({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: rivers.status === "fulfilled" ? rivers.value : [],
-    traffic: traffic.status === "fulfilled" ? traffic.value : [],
     sourceStatus: {
       trains: trains.status === "fulfilled" ? "live" : "unavailable",
-      rivers: rivers.status === "fulfilled" ? "live" : "unavailable",
-      traffic: traffic.status === "fulfilled" ? "context" : "unavailable"
+      rivers: rivers.status === "fulfilled" ? "live" : "unavailable"
     }
   });
 };
 
-export default {
+const currentContexts = async () => {
+  const [marine, radar, grid, airQuality, aurora] = await Promise.allSettled([
+    fetchMarine(),
+    fetchRadar(),
+    fetchGrid(),
+    fetchAirQuality(),
+    fetchAurora()
+  ]);
+  for (const [name, result] of Object.entries({ marine, radar, grid, airQuality, aurora })) {
+    if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
+  }
+  return json({
+    generatedAt: new Date().toISOString(),
+    marine: marine.status === "fulfilled" ? marine.value : [],
+    radar: radar.status === "fulfilled" ? radar.value : [],
+    grid: grid.status === "fulfilled" ? grid.value : null,
+    airQuality: airQuality.status === "fulfilled" ? airQuality.value : [],
+    aurora: aurora.status === "fulfilled" ? aurora.value : null
+  }, 200, 300);
+};
+
+const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/living") {
       try {
-        return await livingLayers(request);
+        return await livingLayers();
       } catch (error) {
         console.error("Living layers failed", error);
         return json({ error: "Live layers are temporarily unavailable." }, 503);
+      }
+    }
+    if (url.pathname === "/api/contexts") {
+      try {
+        return await currentContexts();
+      } catch (error) {
+        console.error("Current contexts failed", error);
+        return json({ error: "Current island contexts are temporarily unavailable." }, 503);
       }
     }
 
@@ -200,3 +410,5 @@ export default {
     return env.ASSETS.fetch(new Request(url, request));
   }
 };
+
+export default worker;

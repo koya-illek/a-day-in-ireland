@@ -5,13 +5,13 @@ import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
 import type {
+  AirQualityReading,
   LiveSnapshot,
   RiverReading,
   StationReading,
-  TrafficCounter,
   TrainPosition
 } from "../lib/types";
-import { refreshLivingLayers, refreshWeather } from "../lib/browser-live";
+import { refreshCurrentContexts, refreshLivingLayers, refreshWeather } from "../lib/browser-live";
 
 type Layer =
   | "weather"
@@ -21,17 +21,30 @@ type Layer =
   | "places"
   | "sea"
   | "trains"
-  | "traffic"
-  | "rivers";
+  | "rivers"
+  | "radar"
+  | "grid"
+  | "air"
+  | "aurora";
 
 type Selection =
   | { type: "station"; item: StationReading }
   | { type: "train"; item: TrainPosition }
   | { type: "river"; item: RiverReading }
-  | { type: "traffic"; item: TrafficCounter }
-  | { type: "buoy"; item: LiveSnapshot["marine"][number] };
+  | { type: "buoy"; item: LiveSnapshot["marine"][number] }
+  | { type: "air"; item: AirQualityReading };
 
-type ContextFocus = "weather" | "traffic" | "trains" | "rivers" | "sea" | "warnings";
+type ContextFocus =
+  | "weather"
+  | "wind"
+  | "trains"
+  | "rivers"
+  | "sea"
+  | "warnings"
+  | "radar"
+  | "grid"
+  | "air"
+  | "aurora";
 
 const PLACES = [
   { name: "Dublin", lon: -6.2603, lat: 53.3498 },
@@ -120,10 +133,62 @@ function StationMarker({
   );
 }
 
-const compactNumber = new Intl.NumberFormat("en-IE", {
-  notation: "compact",
-  maximumFractionDigits: 1
-});
+const windDirectionDegrees = (direction: string) => {
+  const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  const index = points.indexOf(direction.toUpperCase());
+  return index < 0 ? 0 : index * 22.5;
+};
+
+const aqiLabel = (value: number | null) => {
+  if (value === null) return "Unavailable";
+  if (value <= 20) return "Good";
+  if (value <= 40) return "Fair";
+  if (value <= 60) return "Moderate";
+  if (value <= 80) return "Poor";
+  if (value <= 100) return "Very poor";
+  return "Extremely poor";
+};
+
+const tileLatitude = (y: number, zoom: number) =>
+  Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2 ** zoom))) * 180 / Math.PI;
+
+function RadarTiles({
+  frame,
+  projection
+}: {
+  frame: LiveSnapshot["radar"][number];
+  projection: ReturnType<typeof geoMercator>;
+}) {
+  const zoom = 6;
+  return (
+    <g className="radar-tiles" aria-label={`Rainfall radar observed ${formatTime(new Date(frame.observedAt))}`}>
+      {[30, 31].map((x) => {
+        const y = 20;
+        const west = x / 2 ** zoom * 360 - 180;
+        const east = (x + 1) / 2 ** zoom * 360 - 180;
+        const north = tileLatitude(y, zoom);
+        const south = tileLatitude(y + 1, zoom);
+        const topLeft = projection([west, north]);
+        const bottomRight = projection([east, south]);
+        if (!topLeft || !bottomRight) return null;
+        return (
+          <image
+            key={`${x}-${y}`}
+            href={frame.tileTemplate
+              .replace("{x}", String(x))
+              .replace("{y}", String(y))
+              .replace("{z}", String(zoom))}
+            x={topLeft[0]}
+            y={topLeft[1]}
+            width={bottomRight[0] - topLeft[0]}
+            height={bottomRight[1] - topLeft[1]}
+            preserveAspectRatio="none"
+          />
+        );
+      })}
+    </g>
+  );
+}
 
 function DetailCard({ selected, onClose }: { selected: Selection; onClose: () => void }) {
   const { type, item } = selected;
@@ -168,32 +233,93 @@ function DetailCard({ selected, onClose }: { selected: Selection; onClose: () =>
           </dl>
         </>
       )}
-      {type === "traffic" && (
-        <>
-          <p className="eyebrow">TII traffic counter · historical context</p>
-          <h2>{item.name.replace("TMU ", "")}</h2>
-          <div className="station-temperature">{compactNumber.format(item.averageDailyTraffic)}</div>
-          <p>{item.description}</p>
-          <dl>
-            <div><dt>Typical volume</dt><dd>{item.averageDailyTraffic.toLocaleString("en-IE")} vehicles/day</dd></div>
-            <div><dt>Road class</dt><dd>{item.category}</dd></div>
-            <div><dt>Meaning</dt><dd>Historical AADT—not live traffic</dd></div>
-          </dl>
-        </>
-      )}
       {type === "buoy" && (
         <>
-          <p className="eyebrow">Marine Institute buoy · near real time</p>
-          <h2>{item.id}</h2>
+          <p className="eyebrow">Marine Institute · near real time</p>
+          <h2>{item.name}</h2>
           <div className="station-temperature">{item.waveHeight?.toFixed(1) ?? "—"}<small> m waves</small></div>
-          <p>Observed conditions at an offshore buoy. Measurements can be delayed or temporarily unavailable.</p>
+          <p>{item.kind === "weather-buoy" ? "Observed conditions at an offshore weather buoy." : "Observed conditions at a coastal marine observatory."} Measurements can be delayed or temporarily unavailable.</p>
           <dl>
             <div><dt>Wind</dt><dd>{item.windSpeedKnots?.toFixed(1) ?? "—"} knots</dd></div>
+            <div><dt>Wave period</dt><dd>{item.wavePeriod?.toFixed(1) ?? "—"} seconds</dd></div>
             <div><dt>Sea temperature</dt><dd>{item.seaTemperature?.toFixed(1) ?? "—"}°C</dd></div>
             <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
         </>
       )}
+      {type === "air" && (
+        <>
+          <p className="eyebrow">Open-Meteo CAMS · modelled</p>
+          <h2>{item.name}</h2>
+          <div className="station-temperature">{item.europeanAqi ?? "—"}<small> European AQI</small></div>
+          <p>{aqiLabel(item.europeanAqi)} modelled air quality. This is regional model output, not a reading from a sensor at this marker.</p>
+          <dl>
+            <div><dt>PM2.5</dt><dd>{item.pm25?.toFixed(1) ?? "—"} μg/m³</dd></div>
+            <div><dt>PM10</dt><dd>{item.pm10?.toFixed(1) ?? "—"} μg/m³</dd></div>
+            <div><dt>Ozone</dt><dd>{item.ozone?.toFixed(0) ?? "—"} μg/m³</dd></div>
+            <div><dt>UV index</dt><dd>{item.uvIndex?.toFixed(1) ?? "—"}</dd></div>
+            <div><dt>Grass pollen</dt><dd>{item.grassPollen?.toFixed(1) ?? "—"} grains/m³</dd></div>
+            <div><dt>Model time</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+          </dl>
+        </>
+      )}
+    </aside>
+  );
+}
+
+function GridPanel({ grid, className = "" }: { grid: LiveSnapshot["grid"]; className?: string }) {
+  return (
+    <aside className={`map-data-panel grid-panel ${className}`} aria-label="All-island electricity grid now">
+      <p className="eyebrow">EirGrid · operational data</p>
+      <h2>The grid now</h2>
+      {grid ? (
+        <>
+          <div className="grid-hero">
+            <strong>{grid.windSharePercent?.toFixed(0) ?? "—"}%</strong>
+            <span>of current demand supplied by wind</span>
+          </div>
+          <dl>
+            <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
+            <div><dt>Generation</dt><dd>{grid.generationMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
+            <div><dt>Wind</dt><dd>{grid.windMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
+            <div><dt>Carbon intensity</dt><dd>{grid.carbonIntensity?.toFixed(0) ?? "—"} gCO₂/kWh</dd></div>
+            <div><dt>CO₂ emissions</dt><dd>{grid.carbonEmissions?.toFixed(0) ?? "—"} tCO₂/hr</dd></div>
+            <div><dt>Frequency</dt><dd>{grid.frequencyHz?.toFixed(2) ?? "—"} Hz</dd></div>
+            <div>
+              <dt>Interconnection</dt>
+              <dd>
+                {grid.interconnectorMW === null
+                  ? "—"
+                  : grid.interconnectorMW > 0
+                    ? `Import ${grid.interconnectorMW.toLocaleString("en-IE")} MW`
+                    : grid.interconnectorMW < 0
+                      ? `Export ${Math.abs(grid.interconnectorMW).toLocaleString("en-IE")} MW`
+                      : "Balanced 0 MW"}
+              </dd>
+            </div>
+            <div><dt>Data through</dt><dd>{grid.observedAt ? formatTime(new Date(grid.observedAt)) : "—"}</dd></div>
+          </dl>
+        </>
+      ) : <p>Operational grid data is temporarily unavailable.</p>}
+    </aside>
+  );
+}
+
+function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["aurora"]; className?: string }) {
+  return (
+    <aside className={`map-data-panel aurora-panel ${className}`} aria-label="Aurora probability over Ireland">
+      <p className="eyebrow">NOAA OVATION · forecast</p>
+      <h2>Aurora over Ireland</h2>
+      {aurora ? (
+        <>
+          <div className="aurora-probability">
+            <strong>{aurora.probability}%</strong>
+            <span>maximum overhead probability</span>
+          </div>
+          <p>Kp {aurora.kpIndex?.toFixed(1) ?? "—"} · forecast for {formatTime(new Date(aurora.forecastAt))}</p>
+          <small>This is probability directly overhead—not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
+        </>
+      ) : <p>NOAA aurora guidance is temporarily unavailable.</p>}
     </aside>
   );
 }
@@ -210,6 +336,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [sound, setSound] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => new Date(initialSnapshot.generatedAt));
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
+  const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
+  const [radarPlaying, setRadarPlaying] = useState(false);
   const audioRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -229,16 +357,36 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         return current;
       });
     };
+    const updateCurrentContexts = () => {
+      setSnapshot((current) => {
+        void refreshCurrentContexts(current).then((next) => {
+          setSnapshot(next);
+          setRadarFrameIndex(Math.max(0, next.radar.length - 1));
+        });
+        return current;
+      });
+    };
     update();
     updateLivingLayers();
+    updateCurrentContexts();
     const refresh = window.setInterval(update, 5 * 60_000);
     const livingRefresh = window.setInterval(updateLivingLayers, 60_000);
+    const contextRefresh = window.setInterval(updateCurrentContexts, 5 * 60_000);
     return () => {
       window.clearInterval(clock);
       window.clearInterval(refresh);
       window.clearInterval(livingRefresh);
+      window.clearInterval(contextRefresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!radarPlaying || !layers.has("radar") || snapshot.radar.length < 2) return;
+    const animation = window.setInterval(() => {
+      setRadarFrameIndex((index) => (index + 1) % snapshot.radar.length);
+    }, 850);
+    return () => window.clearInterval(animation);
+  }, [layers, radarPlaying, snapshot.radar.length]);
 
   useEffect(() => {
     if (!sound) {
@@ -298,36 +446,42 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const currentHour = irelandHour(now);
   const isNight = currentHour < 6 || currentHour >= 21;
   const activeWarning = snapshot.warnings[0] ?? null;
+  const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
   const showPreset = useCallback((preset: "weather" | "movement" | "water" | "all") => {
     const presets: Record<typeof preset, Layer[]> = {
       weather: ["weather", "rain", "wind", "warnings", "places"],
-      movement: ["traffic", "trains", "places"],
+      movement: ["trains", "places"],
       water: ["rain", "rivers", "sea", "warnings", "places"],
-      all: ["weather", "rain", "wind", "warnings", "places", "sea", "trains", "traffic", "rivers"]
+      all: ["weather", "rain", "wind", "warnings", "places", "sea", "trains", "rivers", "radar", "grid", "air", "aurora"]
     };
     setLayers(new Set(presets[preset]));
     setActivePreset(preset);
     setSelected(null);
     setMapNotice(null);
+    setRadarPlaying(false);
   }, []);
 
   const focusContext = useCallback((focus: ContextFocus) => {
     const contextLayers: Record<ContextFocus, Layer[]> = {
       weather: ["weather", "rain", "wind", "places"],
-      traffic: ["traffic", "places"],
+      wind: ["wind", "places"],
       trains: ["trains", "places"],
       rivers: ["rivers", "places"],
       sea: ["sea", "wind", "places"],
-      warnings: ["warnings", "weather", "places"]
+      warnings: ["warnings", "weather", "places"],
+      radar: ["radar", "places"],
+      grid: ["grid", "places"],
+      air: ["air", "places"],
+      aurora: ["aurora", "places"]
     };
     const notices: Record<ContextFocus, { title: string; detail: string }> = {
       weather: {
         title: "Weather observations",
         detail: `${snapshot.summary.reporting} fresh Met Éireann stations. Select a temperature marker for its latest reading.`
       },
-      traffic: {
-        title: "Road-volume context",
-        detail: `${snapshot.traffic.length} TII counters showing latest signed-off average daily traffic—not live congestion. Select a marker for details.`
+      wind: {
+        title: "Observed wind",
+        detail: `${snapshot.summary.reporting} Met Éireann stations with wind direction and speed in km/h. Select an arrow for the complete observation.`
       },
       trains: {
         title: "Live rail positions",
@@ -348,12 +502,38 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       warnings: {
         title: activeWarning ? "Active weather notice" : "No active weather warnings",
         detail: activeWarning?.headline ?? "Met Éireann is not currently publishing a warning for Ireland."
+      },
+      radar: {
+        title: "Rainfall radar",
+        detail: snapshot.radar.length
+          ? `${snapshot.radar.length} Met Éireann frames at five-minute intervals. Use the timeline to replay the latest half hour.`
+          : "Met Éireann radar imagery is temporarily unavailable."
+      },
+      grid: {
+        title: "The all-island grid now",
+        detail: snapshot.grid
+          ? `Demand, wind, carbon and system frequency from EirGrid, with all displayed series available through ${snapshot.grid.observedAt ? formatTime(new Date(snapshot.grid.observedAt)) : "an unavailable time"}.`
+          : "EirGrid operational data is temporarily unavailable."
+      },
+      air: {
+        title: "Modelled air and exposure",
+        detail: snapshot.airQuality.length
+          ? `${snapshot.airQuality.length} regional CAMS model points from Open-Meteo. These are model estimates, not local sensor readings.`
+          : "The regional air-quality model is temporarily unavailable."
+      },
+      aurora: {
+        title: "Aurora overhead probability",
+        detail: snapshot.aurora
+          ? `NOAA OVATION currently estimates a ${snapshot.aurora.probability}% maximum probability directly over Ireland. Visibility also depends on darkness, cloud and light pollution.`
+          : "NOAA aurora guidance is temporarily unavailable."
       }
     };
     setLayers(new Set(contextLayers[focus]));
     setActivePreset("custom");
     setSelected(null);
     setMapNotice(notices[focus]);
+    setRadarPlaying(focus === "radar" && snapshot.radar.length > 1);
+    if (focus === "radar") setRadarFrameIndex(0);
     window.requestAnimationFrame(() => {
       document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -401,12 +581,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </div>
           <nav aria-label="Map view shortcuts">
             <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
-            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Movement</button>
+            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Rail</button>
             <button className={activePreset === "water" ? "active" : ""} onClick={() => showPreset("water")}><span>≈</span>Water</button>
             <button className={activePreset === "all" ? "active" : ""} onClick={() => showPreset("all")}><span>⌘</span>All layers</button>
           </nav>
           <div className="rail-metrics">
             <p><span>Warmest</span><strong>{snapshot.summary.warmest?.temperature ?? "—"}°</strong><small>{snapshot.summary.warmest?.name ?? "No report"}</small></p>
+            <p><span>Strongest wind</span><strong>{snapshot.summary.windiest?.windSpeed ?? "—"}</strong><small>km/h · {snapshot.summary.windiest?.name ?? "No report"}</small></p>
             <p><span>Trains moving</span><strong>{snapshot.summary.runningTrains}</strong><small>Live positions</small></p>
             <p><span>River gauges</span><strong>{snapshot.summary.riverStations}</strong><small>Fresh readings</small></p>
           </div>
@@ -421,7 +602,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </div>
             <div className="workspace-facts" aria-label="Current national highlights">
               <span><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b><small>recent rain</small></span>
-              <span><b>{snapshot.traffic.length}</b><small>traffic counters</small></span>
+              <span><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>grid demand from wind</small></span>
               <span><b>{snapshot.marine.length}</b><small>marine buoys</small></span>
             </div>
           </div>
@@ -437,13 +618,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         )}
         <nav className="map-presets" aria-label="Map views">
           <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" />Weather</button>
-          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" />Movement</button>
+          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" />Rail</button>
           <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" />Water</button>
           <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}>All layers</button>
         </nav>
         <svg className="ireland-map" viewBox="0 0 1000 900" role="img" aria-labelledby="map-title map-description">
           <title id="map-title">Near-real-time conditions across Ireland</title>
-          <desc id="map-description">A close map of Ireland showing weather, rain, trains, traffic volumes, river gauges, sea conditions and major places.</desc>
+          <desc id="map-description">A close map of Ireland showing weather, radar rain, observed wind, trains, river gauges, sea conditions, modelled air quality, aurora guidance and the live power grid.</desc>
           <defs>
             <radialGradient id="sunGlow">
               <stop offset="0" stopColor="#ffe9a3" stopOpacity=".85" />
@@ -463,6 +644,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <stop offset=".45" stopColor="#667f57" />
               <stop offset="1" stopColor="#344f45" />
             </linearGradient>
+            <linearGradient id="auroraGlow" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#55ffc1" stopOpacity=".78" />
+              <stop offset=".5" stopColor="#7a7cff" stopOpacity=".25" />
+              <stop offset="1" stopColor="#55ffc1" stopOpacity="0" />
+            </linearGradient>
             <filter id="landShadow" x="-30%" y="-30%" width="160%" height="160%">
               <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#00dbe9" floodOpacity=".22" />
             </filter>
@@ -471,6 +657,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <g clipPath="url(#viewportClip)">
             <rect width="1000" height="900" fill="url(#ocean)" />
             <circle cx={sunX} cy={sunY} r="135" fill="url(#sunGlow)" className="sun-glow" />
+            {layers.has("aurora") && (
+              <path
+                className="aurora-curtain"
+                style={{ opacity: Math.max(.12, (snapshot.aurora?.probability ?? 0) / 100) }}
+                d="M0 0H1000V280C820 180 700 330 520 215C345 105 205 290 0 180Z"
+                fill="url(#auroraGlow)"
+              />
+            )}
             <g className="sea-lines" aria-hidden="true">
               {Array.from({ length: 9 }, (_, index) => (
                 <path key={index} d={`M -40 ${150 + index * 88} Q 230 ${120 + index * 88}, 520 ${155 + index * 88} T 1040 ${140 + index * 88}`} />
@@ -479,6 +673,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <g className="island-shape" filter="url(#landShadow)">
               {islandPaths.map((path, index) => <path key={index} d={path} />)}
             </g>
+            {layers.has("radar") && radarFrame && <RadarTiles frame={radarFrame} projection={projection} />}
             <g className="road-network" aria-label="Major roads from OpenStreetMap">
               {roadPaths.map((road, index) => (
                 <path key={`${road.ref}-${index}`} d={road.path} className={road.roadClass} />
@@ -504,27 +699,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <g className="place" key={place.name} transform={`translate(${point[0]} ${point[1]})`}>
                   <circle r="2.5" />
                   <text x="7" y="4">{place.name}</text>
-                </g>
-              ) : null;
-            })}
-            {layers.has("traffic") && snapshot.traffic.map((counter) => {
-              const point = projection([counter.longitude, counter.latitude]);
-              const radius = 3.5 + Math.min(8, Math.sqrt(counter.averageDailyTraffic) / 34);
-              return point ? (
-                <g
-                  className="traffic-marker"
-                  key={counter.id}
-                  transform={`translate(${point[0]} ${point[1]})`}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${counter.name}, typical daily traffic ${counter.averageDailyTraffic.toLocaleString("en-IE")} vehicles`}
-                  onClick={() => setSelected({ type: "traffic", item: counter })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "traffic", item: counter });
-                  }}
-                >
-                  <circle className="traffic-halo" r={radius + 5} />
-                  <circle className="traffic-core" r={radius} />
                 </g>
               ) : null;
             })}
@@ -556,7 +730,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   transform={`translate(${point[0]} ${point[1]})`}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${buoy.id} marine buoy, ${buoy.waveHeight?.toFixed(1) ?? "unknown"} metre waves`}
+                  aria-label={`${buoy.name}, ${buoy.waveHeight?.toFixed(1) ?? "unknown"} metre waves`}
                   onClick={() => setSelected({ type: "buoy", item: buoy })}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") setSelected({ type: "buoy", item: buoy });
@@ -577,6 +751,48 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 onSelect={(item) => setSelected({ type: "station", item })}
               />
             ))}
+            {layers.has("wind") && snapshot.stations.map((station) => {
+              const point = projection([station.longitude, station.latitude]);
+              if (!point || station.windSpeed === null) return null;
+              return (
+                <g
+                  className="wind-marker"
+                  key={`wind-${station.id}`}
+                  transform={`translate(${point[0] + 14} ${point[1] + 12})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${station.name}, wind ${station.windSpeed} kilometres per hour from ${station.windDirection || "an unknown direction"}`}
+                  onClick={() => setSelected({ type: "station", item: station })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "station", item: station });
+                  }}
+                >
+                  <circle r="12" />
+                  <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
+                  <text x="14" y="4">{station.windSpeed} km/h</text>
+                </g>
+              );
+            })}
+            {layers.has("air") && snapshot.airQuality.map((reading) => {
+              const point = projection([reading.longitude, reading.latitude]);
+              return point ? (
+                <g
+                  className={`air-marker aqi-${aqiLabel(reading.europeanAqi).toLowerCase().replaceAll(" ", "-")}`}
+                  key={reading.id}
+                  transform={`translate(${point[0]} ${point[1]})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${reading.name}, modelled European air quality index ${reading.europeanAqi ?? "unavailable"}, ${aqiLabel(reading.europeanAqi)}`}
+                  onClick={() => setSelected({ type: "air", item: reading })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "air", item: reading });
+                  }}
+                >
+                  <circle r="15" />
+                  <text textAnchor="middle" y="4">{reading.europeanAqi ?? "—"}</text>
+                </g>
+              ) : null;
+            })}
             {layers.has("trains") && snapshot.trains.map((train) => {
               const point = projection([train.longitude, train.latitude]);
               return point ? (
@@ -600,9 +816,40 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </g>
         </svg>
 
+        {layers.has("radar") && (
+          <div className="radar-control" aria-label="Rainfall radar timeline">
+            <button
+              onClick={() => setRadarPlaying((playing) => !playing)}
+              disabled={snapshot.radar.length < 2}
+              aria-pressed={radarPlaying}
+            >
+              {radarPlaying ? "Pause" : "Replay"}
+            </button>
+            <label>
+              <span>{radarFrame ? formatTime(new Date(radarFrame.observedAt)) : "Unavailable"}</span>
+              <input
+                type="range"
+                min="0"
+                max={Math.max(0, snapshot.radar.length - 1)}
+                value={Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))}
+                disabled={!snapshot.radar.length}
+                onChange={(event) => {
+                  setRadarPlaying(false);
+                  setRadarFrameIndex(Number(event.target.value));
+                }}
+                aria-label="Radar frame"
+              />
+              <small>{snapshot.radar.length ? "Observed precipitation · 5-minute frames" : "Radar temporarily unavailable"}</small>
+            </label>
+          </div>
+        )}
+
+        {layers.has("grid") && <GridPanel grid={snapshot.grid} className="desktop-context-panel" />}
+        {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="desktop-context-panel" />}
+
         <div className="map-caption">
           <span className="compass">N</span>
-          <span>Live and near-real-time observations · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
+          <span>Observed, operational, and clearly labelled model data · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
         <div className="live-signal-dock" aria-label="Live island signals">
@@ -616,6 +863,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </section>
         </div>
       </section>
+
+      {layers.has("grid") && <GridPanel grid={snapshot.grid} className="mobile-context-panel" />}
+      {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="mobile-context-panel" />}
 
       {activeWarning && layers.has("warnings") && (
         <aside id="active-warning" className={`warning-strip ${activeWarning.level.toLowerCase()}`} aria-label="Active weather warning">
@@ -634,14 +884,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="pulse-intro">
           <p className="eyebrow">National signal board</p>
           <h2 id="pulse-heading">Ireland, at a glance.</h2>
-          <p>Movement and water readings alongside the weather. Every signal keeps its own timestamp and meaning.</p>
+          <p>Energy, movement and water alongside the weather. Every signal keeps its own timestamp and meaning.</p>
         </div>
-        <button className="pulse-card traffic" onClick={() => focusContext("traffic")}>
-          <span><i>↗</i> Historical road context</span>
-          <strong>{snapshot.summary.busiestRoad ? compactNumber.format(snapshot.summary.busiestRoad.averageDailyTraffic) : "—"}</strong>
-          <small>latest signed-off AADT at the busiest displayed TII counter—not current traffic</small>
+        <button className="pulse-card grid" onClick={() => focusContext("grid")}>
+          <span><i>ϟ</i> All-island electricity</span>
+          <strong>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</strong>
+          <small>of current demand supplied by wind, from EirGrid operational data</small>
           <div className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
-          <b>Show movement →</b>
+          <b>Open the grid now →</b>
         </button>
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
@@ -663,8 +913,20 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <button onClick={() => focusContext("weather")}>
           <span>☁</span><b>Weather stations</b><small>{snapshot.summary.reporting} reporting now</small><i>View context →</i>
         </button>
+        <button onClick={() => focusContext("wind")}>
+          <span>↝</span><b>Observed wind</b><small>{snapshot.summary.windiest?.windSpeed ?? "—"} km/h strongest shown</small><i>View arrows →</i>
+        </button>
+        <button onClick={() => focusContext("radar")}>
+          <span>◉</span><b>Rainfall radar</b><small>{snapshot.radar.length ? `${snapshot.radar.length} five-minute frames` : "Temporarily unavailable"}</small><i>Replay rain →</i>
+        </button>
         <button onClick={() => focusContext("sea")}>
           <span>⌁</span><b>Sea conditions</b><small>{snapshot.marine.length} recent buoy observations</small><i>View context →</i>
+        </button>
+        <button onClick={() => focusContext("air")}>
+          <span>◌</span><b>Air & exposure</b><small>{snapshot.airQuality.length} modelled locations</small><i>Explore air →</i>
+        </button>
+        <button onClick={() => focusContext("aurora")}>
+          <span>✦</span><b>Aurora chance</b><small>{snapshot.aurora ? `${snapshot.aurora.probability}% overhead probability` : "Guidance unavailable"}</small><i>Look north →</i>
         </button>
         <button onClick={() => focusContext("warnings")}>
           <span>△</span><b>Weather notices</b><small>{activeWarning ? `${activeWarning.level}: ${activeWarning.headline}` : "No active warning"}</small><i>View context →</i>
@@ -715,12 +977,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           {([
             ["weather", "Weather stations", "Temperature and current conditions"],
             ["rain", "Observed rain", "Measured recent rainfall around stations"],
-            ["wind", "Wind", "Ambient motion driven by reported wind"],
+            ["wind", "Observed wind", "Met Éireann direction and speed in km/h"],
             ["warnings", "Warnings", "Current official Met Éireann warnings"],
+            ["radar", "Rainfall radar", "Observed Met Éireann precipitation frames, updated every five minutes"],
             ["sea", "Sea conditions", "Near-real-time Marine Institute buoy observations"],
             ["trains", "Moving trains", "Current Iarnród Éireann train positions"],
-            ["traffic", "Historical road volume", "Latest signed-off TII AADT; not current traffic or congestion"],
             ["rivers", "River levels", "Latest fresh OPW readings; stale gauges expire automatically"],
+            ["grid", "Electricity grid", "Current all-island EirGrid demand, wind, carbon and frequency"],
+            ["air", "Air & exposure", "Regional CAMS model estimates via Open-Meteo—not local sensors"],
+            ["aurora", "Aurora probability", "NOAA OVATION overhead probability guidance"],
             ["places", "Places", "Major towns and cities"]
           ] as Array<[Layer, string, string]>).map(([id, label, detail]) => (
             <button key={id} className={layers.has(id) ? "active" : ""} onClick={() => toggleLayer(id)} aria-pressed={layers.has(id)}>
@@ -730,16 +995,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
         <div className="source-note">
           <p className="eyebrow">About the data</p>
-          <p>Weather and rail refresh automatically. Road volume is contextual AADT, not live congestion. River readings expire after three hours if OPW refresh is unavailable; they are local measurements, not flood warnings. Missing data is never shown as zero.</p>
+          <p>Weather, radar, rail, marine and grid feeds refresh automatically. Air quality is regional model output, and aurora is forecast probability. River readings expire after three hours; they are local measurements, not flood warnings. Missing data is never shown as zero.</p>
           <a href="https://www.met.ie/about-us/specialised-services/open-data" target="_blank" rel="noreferrer">Met Éireann open data ↗</a>
-          <a href="https://trafficdata.tii.ie/" target="_blank" rel="noreferrer">TII traffic data ↗</a>
           <a href="https://waterlevel.ie/page/api/" target="_blank" rel="noreferrer">OPW water levels ↗</a>
+          <a href="https://www.smartgriddashboard.com/" target="_blank" rel="noreferrer">EirGrid Smart Grid Dashboard ↗</a>
+          <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo air quality ↗</a>
+          <a href="https://www.swpc.noaa.gov/products/aurora-30-minute-forecast" target="_blank" rel="noreferrer">NOAA aurora guidance ↗</a>
         </div>
       </aside>
 
       <footer>
         <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie (OPW), TII and the Marine Institute under CC BY 4.0. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie (OPW) and the Marine Institute under CC BY 4.0, EirGrid operational data, CAMS model output via Open-Meteo, and NOAA SWPC aurora guidance. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
   );

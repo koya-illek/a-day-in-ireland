@@ -40,14 +40,58 @@ export type RiverReading = {
   fresh: boolean;
 };
 
-export type TrafficCounter = {
+export type MarineReading = {
   id: string;
   name: string;
-  description: string;
+  kind: "weather-buoy" | "coastal-observatory";
   latitude: number;
   longitude: number;
-  averageDailyTraffic: number;
-  category: string;
+  observedAt: string;
+  windSpeedKnots: number | null;
+  waveHeight: number | null;
+  wavePeriod: number | null;
+  seaTemperature: number | null;
+};
+
+export type RadarFrame = {
+  id: string;
+  observedAt: string;
+  modifiedTime: number;
+  tileTemplate: string;
+};
+
+export type GridReading = {
+  observedAt: string | null;
+  demandMW: number | null;
+  generationMW: number | null;
+  windMW: number | null;
+  windSharePercent: number | null;
+  carbonIntensity: number | null;
+  carbonEmissions: number | null;
+  frequencyHz: number | null;
+  interconnectorMW: number | null;
+};
+
+export type AirQualityReading = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  observedAt: string;
+  europeanAqi: number | null;
+  pm25: number | null;
+  pm10: number | null;
+  nitrogenDioxide: number | null;
+  ozone: number | null;
+  uvIndex: number | null;
+  grassPollen: number | null;
+};
+
+export type AuroraReading = {
+  observedAt: string;
+  forecastAt: string;
+  probability: number;
+  kpIndex: number | null;
 };
 
 export type LiveSnapshot = {
@@ -55,18 +99,13 @@ export type LiveSnapshot = {
   sourceStatus: "live" | "partial" | "fallback";
   stations: StationReading[];
   warnings: WeatherWarning[];
-  marine: Array<{
-    id: string;
-    latitude: number;
-    longitude: number;
-    observedAt: string;
-    windSpeedKnots: number | null;
-    waveHeight: number | null;
-    seaTemperature: number | null;
-  }>;
+  marine: MarineReading[];
   trains: TrainPosition[];
   rivers: RiverReading[];
-  traffic: TrafficCounter[];
+  radar: RadarFrame[];
+  grid: GridReading | null;
+  airQuality: AirQualityReading[];
+  aurora: AuroraReading | null;
   summary: {
     warmest: StationReading | null;
     wettest: StationReading | null;
@@ -74,7 +113,6 @@ export type LiveSnapshot = {
     reporting: number;
     runningTrains: number;
     riverStations: number;
-    busiestRoad: TrafficCounter | null;
   };
   timeline: Array<{
     time: string;

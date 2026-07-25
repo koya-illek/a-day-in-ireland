@@ -1,8 +1,12 @@
 import type {
+  AirQualityReading,
+  AuroraReading,
+  GridReading,
   LiveSnapshot,
+  MarineReading,
+  RadarFrame,
   RiverReading,
   StationReading,
-  TrafficCounter,
   TrainPosition,
   WeatherWarning
 } from "./types";
@@ -112,11 +116,14 @@ async function fetchLatestStationFallback(): Promise<StationReading[]> {
   }
 }
 
-async function fetchMarine() {
+const freshEnough = (value: string, hours = 6) =>
+  Date.now() - new Date(value).getTime() < hours * 60 * 60 * 1000;
+
+async function fetchWeatherBuoys(): Promise<MarineReading[]> {
   try {
     const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const query =
-      `station_id,longitude,latitude,time,WindSpeed,WaveHeight,SeaTemperature` +
+      `station_id,longitude,latitude,time,WindSpeed,WaveHeight,WavePeriod,SeaTemperature` +
       `&time>=${since}T00:00:00Z&orderByMax("station_id,time")`;
     const response = await fetch(
       `https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json?${encodeURI(query)}`,
@@ -126,15 +133,307 @@ async function fetchMarine() {
     const body = (await response.json()) as { table?: { rows?: unknown[][] } };
     return (body.table?.rows ?? []).map((row) => ({
       id: String(row[0]),
+      name: `Offshore buoy ${String(row[0])}`,
+      kind: "weather-buoy" as const,
       longitude: Number(row[1]),
       latitude: Number(row[2]),
       observedAt: String(row[3]),
       windSpeedKnots: numberOrNull(row[4]),
       waveHeight: numberOrNull(row[5]),
-      seaTemperature: numberOrNull(row[6])
-    }));
+      wavePeriod: numberOrNull(row[6]),
+      seaTemperature: numberOrNull(row[7])
+    })).filter((reading) => freshEnough(reading.observedAt));
   } catch {
     return [];
+  }
+}
+
+type CoastalSource = {
+  dataset: string;
+  name: string;
+  variables: string[];
+  map: (row: unknown[]) => Omit<MarineReading, "id" | "name" | "kind">;
+};
+
+const COASTAL_SOURCES: CoastalSource[] = [
+  {
+    dataset: "smartbay_metbuoy",
+    name: "SmartBay Met Buoy",
+    variables: ["time", "latitude", "longitude", "wind_speed"],
+    map: (row) => ({
+      observedAt: String(row[0]),
+      latitude: Number(row[1]),
+      longitude: Number(row[2]),
+      windSpeedKnots: numberOrNull(row[3]) === null ? null : (numberOrNull(row[3]) as number) * 1.94384,
+      waveHeight: null,
+      wavePeriod: null,
+      seaTemperature: null
+    })
+  },
+  {
+    dataset: "sentinel_lehanagh",
+    name: "Lehanagh Pool Observatory",
+    variables: ["time", "latitude", "longitude", "Wind_Speed", "SBE_Temp_Avg"],
+    map: (row) => ({
+      observedAt: String(row[0]),
+      latitude: Number(row[1]),
+      longitude: Number(row[2]),
+      windSpeedKnots: numberOrNull(row[3]) === null ? null : (numberOrNull(row[3]) as number) * 1.94384,
+      waveHeight: null,
+      wavePeriod: null,
+      seaTemperature: numberOrNull(row[4])
+    })
+  },
+  {
+    dataset: "compass_mace_head",
+    name: "Mace Head Observatory",
+    variables: ["time", "latitude", "longitude", "wind_speed", "sbe_temp_avg", "SignificantWaveHeight", "MeanWavePeriod_Tm02"],
+    map: (row) => ({
+      observedAt: String(row[0]),
+      latitude: Number(row[1]),
+      longitude: Number(row[2]),
+      windSpeedKnots: numberOrNull(row[3]) === null ? null : (numberOrNull(row[3]) as number) * 1.94384,
+      seaTemperature: numberOrNull(row[4]),
+      waveHeight: numberOrNull(row[5]),
+      wavePeriod: numberOrNull(row[6])
+    })
+  }
+];
+
+async function fetchCoastalBuoy(source: CoastalSource): Promise<MarineReading | null> {
+  try {
+    const query = `${source.variables.join(",")}&orderByMax("time")`;
+    const response = await fetch(
+      `https://erddap.marine.ie/erddap/tabledap/${source.dataset}.json?${encodeURI(query)}`,
+      { next: { revalidate: 900 }, signal: AbortSignal.timeout(8000) }
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as { table?: { rows?: unknown[][] } };
+    const row = body.table?.rows?.[0];
+    if (!row) return null;
+    const reading = source.map(row);
+    if (!freshEnough(reading.observedAt)) return null;
+    return {
+      id: source.dataset,
+      name: source.name,
+      kind: "coastal-observatory",
+      ...reading
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMarine(): Promise<MarineReading[]> {
+  const [weather, ...coastal] = await Promise.all([
+    fetchWeatherBuoys(),
+    ...COASTAL_SOURCES.map(fetchCoastalBuoy)
+  ]);
+  return [...weather, ...coastal.filter((reading): reading is MarineReading => reading !== null)];
+}
+
+const parseRadarTime = (id: string) => {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(id);
+  return match
+    ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`
+    : new Date().toISOString();
+};
+
+async function fetchRadar(): Promise<RadarFrame[]> {
+  try {
+    const response = await fetch("https://gdal.met.ie/api/maps/radar", {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) return [];
+    const rows = (await response.json()) as Array<{ src?: unknown; modifiedTime?: unknown; server?: unknown }>;
+    return rows.slice(-7).flatMap((row) => {
+      const id = String(row.src ?? "");
+      const modifiedTime = Number(row.modifiedTime);
+      if (!/^\d{12}$/.test(id) || !Number.isFinite(modifiedTime)) return [];
+      const server = String(row.server ?? "https://gdal.met.ie").replace(/\/$/, "");
+      return [{
+        id,
+        observedAt: parseRadarTime(id),
+        modifiedTime,
+        tileTemplate: `${server}/api/maps/radar/${id}/{x}/{y}/{z}/${modifiedTime}`
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+const EIRGRID_MONTHS: Record<string, string> = {
+  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
+};
+
+const eirGridTimestamp = (value: string) => {
+  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}:\d{2}:\d{2})$/.exec(value);
+  return match && EIRGRID_MONTHS[match[2]]
+    ? `${match[3]}-${EIRGRID_MONTHS[match[2]]}-${match[1]}T${match[4]}Z`
+    : null;
+};
+
+type GridRow = { EffectiveTime?: unknown; FieldName?: unknown; Value?: unknown };
+
+async function fetchGridRows(chartType: string, areas: string): Promise<GridRow[]> {
+  const day = new Date().toISOString().slice(0, 10);
+  const url = new URL("https://www.smartgriddashboard.com/api/chart/");
+  url.search = new URLSearchParams({
+    region: "ALL",
+    chartType,
+    dateRange: chartType === "frequency" ? "hour" : "day",
+    dateFrom: day,
+    dateTo: day,
+    areas
+  }).toString();
+  const response = await fetch(url, {
+    next: { revalidate: chartType === "frequency" ? 60 : 300 },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) throw new Error(`EirGrid ${chartType} returned ${response.status}`);
+  const body = (await response.json()) as { Rows?: GridRow[] };
+  return body.Rows ?? [];
+}
+
+const latestGridValue = (rows: GridRow[], field: string) => {
+  const row = [...rows].reverse().find(
+    (item) =>
+      String(item.FieldName) === field &&
+      item.Value !== null &&
+      item.Value !== undefined &&
+      item.Value !== "" &&
+      Number.isFinite(Number(item.Value))
+  );
+  return row ? { value: Number(row.Value), observedAt: eirGridTimestamp(String(row.EffectiveTime)) } : null;
+};
+
+async function fetchGrid(): Promise<GridReading | null> {
+  try {
+    const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
+      await Promise.all([
+        fetchGridRows("demand", "demandactual"),
+        fetchGridRows("generation", "generationactual"),
+        fetchGridRows("wind", "windactual"),
+        fetchGridRows("co2", "co2intensity,co2emission"),
+        fetchGridRows("frequency", "frequency"),
+        fetchGridRows("interconnection", "interconnection")
+      ]);
+    const demand = latestGridValue(demandRows, "SYSTEM_DEMAND");
+    const generation = latestGridValue(generationRows, "GEN_EXP");
+    const wind = latestGridValue(windRows, "WIND_ACTUAL");
+    const intensity = latestGridValue(carbonRows, "CO2_INTENSITY");
+    const emissions = latestGridValue(carbonRows, "CO2_EMISSIONS");
+    const frequency = latestGridValue(frequencyRows, "SYS_FREQUENCY");
+    const interconnector = latestGridValue(interconnectionRows, "INTER_NET");
+    const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
+      .map((item) => item?.observedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort();
+    if (!timestamps.length) return null;
+    return {
+      observedAt: timestamps[0] ?? null,
+      demandMW: demand?.value ?? null,
+      generationMW: generation?.value ?? null,
+      windMW: wind?.value ?? null,
+      windSharePercent: wind && demand && demand.value > 0 ? (wind.value / demand.value) * 100 : null,
+      carbonIntensity: intensity?.value ?? null,
+      carbonEmissions: emissions?.value ?? null,
+      frequencyHz: frequency?.value ?? null,
+      interconnectorMW: interconnector?.value ?? null
+    };
+  } catch {
+    return null;
+  }
+}
+
+const AIR_LOCATIONS = [
+  { id: "dublin-air", name: "Dublin", latitude: 53.35, longitude: -6.26 },
+  { id: "belfast-air", name: "Belfast", latitude: 54.60, longitude: -5.93 },
+  { id: "cork-air", name: "Cork", latitude: 51.90, longitude: -8.48 },
+  { id: "galway-air", name: "Galway", latitude: 53.27, longitude: -9.06 },
+  { id: "limerick-air", name: "Limerick", latitude: 52.66, longitude: -8.63 },
+  { id: "waterford-air", name: "Waterford", latitude: 52.26, longitude: -7.11 },
+  { id: "derry-air", name: "Derry", latitude: 55.00, longitude: -7.31 }
+];
+
+async function fetchAirQuality(): Promise<AirQualityReading[]> {
+  try {
+    const url = new URL("https://air-quality-api.open-meteo.com/v1/air-quality");
+    url.search = new URLSearchParams({
+      latitude: AIR_LOCATIONS.map((item) => item.latitude).join(","),
+      longitude: AIR_LOCATIONS.map((item) => item.longitude).join(","),
+      current: "european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone,uv_index,grass_pollen",
+      timezone: "GMT"
+    }).toString();
+    const response = await fetch(url, {
+      next: { revalidate: 1800 },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return [];
+    const bodies = await response.json() as Array<{ current?: Record<string, unknown> }>;
+    return AIR_LOCATIONS.flatMap((place, index) => {
+      const current = bodies[index]?.current;
+      if (!current?.time) return [];
+      return [{
+        ...place,
+        observedAt: `${String(current.time)}:00Z`,
+        europeanAqi: numberOrNull(current.european_aqi),
+        pm25: numberOrNull(current.pm2_5),
+        pm10: numberOrNull(current.pm10),
+        nitrogenDioxide: numberOrNull(current.nitrogen_dioxide),
+        ozone: numberOrNull(current.ozone),
+        uvIndex: numberOrNull(current.uv_index),
+        grassPollen: numberOrNull(current.grass_pollen)
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchAurora(): Promise<AuroraReading | null> {
+  try {
+    const [auroraResponse, kpResponse] = await Promise.all([
+      fetch("https://services.swpc.noaa.gov/json/ovation_aurora_latest.json", {
+        next: { revalidate: 900 },
+        signal: AbortSignal.timeout(9000)
+      }),
+      fetch("https://services.swpc.noaa.gov/json/planetary_k_index_1m.json", {
+        next: { revalidate: 300 },
+        signal: AbortSignal.timeout(7000)
+      })
+    ]);
+    if (!auroraResponse.ok) return null;
+    const body = await auroraResponse.json() as {
+      "Observation Time"?: unknown;
+      "Forecast Time"?: unknown;
+      coordinates?: unknown[][];
+    };
+    const probabilities = (body.coordinates ?? [])
+      .filter((point) => {
+        const longitude = Number(point[0]);
+        const latitude = Number(point[1]);
+        return longitude >= 349 && longitude <= 355 && latitude >= 51 && latitude <= 56;
+      })
+      .map((point) => Number(point[2]))
+      .filter(Number.isFinite);
+    if (!probabilities.length) return null;
+    let kpIndex: number | null = null;
+    if (kpResponse.ok) {
+      const kpRows = await kpResponse.json() as Array<{ estimated_kp?: unknown }>;
+      kpIndex = numberOrNull(kpRows.at(-1)?.estimated_kp);
+    }
+    return {
+      observedAt: String(body["Observation Time"] ?? ""),
+      forecastAt: String(body["Forecast Time"] ?? ""),
+      probability: Math.max(...probabilities),
+      kpIndex
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -237,90 +536,29 @@ async function fetchRivers(): Promise<RiverReading[]> {
   }
 }
 
-async function fetchTraffic(): Promise<TrafficCounter[]> {
-  try {
-    const headers = {
-      "content-type": "application/x-www-form-urlencoded",
-      "x-requested-with": "XMLHttpRequest",
-      "origin": "https://trafficdata.tii.ie",
-      "referer": "https://trafficdata.tii.ie/publicmultinodemap.asp"
-    };
-    const sitesBody = new URLSearchParams();
-    sitesBody.set("array", "0");
-    sitesBody.set("hasLocation", "1");
-    sitesBody.set("isPed", "0");
-    ["id", "location", "name", "description", "parameters"].forEach((field) =>
-      sitesBody.append("fields[]", field)
-    );
-    const aadtBody = new URLSearchParams({
-      isSignedOff: "1",
-      latestYear: "1",
-      "siteCriteria[group]": "NRA"
-    });
-    const [sitesResponse, aadtResponse] = await Promise.all([
-      fetch("https://trafficdata.tii.ie/dataserver/public/sites", {
-        method: "POST",
-        headers,
-        body: sitesBody,
-        next: { revalidate: 21_600 },
-        signal: AbortSignal.timeout(9000)
-      }),
-      fetch("https://trafficdata.tii.ie/dataserver/public/aadt", {
-        method: "POST",
-        headers,
-        body: aadtBody,
-        next: { revalidate: 21_600 },
-        signal: AbortSignal.timeout(9000)
-      })
-    ]);
-    if (!sitesResponse.ok || !aadtResponse.ok) return [];
-    const sites = (await sitesResponse.json()) as { data?: Record<string, Record<string, unknown>> };
-    const aadts = (await aadtResponse.json()) as { data?: Record<string, number> };
-    const counters = Object.values(sites.data ?? {}).flatMap((site) => {
-      const location = site.location as { lat?: number; lng?: number } | undefined;
-      const parameters = site.parameters as Record<string, string> | undefined;
-      const averageDailyTraffic = aadts.data?.[String(site.id)];
-      if (
-        !location ||
-        !Number.isFinite(location.lat) ||
-        !Number.isFinite(location.lng) ||
-        !Number.isFinite(averageDailyTraffic) ||
-        parameters?.state === "4"
-      ) return [];
-      return [{
-        id: String(site.id),
-        name: String(site.name ?? "Traffic counter"),
-        description: String(site.description ?? ""),
-        latitude: location.lat as number,
-        longitude: location.lng as number,
-        averageDailyTraffic: averageDailyTraffic as number,
-        category: String(parameters?.category ?? "National road")
-      } satisfies TrafficCounter];
-    });
-
-    const cells = new Map<string, TrafficCounter>();
-    for (const counter of counters) {
-      const key = `${Math.round(counter.longitude * 5)}:${Math.round(counter.latitude * 6)}`;
-      const current = cells.get(key);
-      if (!current || counter.averageDailyTraffic > current.averageDailyTraffic) cells.set(key, counter);
-    }
-    return [...cells.values()]
-      .sort((a, b) => b.averageDailyTraffic - a.averageDailyTraffic)
-      .slice(0, 90);
-  } catch {
-    return [];
-  }
-}
-
 export async function getLiveSnapshot(): Promise<LiveSnapshot> {
-  const [stationResults, fallbackStations, warnings, marine, trains, rivers, traffic] = await Promise.all([
+  const [
+    stationResults,
+    fallbackStations,
+    warnings,
+    marine,
+    trains,
+    rivers,
+    radar,
+    grid,
+    airQuality,
+    aurora
+  ] = await Promise.all([
     Promise.all(STATIONS.map(fetchStation)),
     fetchLatestStationFallback(),
     fetchWarnings(),
     fetchMarine(),
     fetchTrains(),
     fetchRivers(),
-    fetchTraffic()
+    fetchRadar(),
+    fetchGrid(),
+    fetchAirQuality(),
+    fetchAurora()
   ]);
   const results = stationResults.filter((value): value is StationResult => value !== null);
   const resultIds = new Set(results.map((result) => result.reading.id));
@@ -353,15 +591,17 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     marine,
     trains,
     rivers,
-    traffic,
+    radar,
+    grid,
+    airQuality,
+    aurora,
     summary: {
       warmest: by("temperature"),
       wettest: by("rainfall"),
       windiest: by("windSpeed"),
       reporting: fresh.length,
       runningTrains: trains.filter((train) => train.status === "running").length,
-      riverStations: rivers.length,
-      busiestRoad: [...traffic].sort((a, b) => b.averageDailyTraffic - a.averageDailyTraffic)[0] ?? null
+      riverStations: rivers.length
     },
     timeline: [...timelineByTime.entries()].map(([time, values]) => ({
       time,

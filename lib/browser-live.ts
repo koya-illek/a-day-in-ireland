@@ -109,7 +109,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     sourceStatus: fresh.length >= 6 ? "live" : "partial",
     stations,
     warnings: previous.warnings.filter((warning) => new Date(warning.expiry).getTime() > now),
-    marine: previous.marine.filter((buoy) => now - new Date(buoy.observedAt).getTime() < 3 * 60 * 60 * 1000),
+    marine: previous.marine.filter((buoy) => now - new Date(buoy.observedAt).getTime() < 6 * 60 * 60 * 1000),
     summary: {
       ...previous.summary,
       warmest: top("temperature"),
@@ -133,35 +133,52 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
       signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) return previous;
-    const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers" | "traffic"> & {
+    const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers"> & {
       generatedAt: string;
       sourceStatus?: {
         trains: "live" | "unavailable";
         rivers: "live" | "unavailable";
-        traffic: "context" | "unavailable";
       };
     };
-    if (!Array.isArray(next.trains) || !Array.isArray(next.rivers) || !Array.isArray(next.traffic)) {
+    if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) {
       return previous;
     }
     const now = Date.now();
     const trains = next.sourceStatus?.trains === "unavailable" ? previous.trains : next.trains;
     const rivers = (next.sourceStatus?.rivers === "unavailable" ? previous.rivers : next.rivers)
       .filter((river) => now - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000);
-    const traffic = next.sourceStatus?.traffic === "unavailable" ? previous.traffic : next.traffic;
     return {
       ...previous,
       trains,
       rivers,
-      traffic,
       summary: {
         ...previous.summary,
         runningTrains: trains.filter((train) => train.status === "running").length,
-        riverStations: rivers.length,
-        busiestRoad: [...traffic].sort(
-          (a, b) => b.averageDailyTraffic - a.averageDailyTraffic
-        )[0] ?? null
+        riverStations: rivers.length
       }
+    };
+  } catch {
+    return previous;
+  }
+}
+
+export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
+  try {
+    const response = await fetch("/api/contexts", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000)
+    });
+    if (!response.ok) return previous;
+    const next = (await response.json()) as Partial<
+      Pick<LiveSnapshot, "marine" | "radar" | "grid" | "airQuality" | "aurora">
+    >;
+    return {
+      ...previous,
+      marine: Array.isArray(next.marine) ? next.marine : previous.marine,
+      radar: Array.isArray(next.radar) ? next.radar : previous.radar,
+      grid: next.grid === null || typeof next.grid === "object" ? next.grid : previous.grid,
+      airQuality: Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality,
+      aurora: next.aurora === null || typeof next.aurora === "object" ? next.aurora : previous.aurora
     };
   } catch {
     return previous;
