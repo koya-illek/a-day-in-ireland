@@ -1,6 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
@@ -480,7 +489,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
   const [radarPlaying, setRadarPlaying] = useState(false);
+  const [mapView, setMapView] = useState({ scale: 1, x: 0, y: 0 });
   const audioRef = useRef<AudioContext | null>(null);
+  const mapRef = useRef<SVGSVGElement | null>(null);
+  const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const mapGestureRef = useRef<{ center: { x: number; y: number }; distance: number } | null>(null);
+  const mapPointerOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const mapDidPanRef = useRef(false);
 
   useEffect(() => {
     const clock = window.setInterval(() => setNow(new Date()), 1000);
@@ -612,6 +627,105 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     snapshot.contextStatus.earthquakes === "live" &&
     snapshot.contextStatus.iss === "live";
   const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
+  const constrainMapView = useCallback((scale: number, x: number, y: number) => {
+    const nextScale = Math.min(4, Math.max(1, scale));
+    return {
+      scale: nextScale,
+      x: Math.min(0, Math.max(1000 * (1 - nextScale), x)),
+      y: Math.min(0, Math.max(900 * (1 - nextScale), y))
+    };
+  }, []);
+  const zoomMapAround = useCallback((factor: number, point = { x: 500, y: 450 }) => {
+    setMapView((current) => {
+      const scale = Math.min(4, Math.max(1, current.scale * factor));
+      const ratio = scale / current.scale;
+      return constrainMapView(
+        scale,
+        point.x - (point.x - current.x) * ratio,
+        point.y - (point.y - current.y) * ratio
+      );
+    });
+  }, [constrainMapView]);
+  const mapPointFromClient = useCallback((clientX: number, clientY: number) => {
+    const bounds = mapRef.current?.getBoundingClientRect();
+    if (!bounds) return { x: 500, y: 450 };
+    return {
+      x: (clientX - bounds.left) * 1000 / bounds.width,
+      y: (clientY - bounds.top) * 900 / bounds.height
+    };
+  }, []);
+  const mapGesture = useCallback(() => {
+    const points = [...mapPointersRef.current.values()];
+    if (!points.length) return null;
+    const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
+    center.x /= points.length;
+    center.y /= points.length;
+    return {
+      center,
+      distance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0
+    };
+  }, []);
+  const handleMapPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    mapDidPanRef.current = false;
+    if ((event.target as Element).closest('[role="button"]')) return;
+    const point = mapPointFromClient(event.clientX, event.clientY);
+    mapPointersRef.current.set(event.pointerId, point);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic accessibility tests do not create an active browser pointer.
+    }
+    mapGestureRef.current = mapGesture();
+    mapPointerOriginRef.current = point;
+  }, [mapGesture, mapPointFromClient]);
+  const handleMapPointerMove = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!mapPointersRef.current.has(event.pointerId)) return;
+    const point = mapPointFromClient(event.clientX, event.clientY);
+    mapPointersRef.current.set(event.pointerId, point);
+    const previous = mapGestureRef.current;
+    const next = mapGesture();
+    if (!previous || !next) return;
+    if (mapPointerOriginRef.current &&
+      Math.hypot(point.x - mapPointerOriginRef.current.x, point.y - mapPointerOriginRef.current.y) > 3) {
+      mapDidPanRef.current = true;
+    }
+    setMapView((current) => {
+      if (mapPointersRef.current.size > 1 && previous.distance > 0 && next.distance > 0) {
+        const scale = Math.min(4, Math.max(1, current.scale * next.distance / previous.distance));
+        return constrainMapView(
+          scale,
+          next.center.x - (previous.center.x - current.x) * scale / current.scale,
+          next.center.y - (previous.center.y - current.y) * scale / current.scale
+        );
+      }
+      return constrainMapView(
+        current.scale,
+        current.x + next.center.x - previous.center.x,
+        current.y + next.center.y - previous.center.y
+      );
+    });
+    mapGestureRef.current = next;
+  }, [constrainMapView, mapGesture, mapPointFromClient]);
+  const handleMapPointerEnd = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    mapPointersRef.current.delete(event.pointerId);
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been released by the browser.
+    }
+    mapGestureRef.current = mapGesture();
+    if (!mapPointersRef.current.size) mapPointerOriginRef.current = null;
+  }, [mapGesture]);
+  const handleMapWheel = useCallback((event: ReactWheelEvent<SVGSVGElement>) => {
+    event.preventDefault();
+    zoomMapAround(event.deltaY < 0 ? 1.22 : 1 / 1.22, mapPointFromClient(event.clientX, event.clientY));
+  }, [mapPointFromClient, zoomMapAround]);
+  const suppressClickAfterPan = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
+    if (!mapDidPanRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    mapDidPanRef.current = false;
+  }, []);
   const showPreset = useCallback((preset: "weather" | "movement" | "water" | "all") => {
     const presets: Record<typeof preset, Layer[]> = {
       weather: ["weather", "rain", "wind", "warnings", "places"],
@@ -843,7 +957,19 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" />Water</button>
           <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}>All layers</button>
         </nav>
-        <svg className="ireland-map" viewBox="0 0 1000 900" role="img" aria-labelledby="map-title map-description">
+        <svg
+          ref={mapRef}
+          className={mapView.scale > 1 ? "ireland-map is-zoomed" : "ireland-map"}
+          viewBox="0 0 1000 900"
+          role="img"
+          aria-labelledby="map-title map-description"
+          onClickCapture={suppressClickAfterPan}
+          onPointerDown={handleMapPointerDown}
+          onPointerMove={handleMapPointerMove}
+          onPointerUp={handleMapPointerEnd}
+          onPointerCancel={handleMapPointerEnd}
+          onWheel={handleMapWheel}
+        >
           <title id="map-title">Near-real-time conditions across Ireland</title>
           <desc id="map-description">A close map of Ireland showing weather, radar rain, observed wind, rail and public transport, river and tide gauges, sea conditions, measured and modelled air quality, bathing alerts, satellite imagery, seismic detections, ISS passes, aurora guidance and the live power grid.</desc>
           <defs>
@@ -882,6 +1008,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </defs>
           <g clipPath="url(#viewportClip)">
             <rect width="1000" height="900" fill="url(#ocean)" />
+            <g
+              className="map-viewport"
+              data-scale={mapView.scale.toFixed(2)}
+              transform={`translate(${mapView.x} ${mapView.y}) scale(${mapView.scale})`}
+            >
             <circle cx={sunX} cy={sunY} r="135" fill="url(#sunGlow)" className="sun-glow" />
             {layers.has("aurora") && (
               <path
@@ -1140,8 +1271,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   </g>
                 ) : null;
               })}
+            </g>
           </g>
         </svg>
+
+        <nav className="map-navigation" aria-label="Map navigation">
+          <button onClick={() => zoomMapAround(1.4)} disabled={mapView.scale >= 4} aria-label="Zoom in">+</button>
+          <button onClick={() => zoomMapAround(1 / 1.4)} disabled={mapView.scale <= 1} aria-label="Zoom out">−</button>
+          <button
+            className="map-reset"
+            onClick={() => setMapView({ scale: 1, x: 0, y: 0 })}
+            disabled={mapView.scale === 1 && mapView.x === 0 && mapView.y === 0}
+          >
+            Reset
+          </button>
+          <output aria-live="polite" aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
+        </nav>
 
         {layers.has("radar") && (
           <div className="radar-control" aria-label="Rainfall radar timeline">

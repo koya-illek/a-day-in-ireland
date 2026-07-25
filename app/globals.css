@@ -589,11 +589,59 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
   min-height: 37rem;
 }
 .ireland-map {
+  cursor: grab;
   height: 100%;
   inset: 0;
   min-width: 0;
   position: absolute;
+  touch-action: none;
+  user-select: none;
   width: 100%;
+}
+.ireland-map.is-zoomed:active { cursor: grabbing; }
+.map-viewport {
+  transform-box: fill-box;
+  transform-origin: 0 0;
+  transition: transform .18s ease-out;
+}
+.ireland-map:active .map-viewport { transition: none; }
+.map-navigation {
+  align-items: center;
+  background: rgba(9, 23, 41, .95);
+  border: 1px solid rgba(0, 219, 233, .32);
+  border-radius: .4rem;
+  box-shadow: 0 .75rem 1.8rem rgba(0, 0, 0, .24);
+  display: flex;
+  overflow: hidden;
+  position: absolute;
+  right: .8rem;
+  top: .8rem;
+  z-index: 15;
+}
+.map-navigation button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid rgba(0, 219, 233, .18);
+  color: #eafcff;
+  cursor: pointer;
+  display: flex;
+  font: 600 1rem ui-monospace, monospace;
+  height: 2.15rem;
+  justify-content: center;
+  min-width: 2.15rem;
+  padding: 0 .55rem;
+}
+.map-navigation button:hover:not(:disabled),
+.map-navigation button:focus-visible { background: rgba(0, 219, 233, .14); color: #4edea3; }
+.map-navigation button:disabled { cursor: default; opacity: .34; }
+.map-navigation .map-reset { font-size: .58rem; letter-spacing: .05em; text-transform: uppercase; }
+.map-navigation output {
+  color: #4edea3;
+  font: 600 .55rem ui-monospace, monospace;
+  min-width: 2.9rem;
+  padding: 0 .55rem;
+  text-align: center;
 }
 .island-shape { pointer-events: none; }
 .island-shape path {
@@ -1111,6 +1159,9 @@ footer {
   .section-rail nav button { font-size: .57rem; padding: .65rem .55rem; }
   .section-rail nav button span { display: none; }
   .map-caption { font-size: .5rem; }
+  .map-navigation { right: .55rem; top: 4.65rem; }
+  .map-navigation button { height: 1.9rem; min-width: 1.9rem; padding: 0 .4rem; }
+  .map-navigation output { min-width: 2.6rem; padding: 0 .4rem; }
   .section-rail {
     background: rgba(10, 23, 42, .97);
     border: 1px solid var(--line);

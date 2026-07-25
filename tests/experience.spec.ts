@@ -72,6 +72,51 @@ test("Stitch map workspace uses an island-only coastline and visible roads", asy
   expect((heading?.y ?? 0) + (heading?.height ?? 0)).toBeLessThan(map?.y ?? 0);
 });
 
+test("map supports accessible zoom, pan and reset controls", async ({ page }) => {
+  await page.goto("/");
+  const map = page.getByLabel("Live map of Ireland");
+  const viewport = page.locator(".map-viewport");
+  const navigation = page.getByRole("navigation", { name: "Map navigation" });
+
+  await expect(navigation.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+  await expect(navigation.getByLabel("Current map zoom")).toHaveText("100%");
+  await navigation.getByRole("button", { name: "Zoom in" }).click();
+  await expect(viewport).toHaveAttribute("data-scale", "1.40");
+  await expect(navigation.getByLabel("Current map zoom")).toHaveText("140%");
+
+  const beforePan = await viewport.getAttribute("transform");
+  const box = await map.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) * .55, (box?.y ?? 0) + (box?.height ?? 0) * .55);
+  await page.mouse.down();
+  await page.mouse.move((box?.x ?? 0) + (box?.width ?? 0) * .45, (box?.y ?? 0) + (box?.height ?? 0) * .45, { steps: 4 });
+  await page.mouse.up();
+  await expect(viewport).not.toHaveAttribute("transform", beforePan ?? "");
+
+  await navigation.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(viewport).toHaveAttribute("data-scale", "1.00");
+  await expect(viewport).toHaveAttribute("transform", "translate(0 0) scale(1)");
+  await expect(navigation.getByLabel("Current map zoom")).toHaveText("100%");
+
+  if (test.info().project.name === "mobile") {
+    const centerX = (box?.x ?? 0) + (box?.width ?? 0) / 2;
+    const centerY = (box?.y ?? 0) + (box?.height ?? 0) / 2;
+    const svg = page.locator("svg.ireland-map");
+    await svg.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch", clientX: centerX - 30, clientY: centerY, buttons: 1 });
+    await svg.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", clientX: centerX + 30, clientY: centerY, buttons: 1 });
+    await svg.dispatchEvent("pointermove", { pointerId: 1, pointerType: "touch", clientX: centerX - 65, clientY: centerY, buttons: 1 });
+    await svg.dispatchEvent("pointermove", { pointerId: 2, pointerType: "touch", clientX: centerX + 65, clientY: centerY, buttons: 1 });
+    await svg.dispatchEvent("pointerup", { pointerId: 1, pointerType: "touch", clientX: centerX - 65, clientY: centerY });
+    await svg.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", clientX: centerX + 65, clientY: centerY });
+  } else {
+    await map.hover();
+    await page.mouse.wheel(0, -300);
+  }
+  await expect(viewport).not.toHaveAttribute("data-scale", "1.00");
+  await navigation.getByRole("button", { name: "Reset", exact: true }).click();
+  await expect(viewport).toHaveAttribute("data-scale", "1.00");
+});
+
 test("context cards focus one layer, explain its freshness and return to the map", async ({ page }) => {
   await page.goto("/");
   await page.locator(".pulse-card.grid").click();
