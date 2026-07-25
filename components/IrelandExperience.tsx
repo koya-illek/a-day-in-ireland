@@ -218,7 +218,7 @@ function SatelliteTiles({
 }) {
   const zoom = 6;
   return (
-    <g className="satellite-tiles" clipPath="url(#satelliteContextClip)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
+    <g className="satellite-tiles" mask="url(#satelliteContextMask)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
       {[30, 31].flatMap((x) => [20, 21].map((y) => {
         const west = x / 2 ** zoom * 360 - 180;
         const east = (x + 1) / 2 ** zoom * 360 - 180;
@@ -856,6 +856,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <stop offset=".55" stopColor="#5689a0" stopOpacity=".2" />
               <stop offset="1" stopColor="#5689a0" stopOpacity="0" />
             </radialGradient>
+            <radialGradient id="satelliteFade">
+              <stop offset=".68" stopColor="white" stopOpacity="1" />
+              <stop offset="1" stopColor="white" stopOpacity="0" />
+            </radialGradient>
             <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0" stopColor="#163d3d" />
               <stop offset="1" stopColor="#071f22" />
@@ -874,7 +878,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#00dbe9" floodOpacity=".22" />
             </filter>
             <clipPath id="viewportClip"><rect width="1000" height="900" rx="42" /></clipPath>
-            <clipPath id="satelliteContextClip"><ellipse cx="520" cy="470" rx="295" ry="430" /></clipPath>
+            <mask id="satelliteContextMask"><ellipse cx="520" cy="470" rx="315" ry="445" fill="url(#satelliteFade)" /></mask>
           </defs>
           <g clipPath="url(#viewportClip)">
             <rect width="1000" height="900" fill="url(#ocean)" />
@@ -1058,26 +1062,42 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
-            {layers.has("trains") && snapshot.trains.map((train) => {
-              const point = projection([train.longitude, train.latitude]);
-              return point ? (
-                <g
-                  className={`train-marker ${train.status}`}
-                  key={train.id}
-                  transform={`translate(${point[0]} ${point[1]})`}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Train ${train.id}, ${train.direction}, ${train.status === "running" ? "running" : "due to start"}`}
-                  onClick={() => setSelected({ type: "train", item: train })}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "train", item: train });
-                  }}
-                >
-                  <circle className="train-pulse" r="10" />
-                  <path d="M-4-7h8a3 3 0 0 1 3 3v7a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5v-7a3 3 0 0 1 3-3Zm-1 3v4h10v-4Zm1 9h2m2 0h2" />
-                </g>
-              ) : null;
-            })}
+            {layers.has("trains") && (() => {
+              const occupied: [number, number][] = [];
+              return snapshot.trains.map((train) => {
+                const point = projection([train.longitude, train.latitude]);
+                if (!point) return null;
+                const candidates: [number, number][] = [[0, 0]];
+                for (const radius of [24, 48, 72]) {
+                  for (let step = 0; step < 12; step += 1) {
+                    const angle = (step / 12) * Math.PI * 2 - Math.PI / 2;
+                    candidates.push([Math.cos(angle) * radius, Math.sin(angle) * radius]);
+                  }
+                }
+                const offset = candidates.find(([x, y]) =>
+                  occupied.every(([usedX, usedY]) => Math.hypot(point[0] + x - usedX, point[1] + y - usedY) >= 24),
+                ) ?? candidates.at(-1)!;
+                const markerPoint: [number, number] = [point[0] + offset[0], point[1] + offset[1]];
+                occupied.push(markerPoint);
+                return (
+                  <g
+                    className={`train-marker ${train.status}`}
+                    key={train.id}
+                    transform={`translate(${markerPoint[0]} ${markerPoint[1]})`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Train ${train.id}, ${train.direction}, ${train.status === "running" ? "running" : "due to start"}`}
+                    onClick={() => setSelected({ type: "train", item: train })}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") setSelected({ type: "train", item: train });
+                    }}
+                  >
+                    <circle className="train-pulse" r="10" />
+                    <path d="M-4-7h8a3 3 0 0 1 3 3v7a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5v-7a3 3 0 0 1 3-3Zm-1 3v4h10v-4Zm1 9h2m2 0h2" />
+                  </g>
+                );
+              });
+            })()}
             {layers.has("earthquakes") && snapshot.earthquakes.map((earthquake) => {
               const point = projection([earthquake.longitude, earthquake.latitude]);
               return point ? (
