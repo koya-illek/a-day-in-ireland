@@ -6,9 +6,12 @@ import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
 import type {
   AirQualityReading,
+  BathingAlert,
+  EarthquakeReading,
   LiveSnapshot,
   RiverReading,
   StationReading,
+  TideReading,
   TrainPosition
 } from "../lib/types";
 import { refreshCurrentContexts, refreshLivingLayers, refreshWeather } from "../lib/browser-live";
@@ -25,14 +28,24 @@ type Layer =
   | "radar"
   | "grid"
   | "air"
-  | "aurora";
+  | "aurora"
+  | "tides"
+  | "bathing"
+  | "iss"
+  | "satellite"
+  | "earthquakes"
+  | "transit";
 
 type Selection =
   | { type: "station"; item: StationReading }
   | { type: "train"; item: TrainPosition }
   | { type: "river"; item: RiverReading }
   | { type: "buoy"; item: LiveSnapshot["marine"][number] }
-  | { type: "air"; item: AirQualityReading };
+  | { type: "air"; item: AirQualityReading }
+  | { type: "tide"; item: TideReading }
+  | { type: "bathing"; item: BathingAlert }
+  | { type: "earthquake"; item: EarthquakeReading }
+  | { type: "transit"; item: LiveSnapshot["transit"][number] };
 
 type ContextFocus =
   | "weather"
@@ -44,7 +57,13 @@ type ContextFocus =
   | "radar"
   | "grid"
   | "air"
-  | "aurora";
+  | "aurora"
+  | "tides"
+  | "bathing"
+  | "iss"
+  | "satellite"
+  | "earthquakes"
+  | "transit";
 
 const PLACES = [
   { name: "Dublin", lon: -6.2603, lat: 53.3498 },
@@ -190,6 +209,43 @@ function RadarTiles({
   );
 }
 
+function SatelliteTiles({
+  frame,
+  projection
+}: {
+  frame: NonNullable<LiveSnapshot["satellite"]>;
+  projection: ReturnType<typeof geoMercator>;
+}) {
+  const zoom = 6;
+  return (
+    <g className="satellite-tiles" clipPath="url(#satelliteContextClip)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
+      {[30, 31].flatMap((x) => [20, 21].map((y) => {
+        const west = x / 2 ** zoom * 360 - 180;
+        const east = (x + 1) / 2 ** zoom * 360 - 180;
+        const north = tileLatitude(y, zoom);
+        const south = tileLatitude(y + 1, zoom);
+        const topLeft = projection([west, north]);
+        const bottomRight = projection([east, south]);
+        if (!topLeft || !bottomRight) return null;
+        return (
+          <image
+            key={`${x}-${y}`}
+            href={frame.tileTemplate
+              .replace("{x}", String(x))
+              .replace("{y}", String(y))
+              .replace("{z}", String(zoom))}
+            x={topLeft[0]}
+            y={topLeft[1]}
+            width={bottomRight[0] - topLeft[0]}
+            height={bottomRight[1] - topLeft[1]}
+            preserveAspectRatio="none"
+          />
+        );
+      }))}
+    </g>
+  );
+}
+
 function DetailCard({ selected, onClose }: { selected: Selection; onClose: () => void }) {
   const { type, item } = selected;
   return (
@@ -249,17 +305,78 @@ function DetailCard({ selected, onClose }: { selected: Selection; onClose: () =>
       )}
       {type === "air" && (
         <>
-          <p className="eyebrow">Open-Meteo CAMS · modelled</p>
+          <p className="eyebrow">{item.source === "measured" ? "EEA · monitoring station" : "Open-Meteo CAMS · modelled"}</p>
           <h2>{item.name}</h2>
           <div className="station-temperature">{item.europeanAqi ?? "—"}<small> European AQI</small></div>
-          <p>{aqiLabel(item.europeanAqi)} modelled air quality. This is regional model output, not a reading from a sensor at this marker.</p>
+          <p>
+            {aqiLabel(item.europeanAqi)} air quality. {item.source === "measured"
+              ? `This is a reported monitoring-station reading${item.stationClassification ? ` at a ${item.stationClassification} site` : ""}; EEA data normally arrives a few hours after measurement.`
+              : "This is regional model output, not a reading from a sensor at this marker."}
+          </p>
           <dl>
             <div><dt>PM2.5</dt><dd>{item.pm25?.toFixed(1) ?? "—"} μg/m³</dd></div>
             <div><dt>PM10</dt><dd>{item.pm10?.toFixed(1) ?? "—"} μg/m³</dd></div>
             <div><dt>Ozone</dt><dd>{item.ozone?.toFixed(0) ?? "—"} μg/m³</dd></div>
             <div><dt>UV index</dt><dd>{item.uvIndex?.toFixed(1) ?? "—"}</dd></div>
             <div><dt>Grass pollen</dt><dd>{item.grassPollen?.toFixed(1) ?? "—"} grains/m³</dd></div>
-            <div><dt>Model time</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+            <div><dt>{item.source === "measured" ? "Observed" : "Model time"}</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+          </dl>
+        </>
+      )}
+      {type === "tide" && (
+        <>
+          <p className="eyebrow">Marine Institute · tide gauge</p>
+          <h2>{item.name}</h2>
+          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "—"}<small> m OD Malin</small></div>
+          <p>
+            {item.surge === null
+              ? "Observed sea level. The modelled tide and surge comparison is temporarily unavailable."
+              : `${Math.abs(item.surge).toFixed(2)} m ${item.surge >= 0 ? "above" : "below"} the modelled astronomical tide.`}
+          </p>
+          <dl>
+            <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+            <div><dt>Movement</dt><dd>{item.trend}</dd></div>
+            <div><dt>Next high</dt><dd>{item.nextHighAt ? `${formatTime(new Date(item.nextHighAt))} · ${item.nextHighLevel?.toFixed(2) ?? "—"} m` : "—"}</dd></div>
+            <div><dt>Next low</dt><dd>{item.nextLowAt ? `${formatTime(new Date(item.nextLowAt))} · ${item.nextLowLevel?.toFixed(2) ?? "—"} m` : "—"}</dd></div>
+          </dl>
+        </>
+      )}
+      {type === "bathing" && (
+        <>
+          <p className="eyebrow">EPA · active bathing-water alert</p>
+          <h2>{item.name}</h2>
+          <div className="detail-emblem warning">!</div>
+          <p><strong>{item.restriction}</strong></p>
+          <p>{item.description}</p>
+          <dl>
+            <div><dt>County</dt><dd>{item.county}</dd></div>
+            <div><dt>Updated</dt><dd>{formatTime(new Date(item.updatedAt))}</dd></div>
+          </dl>
+          {item.noticeUrl && <a className="detail-link" href={item.noticeUrl} target="_blank" rel="noreferrer">Open official notice ↗</a>}
+        </>
+      )}
+      {type === "earthquake" && (
+        <>
+          <p className="eyebrow">USGS · detected event</p>
+          <h2>{item.place}</h2>
+          <div className="station-temperature">{item.magnitude.toFixed(1)}<small> magnitude</small></div>
+          <p>A detected seismic event, not an impact or safety assessment.</p>
+          <dl>
+            <div><dt>Depth</dt><dd>{item.depthKm.toFixed(1)} km</dd></div>
+            <div><dt>Detected</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+          </dl>
+          {item.detailUrl && <a className="detail-link" href={item.detailUrl} target="_blank" rel="noreferrer">Open USGS event ↗</a>}
+        </>
+      )}
+      {type === "transit" && (
+        <>
+          <p className="eyebrow">Transport for Ireland · live position</p>
+          <h2>{item.route ? `Route ${item.route}` : item.label}</h2>
+          <div className="detail-emblem">↗</div>
+          <p>{item.label}</p>
+          <dl>
+            <div><dt>Speed</dt><dd>{item.speedKmh?.toFixed(0) ?? "—"} km/h</dd></div>
+            <div><dt>Updated</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
         </>
       )}
@@ -320,6 +437,31 @@ function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["aurora"
           <small>This is probability directly overhead—not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
         </>
       ) : <p>NOAA aurora guidance is temporarily unavailable.</p>}
+    </aside>
+  );
+}
+
+function IssPanel({ iss, className = "" }: { iss: LiveSnapshot["iss"]; className?: string }) {
+  const next = iss?.passes[0] ?? null;
+  const visible = iss?.passes.find((pass) => pass.visible) ?? null;
+  return (
+    <aside className={`map-data-panel iss-panel ${className}`} aria-label="International Space Station over Ireland">
+      <p className="eyebrow">CelesTrak · calculated locally</p>
+      <h2>ISS over Ireland</h2>
+      {iss ? (
+        <>
+          <div className="iss-orbit-value">
+            <strong>{iss.altitudeKm.toFixed(0)}</strong><span>km above Earth now</span>
+          </div>
+          <dl>
+            <div><dt>Next pass</dt><dd>{next ? `${formatDate(new Date(next.startsAt))}, ${formatTime(new Date(next.startsAt))}` : "No pass in 48 hours"}</dd></div>
+            <div><dt>Peak elevation</dt><dd>{next ? `${next.maxElevation.toFixed(0)}°` : "—"}</dd></div>
+            <div><dt>Approaches from</dt><dd>{next?.direction ?? "—"}</dd></div>
+            <div><dt>Next dark-sky pass</dt><dd>{visible ? `${formatDate(new Date(visible.startsAt))}, ${formatTime(new Date(visible.startsAt))}` : "None calculated in 48 hours"}</dd></div>
+          </dl>
+          <small>Passes are calculated for central Ireland. “Dark-sky” means the pass occurs at night; actual visibility also depends on sunlight on the station, cloud, your location and the horizon.</small>
+        </>
+      ) : <p>ISS orbital data is temporarily unavailable.</p>}
     </aside>
   );
 }
@@ -439,6 +581,20 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       ref: road.properties.ref
     }));
   }, [projection]);
+  const displayedAirQuality = useMemo(() => {
+    const measured = snapshot.airQuality.filter((reading) => reading.source === "measured");
+    const cells = new Map<string, AirQualityReading>();
+    for (const reading of measured) {
+      const key = `${Math.round(reading.longitude * 3)}:${Math.round(reading.latitude * 3)}`;
+      const current = cells.get(key);
+      if (!current || (reading.europeanAqi ?? -1) > (current.europeanAqi ?? -1)) cells.set(key, reading);
+    }
+    const modelled = snapshot.airQuality.filter((reading) =>
+      reading.source === "modelled" &&
+      !measured.some((station) => Math.hypot(station.longitude - reading.longitude, station.latitude - reading.latitude) < .42)
+    );
+    return [...cells.values(), ...modelled];
+  }, [snapshot.airQuality]);
   const narrative = nationalNarrative(snapshot, now);
   const daylight = solarProgress(now);
   const sunX = 120 + daylight * 760;
@@ -446,13 +602,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const currentHour = irelandHour(now);
   const isNight = currentHour < 6 || currentHour >= 21;
   const activeWarning = snapshot.warnings[0] ?? null;
+  const unusualTide = snapshot.tides
+    .filter((tide) => tide.surge !== null)
+    .sort((a, b) => Math.abs(b.surge ?? 0) - Math.abs(a.surge ?? 0))[0] ?? null;
+  const largestEarthquake = [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null;
+  const visibleIssPass = snapshot.iss?.passes.find((pass) => pass.visible) ?? null;
+  const notableSourcesLive = snapshot.contextStatus.bathing === "live" &&
+    snapshot.contextStatus.tides === "live" &&
+    snapshot.contextStatus.earthquakes === "live" &&
+    snapshot.contextStatus.iss === "live";
   const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
   const showPreset = useCallback((preset: "weather" | "movement" | "water" | "all") => {
     const presets: Record<typeof preset, Layer[]> = {
       weather: ["weather", "rain", "wind", "warnings", "places"],
       movement: ["trains", "places"],
-      water: ["rain", "rivers", "sea", "warnings", "places"],
-      all: ["weather", "rain", "wind", "warnings", "places", "sea", "trains", "rivers", "radar", "grid", "air", "aurora"]
+      water: ["rain", "rivers", "sea", "tides", "bathing", "warnings", "places"],
+      all: ["weather", "rain", "wind", "warnings", "places", "sea", "trains", "rivers", "radar", "grid", "air", "aurora", "tides", "bathing", "iss", "earthquakes"]
     };
     setLayers(new Set(presets[preset]));
     setActivePreset(preset);
@@ -472,7 +637,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       radar: ["radar", "places"],
       grid: ["grid", "places"],
       air: ["air", "places"],
-      aurora: ["aurora", "places"]
+      aurora: ["aurora", "places"],
+      tides: ["tides", "places"],
+      bathing: ["bathing", "places"],
+      iss: ["iss", "places"],
+      satellite: ["satellite", "places"],
+      earthquakes: ["earthquakes", "places"],
+      transit: ["transit", "places"]
     };
     const notices: Record<ContextFocus, { title: string; detail: string }> = {
       weather: {
@@ -516,16 +687,66 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           : "EirGrid operational data is temporarily unavailable."
       },
       air: {
-        title: "Modelled air and exposure",
+        title: "Measured and modelled air",
         detail: snapshot.airQuality.length
-          ? `${snapshot.airQuality.length} regional CAMS model points from Open-Meteo. These are model estimates, not local sensor readings.`
-          : "The regional air-quality model is temporarily unavailable."
+          ? `${snapshot.airQuality.filter((item) => item.source === "measured").length} EEA monitoring stations alongside ${snapshot.airQuality.filter((item) => item.source === "modelled").length} regional CAMS model points. Nearby stations are grouped to the highest local index; solid markers are measurements and rings are model estimates.`
+          : "Air-quality observations and model output are temporarily unavailable."
       },
       aurora: {
         title: "Aurora overhead probability",
         detail: snapshot.aurora
           ? `NOAA OVATION currently estimates a ${snapshot.aurora.probability}% maximum probability directly over Ireland. Visibility also depends on darkness, cloud and light pollution.`
           : "NOAA aurora guidance is temporarily unavailable."
+      },
+      tides: {
+        title: "Tides and coastal anomaly",
+        detail: snapshot.contextStatus.tides === "unavailable"
+          ? "Marine Institute tide-gauge data is temporarily unavailable."
+          : snapshot.tides.length
+          ? `${snapshot.tides.length} fresh Marine Institute gauges, compared with predicted tide and storm-surge guidance. Select a gauge for the next high and low water.`
+          : "No tide-gauge observation is fresh enough to display."
+      },
+      bathing: {
+        title: snapshot.contextStatus.bathing === "unavailable"
+          ? "Bathing-water feed unavailable"
+          : snapshot.bathingAlerts.length ? "Active bathing-water alerts" : "No active bathing-water alerts",
+        detail: snapshot.contextStatus.bathing === "unavailable"
+          ? "The EPA bathing-water alert feed is temporarily unavailable, so no claim about current restrictions can be made."
+          : snapshot.bathingAlerts.length
+          ? `${snapshot.bathingAlerts.length} current EPA restrictions or advisories. Select an alert for the official reason and notice.`
+          : "The EPA is not currently reporting an active alert through its public feed."
+      },
+      iss: {
+        title: "The ISS over Ireland",
+        detail: snapshot.iss?.passes[0]
+          ? `The next pass over central Ireland begins ${formatDate(new Date(snapshot.iss.passes[0].startsAt))} at ${formatTime(new Date(snapshot.iss.passes[0].startsAt))}, peaking at ${snapshot.iss.passes[0].maxElevation.toFixed(0)}°.`
+          : "Current ISS elements or a pass prediction are temporarily unavailable."
+      },
+      satellite: {
+        title: "Ireland from space",
+        detail: snapshot.contextStatus.satellite === "unavailable"
+          ? "NASA satellite imagery is temporarily unavailable."
+          : snapshot.satellite
+          ? `${snapshot.satellite.label}, dated ${formatDate(new Date(snapshot.satellite.observedAt))}. This is near-real-time daylight imagery, not a live camera.`
+          : "NASA satellite imagery is temporarily unavailable."
+      },
+      earthquakes: {
+        title: snapshot.contextStatus.earthquakes === "unavailable"
+          ? "Earthquake feed unavailable"
+          : snapshot.earthquakes.length ? "Recent seismic detections" : "No nearby earthquakes detected",
+        detail: snapshot.contextStatus.earthquakes === "unavailable"
+          ? "The USGS earthquake feed is temporarily unavailable, so no claim about recent events can be made."
+          : snapshot.earthquakes.length
+          ? `${snapshot.earthquakes.length} USGS event${snapshot.earthquakes.length === 1 ? "" : "s"} detected around Ireland in the past seven days.`
+          : "The USGS feed contains no detected events in the Ireland region during the past seven days."
+      },
+      transit: {
+        title: snapshot.transitStatus === "live" ? "Live public transport" : "Public transport feed awaiting access",
+        detail: snapshot.transitStatus === "live"
+          ? `${snapshot.transit.length} current TFI vehicle positions, capped and clustered into a readable island view.`
+          : snapshot.transitStatus === "credential-required"
+            ? "The integration is ready, but the NTA requires a free developer API key before live vehicle positions can be displayed."
+            : "The NTA live vehicle feed is temporarily unavailable."
       }
     };
     setLayers(new Set(contextLayers[focus]));
@@ -624,7 +845,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </nav>
         <svg className="ireland-map" viewBox="0 0 1000 900" role="img" aria-labelledby="map-title map-description">
           <title id="map-title">Near-real-time conditions across Ireland</title>
-          <desc id="map-description">A close map of Ireland showing weather, radar rain, observed wind, trains, river gauges, sea conditions, modelled air quality, aurora guidance and the live power grid.</desc>
+          <desc id="map-description">A close map of Ireland showing weather, radar rain, observed wind, rail and public transport, river and tide gauges, sea conditions, measured and modelled air quality, bathing alerts, satellite imagery, seismic detections, ISS passes, aurora guidance and the live power grid.</desc>
           <defs>
             <radialGradient id="sunGlow">
               <stop offset="0" stopColor="#ffe9a3" stopOpacity=".85" />
@@ -653,6 +874,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#00dbe9" floodOpacity=".22" />
             </filter>
             <clipPath id="viewportClip"><rect width="1000" height="900" rx="42" /></clipPath>
+            <clipPath id="satelliteContextClip"><ellipse cx="520" cy="470" rx="295" ry="430" /></clipPath>
           </defs>
           <g clipPath="url(#viewportClip)">
             <rect width="1000" height="900" fill="url(#ocean)" />
@@ -673,6 +895,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <g className="island-shape" filter="url(#landShadow)">
               {islandPaths.map((path, index) => <path key={index} d={path} />)}
             </g>
+            {layers.has("satellite") && snapshot.satellite && <SatelliteTiles frame={snapshot.satellite} projection={projection} />}
             {layers.has("radar") && radarFrame && <RadarTiles frame={radarFrame} projection={projection} />}
             <g className="road-network" aria-label="Major roads from OpenStreetMap">
               {roadPaths.map((road, index) => (
@@ -742,6 +965,48 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
+            {layers.has("tides") && snapshot.tides.map((tide) => {
+              const point = projection([tide.longitude, tide.latitude]);
+              return point ? (
+                <g
+                  className={`tide-marker ${tide.surge !== null && Math.abs(tide.surge) >= .2 ? "is-unusual" : ""}`}
+                  key={tide.id}
+                  transform={`translate(${point[0]} ${point[1]})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${tide.name}, sea level ${tide.waterLevel?.toFixed(2) ?? "unknown"} metres, ${tide.surge === null ? "surge unavailable" : `${Math.abs(tide.surge).toFixed(2)} metres ${tide.surge >= 0 ? "above" : "below"} predicted tide`}`}
+                  onClick={() => setSelected({ type: "tide", item: tide })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "tide", item: tide });
+                  }}
+                >
+                  <circle r="11" />
+                  <path d="M-7 1Q-3-4 1 1T9 1" />
+                  <text x="13" y="4">{tide.waterLevel?.toFixed(2) ?? "—"} m</text>
+                </g>
+              ) : null;
+            })}
+            {layers.has("bathing") && snapshot.bathingAlerts.map((alert) => {
+              const point = projection([alert.longitude, alert.latitude]);
+              return point ? (
+                <g
+                  className="bathing-marker"
+                  key={alert.id}
+                  transform={`translate(${point[0]} ${point[1]})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${alert.name}, ${alert.restriction}`}
+                  onClick={() => setSelected({ type: "bathing", item: alert })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "bathing", item: alert });
+                  }}
+                >
+                  <circle className="alert-pulse" r="15" />
+                  <circle r="8" />
+                  <text textAnchor="middle" y="4">!</text>
+                </g>
+              ) : null;
+            })}
             {layers.has("weather") && snapshot.stations.map((station) => (
               <StationMarker
                 key={station.id}
@@ -773,16 +1038,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               );
             })}
-            {layers.has("air") && snapshot.airQuality.map((reading) => {
+            {layers.has("air") && displayedAirQuality.map((reading) => {
               const point = projection([reading.longitude, reading.latitude]);
               return point ? (
                 <g
-                  className={`air-marker aqi-${aqiLabel(reading.europeanAqi).toLowerCase().replaceAll(" ", "-")}`}
+                  className={`air-marker ${reading.source} aqi-${aqiLabel(reading.europeanAqi).toLowerCase().replaceAll(" ", "-")}`}
                   key={reading.id}
                   transform={`translate(${point[0]} ${point[1]})`}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${reading.name}, modelled European air quality index ${reading.europeanAqi ?? "unavailable"}, ${aqiLabel(reading.europeanAqi)}`}
+                  aria-label={`${reading.name}, ${reading.source} European air quality index ${reading.europeanAqi ?? "unavailable"}, ${aqiLabel(reading.europeanAqi)}`}
                   onClick={() => setSelected({ type: "air", item: reading })}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") setSelected({ type: "air", item: reading });
@@ -813,6 +1078,48 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
+            {layers.has("earthquakes") && snapshot.earthquakes.map((earthquake) => {
+              const point = projection([earthquake.longitude, earthquake.latitude]);
+              return point ? (
+                <g
+                  className="earthquake-marker"
+                  key={earthquake.id}
+                  transform={`translate(${point[0]} ${point[1]})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${earthquake.place}, magnitude ${earthquake.magnitude.toFixed(1)}`}
+                  onClick={() => setSelected({ type: "earthquake", item: earthquake })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "earthquake", item: earthquake });
+                  }}
+                >
+                  <circle r={10 + Math.max(0, earthquake.magnitude) * 3} />
+                  <path d="M-8 0H-3L0-7L3 7L6 0H10" />
+                </g>
+              ) : null;
+            })}
+            {layers.has("transit") && snapshot.transit
+              .filter((_, index) => index % Math.max(1, Math.ceil(snapshot.transit.length / 180)) === 0)
+              .map((vehicle) => {
+                const point = projection([vehicle.longitude, vehicle.latitude]);
+                return point ? (
+                  <g
+                    className="transit-marker"
+                    key={vehicle.id}
+                    transform={`translate(${point[0]} ${point[1]})`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`${vehicle.route ? `Route ${vehicle.route}` : vehicle.label}, live public transport position`}
+                    onClick={() => setSelected({ type: "transit", item: vehicle })}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") setSelected({ type: "transit", item: vehicle });
+                    }}
+                  >
+                    <circle r="5" />
+                    <path transform={`rotate(${vehicle.bearing ?? 0})`} d="M0-8L4 3L0 1L-4 3Z" />
+                  </g>
+                ) : null;
+              })}
           </g>
         </svg>
 
@@ -846,6 +1153,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
         {layers.has("grid") && <GridPanel grid={snapshot.grid} className="desktop-context-panel" />}
         {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="desktop-context-panel" />}
+        {layers.has("iss") && <IssPanel iss={snapshot.iss} className="desktop-context-panel" />}
 
         <div className="map-caption">
           <span className="compass">N</span>
@@ -866,6 +1174,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       {layers.has("grid") && <GridPanel grid={snapshot.grid} className="mobile-context-panel" />}
       {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="mobile-context-panel" />}
+      {layers.has("iss") && <IssPanel iss={snapshot.iss} className="mobile-context-panel" />}
 
       {activeWarning && layers.has("warnings") && (
         <aside id="active-warning" className={`warning-strip ${activeWarning.level.toLowerCase()}`} aria-label="Active weather warning">
@@ -879,6 +1188,42 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           })}</time>
         </aside>
       )}
+
+      <section className="notable-now" aria-labelledby="notable-heading">
+        <div>
+          <p className="eyebrow">Notable now</p>
+          <h2 id="notable-heading">Only the signals worth interrupting the map for.</h2>
+        </div>
+        <div className="notable-signals">
+          {activeWarning && <button onClick={() => focusContext("warnings")}><span>Weather</span><b>{activeWarning.headline}</b><small>{activeWarning.level} notice</small></button>}
+          {snapshot.bathingAlerts.map((alert) => (
+            <button key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
+              <span>Bathing water</span><b>{alert.name}</b><small>{alert.restriction}</small>
+            </button>
+          ))}
+          {unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
+            <button onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
+              <span>Sea-level anomaly</span><b>{unusualTide.name}</b><small>{Math.abs(unusualTide.surge ?? 0).toFixed(2)} m {Number(unusualTide.surge) >= 0 ? "above" : "below"} modelled tide</small>
+            </button>
+          )}
+          {largestEarthquake && (
+            <button onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
+              <span>Seismic detection</span><b>M {largestEarthquake.magnitude.toFixed(1)} · {largestEarthquake.place}</b><small>{formatDate(new Date(largestEarthquake.observedAt))}</small>
+            </button>
+          )}
+          {visibleIssPass && (
+            <button onClick={() => focusContext("iss")}>
+              <span>Night sky</span><b>ISS pass at {formatTime(new Date(visibleIssPass.startsAt))}</b><small>{formatDate(new Date(visibleIssPass.startsAt))} · up to {visibleIssPass.maxElevation.toFixed(0)}°</small>
+            </button>
+          )}
+          {!activeWarning && !snapshot.bathingAlerts.length && !(unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) && !largestEarthquake && !visibleIssPass && notableSourcesLive && (
+            <p className="all-quiet"><span className="live-dot live" />No unusual public signals are active right now.</p>
+          )}
+          {!activeWarning && !snapshot.bathingAlerts.length && !(unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) && !largestEarthquake && !visibleIssPass && !notableSourcesLive && (
+            <p className="all-quiet"><span className="live-dot partial" />Some notable-signal sources are temporarily unavailable.</p>
+          )}
+        </div>
+      </section>
 
       <section className="island-pulse" aria-labelledby="pulse-heading">
         <div className="pulse-intro">
@@ -923,13 +1268,31 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span>⌁</span><b>Sea conditions</b><small>{snapshot.marine.length} recent buoy observations</small><i>View context →</i>
         </button>
         <button onClick={() => focusContext("air")}>
-          <span>◌</span><b>Air & exposure</b><small>{snapshot.airQuality.length} modelled locations</small><i>Explore air →</i>
+          <span>◌</span><b>Air & exposure</b><small>{snapshot.airQuality.filter((item) => item.source === "measured").length} measured · {snapshot.airQuality.filter((item) => item.source === "modelled").length} modelled</small><i>Explore air →</i>
         </button>
         <button onClick={() => focusContext("aurora")}>
           <span>✦</span><b>Aurora chance</b><small>{snapshot.aurora ? `${snapshot.aurora.probability}% overhead probability` : "Guidance unavailable"}</small><i>Look north →</i>
         </button>
         <button onClick={() => focusContext("warnings")}>
           <span>△</span><b>Weather notices</b><small>{activeWarning ? `${activeWarning.level}: ${activeWarning.headline}` : "No active warning"}</small><i>View context →</i>
+        </button>
+        <button onClick={() => focusContext("tides")}>
+          <span>≋</span><b>Tides & surge</b><small>{snapshot.contextStatus.tides === "unavailable" ? "Feed unavailable" : `${snapshot.tides.length} fresh coastal gauges`}</small><i>Follow the coast →</i>
+        </button>
+        <button onClick={() => focusContext("bathing")}>
+          <span>!</span><b>Bathing alerts</b><small>{snapshot.contextStatus.bathing === "unavailable" ? "Feed unavailable" : snapshot.bathingAlerts.length ? `${snapshot.bathingAlerts.length} active EPA alerts` : "No active EPA alert"}</small><i>Check the water →</i>
+        </button>
+        <button onClick={() => focusContext("iss")}>
+          <span>◒</span><b>ISS passes</b><small>{snapshot.iss?.passes[0] ? `Next ${formatDate(new Date(snapshot.iss.passes[0].startsAt))} at ${formatTime(new Date(snapshot.iss.passes[0].startsAt))}` : "Calculating passes"}</small><i>Look up →</i>
+        </button>
+        <button onClick={() => focusContext("satellite")}>
+          <span>◍</span><b>Ireland from space</b><small>{snapshot.satellite ? "Latest complete daylight pass" : "Imagery unavailable"}</small><i>View satellite →</i>
+        </button>
+        <button onClick={() => focusContext("earthquakes")}>
+          <span>⌁</span><b>Recent earthquakes</b><small>{snapshot.contextStatus.earthquakes === "unavailable" ? "Feed unavailable" : snapshot.earthquakes.length ? `${snapshot.earthquakes.length} detected nearby` : "None in the past week"}</small><i>View detections →</i>
+        </button>
+        <button onClick={() => focusContext("transit")}>
+          <span>↗</span><b>Live public transport</b><small>{snapshot.transitStatus === "live" ? `${snapshot.transit.length} vehicle positions` : "NTA developer access required"}</small><i>View vehicles →</i>
         </button>
       </nav>
 
@@ -984,8 +1347,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             ["trains", "Moving trains", "Current Iarnród Éireann train positions"],
             ["rivers", "River levels", "Latest fresh OPW readings; stale gauges expire automatically"],
             ["grid", "Electricity grid", "Current all-island EirGrid demand, wind, carbon and frequency"],
-            ["air", "Air & exposure", "Regional CAMS model estimates via Open-Meteo—not local sensors"],
+            ["air", "Air & exposure", "EEA monitoring stations plus regional CAMS model estimates"],
             ["aurora", "Aurora probability", "NOAA OVATION overhead probability guidance"],
+            ["tides", "Tides & surge", "Fresh gauges, predicted high and low water, and surge anomaly"],
+            ["bathing", "Bathing alerts", "Current EPA restrictions and pollution advisories only"],
+            ["iss", "ISS passes", "Current orbit and locally calculated passes over Ireland"],
+            ["satellite", "Satellite image", "NASA VIIRS latest complete daylight image; usually several hours old"],
+            ["earthquakes", "Earthquakes", "USGS detections around Ireland during the past seven days"],
+            ["transit", "Public transport", "TFI live bus, Luas and other vehicle positions when API access is configured"],
             ["places", "Places", "Major towns and cities"]
           ] as Array<[Layer, string, string]>).map(([id, label, detail]) => (
             <button key={id} className={layers.has(id) ? "active" : ""} onClick={() => toggleLayer(id)} aria-pressed={layers.has(id)}>
@@ -995,18 +1364,24 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
         <div className="source-note">
           <p className="eyebrow">About the data</p>
-          <p>Weather, radar, rail, marine and grid feeds refresh automatically. Air quality is regional model output, and aurora is forecast probability. River readings expire after three hours; they are local measurements, not flood warnings. Missing data is never shown as zero.</p>
+          <p>Weather, radar, rail, marine, grid and public signals refresh automatically. Air markers explicitly distinguish delayed station measurements from model output. Satellite imagery is near-real-time rather than live; ISS passes are calculations; river and tide readings are observations, not safety warnings. Missing data is never shown as zero.</p>
           <a href="https://www.met.ie/about-us/specialised-services/open-data" target="_blank" rel="noreferrer">Met Éireann open data ↗</a>
           <a href="https://waterlevel.ie/page/api/" target="_blank" rel="noreferrer">OPW water levels ↗</a>
           <a href="https://www.smartgriddashboard.com/" target="_blank" rel="noreferrer">EirGrid Smart Grid Dashboard ↗</a>
           <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo air quality ↗</a>
           <a href="https://www.swpc.noaa.gov/products/aurora-30-minute-forecast" target="_blank" rel="noreferrer">NOAA aurora guidance ↗</a>
+          <a href="https://aqportal.discomap.eea.europa.eu/" target="_blank" rel="noreferrer">EEA measured air quality ↗</a>
+          <a href="https://data.epa.ie/api-list/bathing-water-open-data/" target="_blank" rel="noreferrer">EPA bathing-water alerts ↗</a>
+          <a href="https://earthdata.nasa.gov/gibs/" target="_blank" rel="noreferrer">NASA satellite imagery ↗</a>
+          <a href="https://earthquake.usgs.gov/earthquakes/feed/v1.0/" target="_blank" rel="noreferrer">USGS earthquake feed ↗</a>
+          <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noreferrer">CelesTrak orbital elements ↗</a>
+          <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA developer portal ↗</a>
         </div>
       </aside>
 
       <footer>
         <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie (OPW) and the Marine Institute under CC BY 4.0, EirGrid operational data, CAMS model output via Open-Meteo, and NOAA SWPC aurora guidance. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute, EPA and NTA under their stated open-data terms; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
   );

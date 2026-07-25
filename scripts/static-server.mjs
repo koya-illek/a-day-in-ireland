@@ -11,9 +11,16 @@ const types = {
   ".svg": "image/svg+xml"
 };
 
-createServer((request, response) => {
+createServer(async (request, response) => {
   const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
   if (pathname.startsWith("/api/")) {
+    if (process.env.LIVE_CONTEXTS === "1") {
+      const { default: worker } = await import("../platform/server-entry.js");
+      const upstream = await worker.fetch(new Request(`http://127.0.0.1:3000${request.url}`), {});
+      response.writeHead(upstream.status, Object.fromEntries(upstream.headers));
+      response.end(Buffer.from(await upstream.arrayBuffer()));
+      return;
+    }
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ unavailable: true }));
     return;

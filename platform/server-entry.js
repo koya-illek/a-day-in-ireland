@@ -311,9 +311,282 @@ const fetchAirQuality = async () => {
       europeanAqi: numeric(current.european_aqi), pm25: numeric(current.pm2_5),
       pm10: numeric(current.pm10), nitrogenDioxide: numeric(current.nitrogen_dioxide),
       ozone: numeric(current.ozone), uvIndex: numeric(current.uv_index),
-      grassPollen: numeric(current.grass_pollen)
+      grassPollen: numeric(current.grass_pollen), source: "modelled",
+      stationClassification: null
     }];
   });
+};
+
+const webMercatorToLonLat = (x, y) => ({
+  longitude: x / 6378137 * 180 / Math.PI,
+  latitude: (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI
+});
+
+const eeaTimestamp = (value) => {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(String(value));
+  return match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z` : "";
+};
+
+const europeanAqiScore = ({ pm25, pm10, nitrogenDioxide, ozone }) => {
+  const bands = [
+    [pm25, [10, 20, 25, 50, 75]],
+    [pm10, [20, 40, 50, 100, 150]],
+    [nitrogenDioxide, [40, 90, 120, 230, 340]],
+    [ozone, [50, 100, 130, 240, 380]]
+  ];
+  const scores = bands.flatMap(([reading, thresholds]) => {
+    if (reading === null || !Number.isFinite(reading)) return [];
+    const index = thresholds.findIndex((threshold) => reading <= threshold);
+    return [index < 0 ? 110 : [10, 30, 50, 70, 90][index]];
+  });
+  return scores.length ? Math.max(...scores) : null;
+};
+
+const fetchMeasuredAirQuality = async () => {
+  const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
+  const stamp = observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
+  const pollutants = [
+    ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
+  ];
+  const responses = await Promise.all(pollutants.map(async ([pollutant, field]) => {
+    const response = await fetch(
+      `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
+      { cf: { cacheEverything: true, cacheTtl: 1800 } }
+    );
+    if (!response.ok) throw new Error(`EEA ${pollutant} returned ${response.status}`);
+    return [field, await response.text()];
+  }));
+  const stations = new Map();
+  for (const [field, csv] of responses) {
+    for (const line of csv.split(/\r?\n/).slice(1)) {
+      if (!line.startsWith("SPO.IE.")) continue;
+      const columns = line.split(",");
+      const value = numeric(columns[4]);
+      const x = numeric(columns[11]);
+      const y = numeric(columns[12]);
+      if (value === null || x === null || y === null) continue;
+      const id = columns[9];
+      const location = webMercatorToLonLat(x, y);
+      const current = stations.get(id) ?? {
+        id: `measured-${id}`,
+        name: columns[10].replace(/^(Ireland|Dublin|Cork|Kerry|Galway|Limerick|Clare|Mayo|Donegal|Wicklow|Kildare|Louth|Sligo|Offaly|Carlow|Cavan|Roscommon|Waterford)\s+/i, ""),
+        ...location,
+        observedAt: eeaTimestamp(columns[2]),
+        europeanAqi: null,
+        pm25: null,
+        pm10: null,
+        nitrogenDioxide: null,
+        ozone: null,
+        uvIndex: null,
+        grassPollen: null,
+        source: "measured",
+        stationClassification: columns[6] || null
+      };
+      current[field] = value;
+      stations.set(id, current);
+    }
+  }
+  return [...stations.values()].map((station) => ({
+    ...station,
+    europeanAqi: europeanAqiScore(station)
+  })).filter((station) =>
+    station.latitude >= 51.2 && station.latitude <= 55.6 &&
+    station.longitude >= -10.8 && station.longitude <= -5.2
+  );
+};
+
+const fetchTides = async () => {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const until = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const base = "https://erddap.marine.ie/erddap/tabledap/";
+  const [levelsResponse, surgeResponse, predictionResponse] = await Promise.all([
+    fetch(`${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
+    fetch(`${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
+    fetch(`${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, { cf: { cacheEverything: true, cacheTtl: 3600 } })
+  ]);
+  if (!levelsResponse.ok) throw new Error(`Tide gauges returned ${levelsResponse.status}`);
+  const levelRows = (await levelsResponse.json()).table?.rows ?? [];
+  const surges = surgeResponse.ok ? (await surgeResponse.json()).table?.rows ?? [] : [];
+  const predictions = predictionResponse.ok ? (await predictionResponse.json()).table?.rows ?? [] : [];
+  const distance = (a, b) => Math.hypot(Number(a[1]) - Number(b[1]), Number(a[2]) - Number(b[2]));
+  const now = Date.now();
+  const stationRows = new Map();
+  for (const row of levelRows) {
+    const rows = stationRows.get(String(row[0])) ?? [];
+    rows.push(row);
+    stationRows.set(String(row[0]), rows);
+  }
+  return [...stationRows.values()].flatMap((rows) => {
+    rows.sort((a, b) => new Date(a[3]) - new Date(b[3]));
+    const row = rows.at(-1);
+    const previous = rows.at(-2);
+    const observedAt = String(row[3]);
+    if (!freshEnough(observedAt, 3)) return [];
+    const surge = [...surges].sort((a, b) => distance(row, a) - distance(row, b))[0];
+    const nearby = predictions.filter((item) => distance(row, item) < .08);
+    const future = nearby.filter((item) => new Date(item[3]).getTime() > now);
+    const nextHigh = future.find((item) => item[4] === "HIGH");
+    const nextLow = future.find((item) => item[4] === "LOW");
+    const predictedLevel = surge && distance(row, surge) < .08 ? numeric(surge[4]) : null;
+    const surgeLevel = surge && distance(row, surge) < .08 ? numeric(surge[5]) : null;
+    return [{
+      id: `tide-${String(row[0]).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      name: String(row[0]),
+      longitude: Number(row[1]),
+      latitude: Number(row[2]),
+      observedAt,
+      waterLevel: numeric(row[4]),
+      predictedLevel,
+      surge: surgeLevel,
+      trend: previous && numeric(previous[4]) !== null && numeric(row[4]) !== null
+        ? numeric(row[4]) - numeric(previous[4]) > .005
+          ? "rising"
+          : numeric(row[4]) - numeric(previous[4]) < -.005
+            ? "falling"
+            : "steady"
+        : "unknown",
+      nextHighAt: nextHigh ? String(nextHigh[3]) : null,
+      nextHighLevel: nextHigh ? numeric(nextHigh[5]) : null,
+      nextLowAt: nextLow ? String(nextLow[3]) : null,
+      nextLowLevel: nextLow ? numeric(nextLow[5]) : null
+    }];
+  });
+};
+
+const irishGridToLonLat = (east, north) => {
+  const a = 6377340.189, b = 6356034.447, f0 = 1.000035;
+  const lat0 = 53.5 * Math.PI / 180, lon0 = -8 * Math.PI / 180;
+  const n0 = 250000, e0 = 200000;
+  const e2 = 1 - (b * b) / (a * a);
+  const n = (a - b) / (a + b);
+  let lat = lat0, meridional = 0;
+  do {
+    lat = (north - n0 - meridional) / (a * f0) + lat;
+    const ma = (1 + n + 5 / 4 * n ** 2 + 5 / 4 * n ** 3) * (lat - lat0);
+    const mb = (3 * n + 3 * n ** 2 + 21 / 8 * n ** 3) * Math.sin(lat - lat0) * Math.cos(lat + lat0);
+    const mc = (15 / 8 * n ** 2 + 15 / 8 * n ** 3) * Math.sin(2 * (lat - lat0)) * Math.cos(2 * (lat + lat0));
+    const md = 35 / 24 * n ** 3 * Math.sin(3 * (lat - lat0)) * Math.cos(3 * (lat + lat0));
+    meridional = b * f0 * (ma - mb + mc - md);
+  } while (Math.abs(north - n0 - meridional) >= .00001);
+  const sin = Math.sin(lat), cos = Math.cos(lat), tan = Math.tan(lat);
+  const nu = a * f0 / Math.sqrt(1 - e2 * sin ** 2);
+  const rho = a * f0 * (1 - e2) / (1 - e2 * sin ** 2) ** 1.5;
+  const eta2 = nu / rho - 1;
+  const d = east - e0;
+  const vii = tan / (2 * rho * nu);
+  const viii = tan / (24 * rho * nu ** 3) * (5 + 3 * tan ** 2 + eta2 - 9 * tan ** 2 * eta2);
+  const ix = tan / (720 * rho * nu ** 5) * (61 + 90 * tan ** 2 + 45 * tan ** 4);
+  const x = 1 / (cos * nu);
+  const xi = 1 / (6 * cos * nu ** 3) * (nu / rho + 2 * tan ** 2);
+  const xii = 1 / (120 * cos * nu ** 5) * (5 + 28 * tan ** 2 + 24 * tan ** 4);
+  const xiia = 1 / (5040 * cos * nu ** 7) * (61 + 662 * tan ** 2 + 1320 * tan ** 4 + 720 * tan ** 6);
+  return {
+    latitude: (lat - vii * d ** 2 + viii * d ** 4 - ix * d ** 6) * 180 / Math.PI,
+    longitude: (lon0 + x * d - xi * d ** 3 + xii * d ** 5 - xiia * d ** 7) * 180 / Math.PI
+  };
+};
+
+const fetchBathingAlerts = async () => {
+  const alertsResponse = await fetch("https://data.epa.ie/bw/api/v1/alerts?per_page=100", {
+    cf: { cacheEverything: true, cacheTtl: 900 }
+  });
+  if (!alertsResponse.ok) throw new Error(`EPA bathing alerts returned ${alertsResponse.status}`);
+  const alerts = (await alertsResponse.json()).list ?? [];
+  if (!alerts.length) return [];
+  const locationsResponse = await fetch("https://data.epa.ie/bw/api/v1/locations?per_page=500", {
+    cf: { cacheEverything: true, cacheTtl: 86400 }
+  });
+  if (!locationsResponse.ok) throw new Error(`EPA bathing locations returned ${locationsResponse.status}`);
+  const locations = new Map(((await locationsResponse.json()).list ?? []).map((item) => [item.beach_id, item]));
+  return alerts.flatMap((alert) => {
+    const location = locations.get(alert.beach_id);
+    const east = numeric(location?.easting);
+    const north = numeric(location?.northing);
+    if (east === null || north === null) return [];
+    return [{
+      id: `bathing-${alert.incident_id}`,
+      name: String(alert.beach_name),
+      county: String(alert.county_name ?? ""),
+      ...irishGridToLonLat(east, north),
+      restriction: String(alert.bathing_restriction_type ?? "Bathing alert"),
+      description: String(alert.incident_description ?? ""),
+      startedAt: String(alert.incident_start_date ?? ""),
+      updatedAt: String(alert.last_updated ?? ""),
+      noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
+    }];
+  });
+};
+
+const fetchSatellite = async () => {
+  const date = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return {
+    observedAt: `${date}T13:30:00Z`,
+    label: "VIIRS true colour · latest complete daylight pass",
+    tileTemplate: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`
+  };
+};
+
+const fetchEarthquakes = async () => {
+  const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const url = new URL("https://earthquake.usgs.gov/fdsnws/event/1/query");
+  url.search = new URLSearchParams({
+    format: "geojson", starttime: start, minlatitude: "49", maxlatitude: "57",
+    minlongitude: "-13", maxlongitude: "-4", orderby: "time"
+  }).toString();
+  const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 900 } });
+  if (!response.ok) throw new Error(`USGS earthquakes returned ${response.status}`);
+  const body = await response.json();
+  return (body.features ?? []).slice(0, 30).flatMap((feature) => {
+    const [longitude, latitude, depthKm] = feature.geometry?.coordinates ?? [];
+    const magnitude = numeric(feature.properties?.mag);
+    if (![longitude, latitude, depthKm].every(Number.isFinite) || magnitude === null) return [];
+    return [{
+      id: String(feature.id), longitude, latitude, depthKm, magnitude,
+      place: String(feature.properties?.place ?? "Near Ireland"),
+      observedAt: new Date(Number(feature.properties?.time)).toISOString(),
+      detailUrl: String(feature.properties?.url ?? "")
+    }];
+  });
+};
+
+const fetchIssTle = async () => {
+  const response = await fetch(
+    "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE",
+    { cf: { cacheEverything: true, cacheTtl: 21600 } }
+  );
+  if (!response.ok) throw new Error(`CelesTrak returned ${response.status}`);
+  const lines = (await response.text()).trim().split(/\r?\n/);
+  if (lines.length < 3) throw new Error("CelesTrak returned an invalid ISS element set");
+  return { line1: lines.at(-2), line2: lines.at(-1), observedAt: new Date().toISOString() };
+};
+
+const fetchTransit = async (env) => {
+  if (!env.NTA_API_KEY) return { vehicles: [], status: "credential-required" };
+  const response = await fetch("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
+    headers: { "x-api-key": env.NTA_API_KEY },
+    cf: { cacheEverything: true, cacheTtl: 30 }
+  });
+  if (!response.ok) throw new Error(`NTA vehicles returned ${response.status}`);
+  const body = await response.json();
+  const entities = body.entity ?? body.Entity ?? body.entities ?? [];
+  const vehicles = entities.flatMap((entity) => {
+    const vehicle = entity.vehicle ?? entity.Vehicle ?? entity;
+    const position = vehicle.position ?? vehicle.Position;
+    const latitude = numeric(position?.latitude ?? position?.Latitude);
+    const longitude = numeric(position?.longitude ?? position?.Longitude);
+    if (latitude === null || longitude === null || latitude < 51.2 || latitude > 55.6 || longitude < -10.8 || longitude > -5.2) return [];
+    const timestamp = numeric(vehicle.timestamp ?? vehicle.Timestamp);
+    return [{
+      id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? crypto.randomUUID()),
+      latitude, longitude,
+      route: String(vehicle.trip?.routeId ?? vehicle.trip?.route_id ?? ""),
+      label: String(vehicle.vehicle?.label ?? vehicle.vehicle?.id ?? "Public transport"),
+      bearing: numeric(position?.bearing ?? position?.Bearing),
+      speedKmh: numeric(position?.speed ?? position?.Speed) === null ? null : numeric(position?.speed ?? position?.Speed) * 3.6,
+      observedAt: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString()
+    }];
+  }).slice(0, 1200);
+  return { vehicles, status: "live" };
 };
 
 const fetchAurora = async () => {
@@ -362,24 +635,57 @@ const livingLayers = async () => {
   });
 };
 
-const currentContexts = async () => {
-  const [marine, radar, grid, airQuality, aurora] = await Promise.allSettled([
+const currentContexts = async (env) => {
+  const [
+    marine, radar, grid, modelledAir, measuredAir, aurora, tides,
+    bathingAlerts, satellite, earthquakes, issTle, transit
+  ] = await Promise.allSettled([
     fetchMarine(),
     fetchRadar(),
     fetchGrid(),
     fetchAirQuality(),
-    fetchAurora()
+    fetchMeasuredAirQuality(),
+    fetchAurora(),
+    fetchTides(),
+    fetchBathingAlerts(),
+    fetchSatellite(),
+    fetchEarthquakes(),
+    fetchIssTle(),
+    fetchTransit(env)
   ]);
-  for (const [name, result] of Object.entries({ marine, radar, grid, airQuality, aurora })) {
+  for (const [name, result] of Object.entries({
+    marine, radar, grid, modelledAir, measuredAir, aurora, tides,
+    bathingAlerts, satellite, earthquakes, issTle, transit
+  })) {
     if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
   }
+  const modelled = modelledAir.status === "fulfilled" ? modelledAir.value : [];
+  const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
+  const transitValue = transit.status === "fulfilled"
+    ? transit.value
+    : { vehicles: [], status: env.NTA_API_KEY ? "unavailable" : "credential-required" };
   return json({
     generatedAt: new Date().toISOString(),
     marine: marine.status === "fulfilled" ? marine.value : [],
     radar: radar.status === "fulfilled" ? radar.value : [],
     grid: grid.status === "fulfilled" ? grid.value : null,
-    airQuality: airQuality.status === "fulfilled" ? airQuality.value : [],
-    aurora: aurora.status === "fulfilled" ? aurora.value : null
+    airQuality: [...measured, ...modelled],
+    aurora: aurora.status === "fulfilled" ? aurora.value : null,
+    tides: tides.status === "fulfilled" ? tides.value : [],
+    bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value : [],
+    satellite: satellite.status === "fulfilled" ? satellite.value : null,
+    earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
+    issTle: issTle.status === "fulfilled" ? issTle.value : null,
+    transit: transitValue.vehicles,
+    transitStatus: transitValue.status,
+    contextStatus: {
+      measuredAir: measuredAir.status === "fulfilled" ? "live" : "unavailable",
+      tides: tides.status === "fulfilled" ? "live" : "unavailable",
+      bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
+      satellite: satellite.status === "fulfilled" ? "live" : "unavailable",
+      earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
+      iss: issTle.status === "fulfilled" ? "live" : "unavailable"
+    }
   }, 200, 300);
 };
 
@@ -396,7 +702,7 @@ const worker = {
     }
     if (url.pathname === "/api/contexts") {
       try {
-        return await currentContexts();
+        return await currentContexts(env);
       } catch (error) {
         console.error("Current contexts failed", error);
         return json({ error: "Current island contexts are temporarily unavailable." }, 503);

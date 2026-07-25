@@ -85,6 +85,8 @@ export type AirQualityReading = {
   ozone: number | null;
   uvIndex: number | null;
   grassPollen: number | null;
+  source: "measured" | "modelled";
+  stationClassification: string | null;
 };
 
 export type AuroraReading = {
@@ -92,6 +94,80 @@ export type AuroraReading = {
   forecastAt: string;
   probability: number;
   kpIndex: number | null;
+};
+
+export type TideReading = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  observedAt: string;
+  waterLevel: number | null;
+  predictedLevel: number | null;
+  surge: number | null;
+  trend: "rising" | "falling" | "steady" | "unknown";
+  nextHighAt: string | null;
+  nextHighLevel: number | null;
+  nextLowAt: string | null;
+  nextLowLevel: number | null;
+};
+
+export type BathingAlert = {
+  id: string;
+  name: string;
+  county: string;
+  latitude: number;
+  longitude: number;
+  restriction: string;
+  description: string;
+  startedAt: string;
+  updatedAt: string;
+  noticeUrl: string | null;
+};
+
+export type IssPass = {
+  startsAt: string;
+  peaksAt: string;
+  endsAt: string;
+  maxElevation: number;
+  visible: boolean;
+  direction: string;
+};
+
+export type IssReading = {
+  observedAt: string;
+  latitude: number;
+  longitude: number;
+  altitudeKm: number;
+  passes: IssPass[];
+};
+
+export type SatelliteFrame = {
+  observedAt: string;
+  label: string;
+  tileTemplate: string;
+};
+
+export type EarthquakeReading = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  magnitude: number;
+  depthKm: number;
+  place: string;
+  observedAt: string;
+  detailUrl: string;
+};
+
+export type TransitVehicle = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  route: string;
+  label: string;
+  bearing: number | null;
+  speedKmh: number | null;
+  observedAt: string;
 };
 
 export type LiveSnapshot = {
@@ -106,6 +182,22 @@ export type LiveSnapshot = {
   grid: GridReading | null;
   airQuality: AirQualityReading[];
   aurora: AuroraReading | null;
+  tides: TideReading[];
+  bathingAlerts: BathingAlert[];
+  iss: IssReading | null;
+  issTle: { line1: string; line2: string; observedAt: string } | null;
+  satellite: SatelliteFrame | null;
+  earthquakes: EarthquakeReading[];
+  transit: TransitVehicle[];
+  transitStatus: "live" | "credential-required" | "unavailable";
+  contextStatus: {
+    measuredAir: "live" | "unavailable";
+    tides: "live" | "unavailable";
+    bathing: "live" | "unavailable";
+    satellite: "live" | "unavailable";
+    earthquakes: "live" | "unavailable";
+    iss: "live" | "unavailable";
+  };
   summary: {
     warmest: StationReading | null;
     wettest: StationReading | null;

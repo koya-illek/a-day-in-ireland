@@ -1,5 +1,15 @@
 import type { LiveSnapshot, StationReading } from "./types";
 import { parseLatestObservations } from "./latest-observations";
+import {
+  degreesLat,
+  degreesLong,
+  ecfToLookAngles,
+  eciToEcf,
+  eciToGeodetic,
+  gstime,
+  propagate,
+  twoline2satrec
+} from "satellite.js";
 
 const STATIONS = [
   ["malin-head", "Malin Head", "Malin Head", 55.371, -7.339],
@@ -170,17 +180,93 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     });
     if (!response.ok) return previous;
     const next = (await response.json()) as Partial<
-      Pick<LiveSnapshot, "marine" | "radar" | "grid" | "airQuality" | "aurora">
+      Pick<
+        LiveSnapshot,
+        "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
+        "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "transit" | "transitStatus"
+        | "contextStatus"
+      >
     >;
+    const iss = next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : previous.iss;
     return {
       ...previous,
       marine: Array.isArray(next.marine) ? next.marine : previous.marine,
       radar: Array.isArray(next.radar) ? next.radar : previous.radar,
       grid: next.grid === null || typeof next.grid === "object" ? next.grid : previous.grid,
       airQuality: Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality,
-      aurora: next.aurora === null || typeof next.aurora === "object" ? next.aurora : previous.aurora
+      aurora: next.aurora === null || typeof next.aurora === "object" ? next.aurora : previous.aurora,
+      tides: Array.isArray(next.tides) ? next.tides : previous.tides,
+      bathingAlerts: Array.isArray(next.bathingAlerts) ? next.bathingAlerts : previous.bathingAlerts,
+      iss,
+      issTle: next.issTle === null || typeof next.issTle === "object" ? next.issTle : previous.issTle,
+      satellite: next.satellite === null || typeof next.satellite === "object" ? next.satellite : previous.satellite,
+      earthquakes: Array.isArray(next.earthquakes) ? next.earthquakes : previous.earthquakes,
+      transit: Array.isArray(next.transit) ? next.transit : previous.transit,
+      transitStatus: next.transitStatus ?? previous.transitStatus,
+      contextStatus: next.contextStatus && typeof next.contextStatus === "object"
+        ? next.contextStatus
+        : previous.contextStatus
     };
   } catch {
     return previous;
+  }
+}
+
+const compassDirection = (azimuth: number) => {
+  const points = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return points[Math.round((azimuth * 180 / Math.PI) / 45) % 8];
+};
+
+function predictIss(line1: string, line2: string): LiveSnapshot["iss"] {
+  try {
+    const satrec = twoline2satrec(line1, line2);
+    const observer = {
+      longitude: -8 * Math.PI / 180,
+      latitude: 53.4 * Math.PI / 180,
+      height: .05
+    };
+    const now = new Date();
+    const currentPosition = propagate(satrec, now)?.position;
+    if (!currentPosition || typeof currentPosition === "boolean") return null;
+    const currentGeo = eciToGeodetic(currentPosition, gstime(now));
+    const passes: NonNullable<LiveSnapshot["iss"]>["passes"] = [];
+    let active: { startsAt: Date; peaksAt: Date; maxElevation: number; azimuth: number } | null = null;
+    for (let offset = 0; offset <= 48 * 60 * 60 * 1000; offset += 30_000) {
+      const time = new Date(now.getTime() + offset);
+      const position = propagate(satrec, time)?.position;
+      if (!position || typeof position === "boolean") continue;
+      const look = ecfToLookAngles(observer, eciToEcf(position, gstime(time)));
+      const elevation = look.elevation * 180 / Math.PI;
+      if (elevation >= 10) {
+        if (!active) active = { startsAt: time, peaksAt: time, maxElevation: elevation, azimuth: look.azimuth };
+        if (elevation > active.maxElevation) {
+          active.maxElevation = elevation;
+          active.peaksAt = time;
+        }
+      } else if (active) {
+        const localHour = Number(new Intl.DateTimeFormat("en-IE", {
+          hour: "2-digit", hour12: false, timeZone: "Europe/Dublin"
+        }).format(active.peaksAt)) % 24;
+        passes.push({
+          startsAt: active.startsAt.toISOString(),
+          peaksAt: active.peaksAt.toISOString(),
+          endsAt: time.toISOString(),
+          maxElevation: active.maxElevation,
+          visible: localHour >= 21 || localHour < 6,
+          direction: compassDirection(active.azimuth)
+        });
+        active = null;
+        if (passes.length >= 5) break;
+      }
+    }
+    return {
+      observedAt: now.toISOString(),
+      latitude: degreesLat(currentGeo.latitude),
+      longitude: degreesLong(currentGeo.longitude),
+      altitudeKm: currentGeo.height,
+      passes
+    };
+  } catch {
+    return null;
   }
 }

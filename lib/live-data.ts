@@ -386,7 +386,9 @@ async function fetchAirQuality(): Promise<AirQualityReading[]> {
         nitrogenDioxide: numberOrNull(current.nitrogen_dioxide),
         ozone: numberOrNull(current.ozone),
         uvIndex: numberOrNull(current.uv_index),
-        grassPollen: numberOrNull(current.grass_pollen)
+        grassPollen: numberOrNull(current.grass_pollen),
+        source: "modelled" as const,
+        stationClassification: null
       }];
     });
   } catch {
@@ -595,6 +597,22 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     grid,
     airQuality,
     aurora,
+    tides: [],
+    bathingAlerts: [],
+    iss: null,
+    issTle: null,
+    satellite: null,
+    earthquakes: [],
+    transit: [],
+    transitStatus: "credential-required",
+    contextStatus: {
+      measuredAir: "unavailable",
+      tides: "unavailable",
+      bathing: "unavailable",
+      satellite: "unavailable",
+      earthquakes: "unavailable",
+      iss: "unavailable"
+    },
     summary: {
       warmest: by("temperature"),
       wettest: by("rainfall"),

@@ -149,7 +149,7 @@ test("air and aurora contexts preserve model and forecast caveats", async ({ pag
   await page.goto("/");
   const contexts = page.getByRole("navigation", { name: "More live contexts" });
   await contexts.getByRole("button", { name: /Air & exposure/ }).click();
-  await expect(page.getByText("Modelled air and exposure", { exact: true })).toBeVisible();
+  await expect(page.getByText("Measured and modelled air", { exact: true })).toBeVisible();
   if (await page.locator(".air-marker").count()) {
     await page.locator(".air-marker").first().click();
     await expect(page.locator(".detail-air")).toContainText(/model output, not a reading from a sensor/i);
@@ -158,4 +158,41 @@ test("air and aurora contexts preserve model and forecast caveats", async ({ pag
   await contexts.getByRole("button", { name: /Aurora chance/ }).click();
   await expect(page.locator(".aurora-panel:visible")).toBeVisible();
   await expect(page.locator(".aurora-panel:visible")).toContainText(/not a guarantee/i);
+});
+
+test("new public contexts are discoverable and honestly describe unavailable data", async ({ page }) => {
+  await page.goto("/");
+  const contexts = page.getByRole("navigation", { name: "More live contexts" });
+
+  await contexts.getByRole("button", { name: /Tides & surge/ }).click();
+  await expect(page.getByText("Tides and coastal anomaly", { exact: true })).toBeVisible();
+
+  await contexts.getByRole("button", { name: /Bathing alerts/ }).click();
+  await expect(page.getByText(/bathing-water (alerts|feed)/i).first()).toBeVisible();
+
+  await contexts.getByRole("button", { name: /ISS passes/ }).click();
+  await expect(page.locator(".iss-panel:visible")).toBeVisible();
+  await expect(page.locator(".iss-panel:visible")).toContainText(/temporarily unavailable|next pass/i);
+
+  await contexts.getByRole("button", { name: /Ireland from space/ }).click();
+  await expect(page.getByText("Ireland from space", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".map-notice")).toContainText(/near-real-time daylight imagery|temporarily unavailable/i);
+
+  await contexts.getByRole("button", { name: /Recent earthquakes/ }).click();
+  await expect(page.getByText(/earthquakes detected|seismic detections|earthquake feed unavailable/i).first()).toBeVisible();
+
+  await contexts.getByRole("button", { name: /Live public transport/ }).click();
+  await expect(page.getByText("Public transport feed awaiting access", { exact: true })).toBeVisible();
+  await expect(page.locator(".map-notice")).toContainText(/free developer API key/i);
+});
+
+test("notable-now board is present without fabricating an event", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Only the signals worth interrupting the map for." })).toBeVisible();
+  const signals = page.locator(".notable-signals button");
+  if (await signals.count()) {
+    await expect(signals.first()).toBeVisible();
+  } else {
+    await expect(page.getByText(/No unusual public signals are active right now|Some notable-signal sources are temporarily unavailable/)).toBeVisible();
+  }
 });
