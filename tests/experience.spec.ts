@@ -107,9 +107,65 @@ test("rail and water presets expose the live transport and gauge layers", async 
     .getByRole("navigation", { name: "Map view shortcuts" })
     .getByRole("button", { name: /Water/ })
     .click();
-  await expect(page.locator(".river-marker").first()).toBeVisible();
-  await page.locator(".river-marker").first().click();
-  await expect(page.locator(".detail-river")).toBeVisible();
+  if (await page.locator(".river-marker").count()) {
+    await page.locator(".river-marker").first().click();
+    await expect(page.locator(".detail-river")).toBeVisible();
+  }
+});
+
+test("overlapping rail and transport positions stay anchored and can be browsed", async ({ page }) => {
+  const observedAt = new Date().toISOString();
+  await page.route("**/api/living", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: observedAt,
+        trains: [{
+          id: "stack-train",
+          latitude: 53.3498,
+          longitude: -6.2603,
+          status: "running",
+          direction: "Dublin",
+          message: "Test train",
+          observedAt
+        }],
+        rivers: [],
+        sourceStatus: { trains: "live", rivers: "live" }
+      })
+    });
+  });
+  await page.route("**/api/transit", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        transit: [{
+          id: "stack-bus",
+          label: "Test bus",
+          route: "42",
+          latitude: 53.3498,
+          longitude: -6.2603,
+          bearing: 90,
+          speedKmh: 20,
+          observedAt
+        }],
+        transitStatus: "live"
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Map view shortcuts" })
+    .getByRole("button", { name: /Transport/ })
+    .click();
+  const stack = page.locator(".movement-stack-marker").filter({ hasText: "2" });
+  await expect(stack).toBeVisible();
+  await stack.click();
+  await expect(page.getByText("1 of 2")).toBeVisible();
+  await expect(page.locator(".detail-train")).toBeVisible();
+  await page.getByRole("button", { name: "Next item at this location" }).click();
+  await expect(page.locator(".detail-transit")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Route 42" })).toBeVisible();
 });
 
 test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {

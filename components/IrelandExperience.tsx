@@ -10,6 +10,7 @@ import {
   useRef,
   useState
 } from "react";
+import { createPortal } from "react-dom";
 import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
@@ -55,6 +56,11 @@ type Selection =
   | { type: "bathing"; item: BathingAlert }
   | { type: "earthquake"; item: EarthquakeReading }
   | { type: "transit"; item: LiveSnapshot["transit"][number] };
+
+type MovementSelection = Extract<Selection, { type: "train" | "transit" }>;
+type MapSelection =
+  | Selection
+  | { type: "movement-stack"; items: MovementSelection[]; index: number };
 
 type ContextFocus =
   | "weather"
@@ -255,11 +261,40 @@ function SatelliteTiles({
   );
 }
 
-function DetailCard({ selected, onClose }: { selected: Selection; onClose: () => void }) {
-  const { type, item } = selected;
+function DetailCard({
+  selected,
+  onClose,
+  onStackChange
+}: {
+  selected: MapSelection;
+  onClose: () => void;
+  onStackChange: (index: number) => void;
+}) {
+  const stack = selected.type === "movement-stack" ? selected : null;
+  const resolved: Selection = selected.type === "movement-stack"
+    ? selected.items[selected.index]
+    : selected;
+  const { type, item } = resolved;
   return (
     <aside className={`station-card detail-${type}`} aria-live="polite">
       <button onClick={onClose} aria-label="Close map details">×</button>
+      {stack && (
+        <div className="detail-stack-navigation" aria-label="Overlapping map items">
+          <button
+            onClick={() => onStackChange((stack.index - 1 + stack.items.length) % stack.items.length)}
+            aria-label="Previous item at this location"
+          >
+            ←
+          </button>
+          <span>{stack.index + 1} of {stack.items.length}</span>
+          <button
+            onClick={() => onStackChange((stack.index + 1) % stack.items.length)}
+            aria-label="Next item at this location"
+          >
+            →
+          </button>
+        </div>
+      )}
       {type === "station" && (
         <>
           <p className="eyebrow">Met Éireann station</p>
@@ -481,7 +516,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [layers, setLayers] = useState<Set<Layer>>(
     () => new Set(["weather", "rain", "wind", "warnings", "places"])
   );
-  const [selected, setSelected] = useState<Selection | null>(null);
+  const [selected, setSelected] = useState<MapSelection | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<"weather" | "movement" | "water" | "all" | "custom">("weather");
   const [servicesRefreshing, setServicesRefreshing] = useState(true);
@@ -629,7 +664,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [snapshot.airQuality]);
   const transitClusters = useMemo(() => {
     const cellSize = 22 / mapView.scale;
-    const cells = new Map<string, { x: number; y: number; vehicles: LiveSnapshot["transit"] }>();
+    const cells = new Map<string, { sumX: number; sumY: number; vehicles: LiveSnapshot["transit"] }>();
     for (const vehicle of snapshot.transit) {
       const point = projection([vehicle.longitude, vehicle.latitude]);
       if (!point || point[0] < 0 || point[0] > 1000 || point[1] < 0 || point[1] > 900) continue;
@@ -637,15 +672,77 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       const cellY = Math.floor(point[1] / cellSize);
       const key = `${cellX}:${cellY}`;
       const cell = cells.get(key) ?? {
-        x: (cellX + .5) * cellSize,
-        y: (cellY + .5) * cellSize,
+        sumX: 0,
+        sumY: 0,
         vehicles: []
       };
+      cell.sumX += point[0];
+      cell.sumY += point[1];
       cell.vehicles.push(vehicle);
       cells.set(key, cell);
     }
-    return [...cells.entries()].map(([key, cell]) => ({ key, ...cell }));
+    return [...cells.entries()].map(([key, cell]) => ({
+      key,
+      x: cell.sumX / cell.vehicles.length,
+      y: cell.sumY / cell.vehicles.length,
+      vehicles: cell.vehicles
+    }));
   }, [mapView.scale, projection, snapshot.transit]);
+  const movementStacks = useMemo(() => {
+    const points: Array<{
+      key: string;
+      x: number;
+      y: number;
+      items: MovementSelection[];
+      trainAnchor: boolean;
+    }> = [];
+
+    if (layers.has("trains")) {
+      for (const train of snapshot.trains) {
+        const point = projection([train.longitude, train.latitude]);
+        if (point) {
+          points.push({
+            key: `train-${train.id}`,
+            x: point[0],
+            y: point[1],
+            items: [{ type: "train", item: train }],
+            trainAnchor: true
+          });
+        }
+      }
+    }
+    if (layers.has("transit")) {
+      for (const cluster of transitClusters) {
+        points.push({
+          key: `transit-${cluster.key}`,
+          x: cluster.x,
+          y: cluster.y,
+          items: cluster.vehicles.map((vehicle) => ({ type: "transit", item: vehicle })),
+          trainAnchor: false
+        });
+      }
+    }
+
+    const collisionDistance = 25 / mapView.scale;
+    const groups: typeof points = [];
+    for (const point of points) {
+      const group = groups.find((candidate) =>
+        Math.hypot(candidate.x - point.x, candidate.y - point.y) < collisionDistance
+      );
+      if (!group) {
+        groups.push({ ...point, items: [...point.items] });
+        continue;
+      }
+      group.items.push(...point.items);
+      group.key += `-${point.key}`;
+      if (point.trainAnchor && !group.trainAnchor) {
+        group.x = point.x;
+        group.y = point.y;
+        group.trainAnchor = true;
+      }
+    }
+    return groups;
+  }, [layers, mapView.scale, projection, snapshot.trains, transitClusters]);
   const narrative = nationalNarrative(snapshot, now);
   const daylight = solarProgress(now);
   const sunX = 880 - daylight * 760;
@@ -1272,42 +1369,57 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
-            {layers.has("trains") && (() => {
-              const occupied: [number, number][] = [];
-              return snapshot.trains.map((train) => {
-                const point = projection([train.longitude, train.latitude]);
-                if (!point) return null;
-                const candidates: [number, number][] = [[0, 0]];
-                for (const radius of [24, 48, 72]) {
-                  for (let step = 0; step < 12; step += 1) {
-                    const angle = (step / 12) * Math.PI * 2 - Math.PI / 2;
-                    candidates.push([Math.cos(angle) * radius, Math.sin(angle) * radius]);
-                  }
-                }
-                const offset = candidates.find(([x, y]) =>
-                  occupied.every(([usedX, usedY]) => Math.hypot(point[0] + x - usedX, point[1] + y - usedY) >= 24),
-                ) ?? candidates.at(-1)!;
-                const markerPoint: [number, number] = [point[0] + offset[0], point[1] + offset[1]];
-                occupied.push(markerPoint);
-                return (
-                  <g
-                    className={`train-marker ${train.status}`}
-                    key={train.id}
-                    transform={`translate(${markerPoint[0]} ${markerPoint[1]})`}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={`Train ${train.id}, ${train.direction}, ${train.status === "running" ? "running" : "due to start"}`}
-                    onClick={() => setSelected({ type: "train", item: train })}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") setSelected({ type: "train", item: train });
-                    }}
-                  >
-                    <circle className="train-pulse" r="10" />
-                    <path d="M-4-7h8a3 3 0 0 1 3 3v7a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5v-7a3 3 0 0 1 3-3Zm-1 3v4h10v-4Zm1 9h2m2 0h2" />
-                  </g>
-                );
-              });
-            })()}
+            {movementStacks.map((stack) => {
+              const first = stack.items[0];
+              const isStack = stack.items.length > 1;
+              const isTrain = first.type === "train";
+              const openStack = () => setSelected(isStack
+                ? { type: "movement-stack", items: stack.items, index: 0 }
+                : first
+              );
+              return (
+                <g
+                  className={isStack
+                    ? "movement-stack-marker"
+                    : isTrain
+                      ? `train-marker ${first.item.status}`
+                      : "transit-marker"}
+                  key={stack.key}
+                  transform={`translate(${stack.x} ${stack.y})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={isStack
+                    ? `${stack.items.length} rail and public transport items at this location; select to browse`
+                    : isTrain
+                      ? `Train ${first.item.id}, ${first.item.direction}, ${first.item.status === "running" ? "running" : "due to start"}`
+                      : `${first.item.route ? `Route ${first.item.route}` : first.item.label}, live public transport position`}
+                  onClick={openStack}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    openStack();
+                  }}
+                >
+                  {isStack ? (
+                    <>
+                      <circle className="movement-stack-back" cx="3" cy="-3" r="10" />
+                      <circle className="movement-stack-front" r="10" />
+                      <text textAnchor="middle" y="3">{stack.items.length > 99 ? "99+" : stack.items.length}</text>
+                    </>
+                  ) : isTrain ? (
+                    <>
+                      <circle className="train-pulse" r="10" />
+                      <path d="M-4-7h8a3 3 0 0 1 3 3v7a5 5 0 0 1-5 5h-4a5 5 0 0 1-5-5v-7a3 3 0 0 1 3-3Zm-1 3v4h10v-4Zm1 9h2m2 0h2" />
+                    </>
+                  ) : (
+                    <>
+                      <circle r="5" />
+                      <path transform={`rotate(${first.item.bearing ?? 0})`} d="M0-8L4 3L0 1L-4 3Z" />
+                    </>
+                  )}
+                </g>
+              );
+            })}
             {layers.has("earthquakes") && snapshot.earthquakes.map((earthquake) => {
               const point = projection([earthquake.longitude, earthquake.latitude]);
               return point ? (
@@ -1328,45 +1440,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
-            {layers.has("transit") && transitClusters.map((cluster) => {
-                const vehicle = cluster.vehicles[0];
-                const isCluster = cluster.vehicles.length > 1;
-                return (
-                  <g
-                    className={isCluster ? "transit-marker transit-cluster" : "transit-marker"}
-                    key={cluster.key}
-                    transform={`translate(${cluster.x} ${cluster.y})`}
-                    role="button"
-                    tabIndex={0}
-                    aria-label={isCluster
-                      ? `${cluster.vehicles.length} live public transport vehicles nearby; ${mapView.scale < 4 ? "select to zoom in" : "select for a representative vehicle"}`
-                      : `${vehicle.route ? `Route ${vehicle.route}` : vehicle.label}, live public transport position`}
-                    onClick={() => {
-                      if (isCluster && mapView.scale < 4) {
-                        zoomMapAround(1.8, { x: cluster.x, y: cluster.y });
-                        setSelected(null);
-                      } else {
-                        setSelected({ type: "transit", item: vehicle });
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      if (isCluster && mapView.scale < 4) {
-                        zoomMapAround(1.8, { x: cluster.x, y: cluster.y });
-                        setSelected(null);
-                      } else {
-                        setSelected({ type: "transit", item: vehicle });
-                      }
-                    }}
-                  >
-                    <circle r={isCluster ? 9 : 5} />
-                    {isCluster
-                      ? <text textAnchor="middle" y="3">{cluster.vehicles.length > 99 ? "99+" : cluster.vehicles.length}</text>
-                      : <path transform={`rotate(${vehicle.bearing ?? 0})`} d="M0-8L4 3L0 1L-4 3Z" />}
-                  </g>
-                );
-              })}
             </g>
           </g>
         </svg>
@@ -1428,10 +1501,23 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span><time>{formatTime(now)}</time>{snapshot.summary.riverStations} fresh river gauges</span>
         </div>
 
-        {selected && <DetailCard selected={selected} onClose={() => setSelected(null)} />}
       </section>
         </div>
       </section>
+
+      {selected && createPortal(
+        <DetailCard
+          selected={selected}
+          onClose={() => setSelected(null)}
+          onStackChange={(index) => {
+            setSelected((current) => current?.type === "movement-stack"
+              ? { ...current, index }
+              : current
+            );
+          }}
+        />,
+        document.body
+      )}
 
       {layers.has("grid") && <GridPanel grid={snapshot.grid} className="mobile-context-panel" />}
       {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="mobile-context-panel" />}
