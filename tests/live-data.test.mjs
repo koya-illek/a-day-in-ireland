@@ -57,6 +57,30 @@ test("NTA coordinator serves a fresh globally stored snapshot without refetching
   assert.equal(body.transit[0].id, "test-vehicle");
 });
 
+test("successive vehicle positions produce a bounded calculated speed", async () => {
+  const { addEstimatedSpeeds } = await import("../platform/cloudflare-entry.js");
+  const previous = [{
+    id: "moving-bus",
+    latitude: 53.3498,
+    longitude: -6.2603,
+    observedAt: "2026-07-25T12:00:00.000Z",
+    speedKmh: null,
+    speedSource: null
+  }];
+  const current = [{
+    ...previous[0],
+    latitude: 53.3598,
+    observedAt: "2026-07-25T12:02:00.000Z"
+  }];
+  const [vehicle] = addEstimatedSpeeds(current, previous);
+  assert.equal(vehicle.speedSource, "calculated");
+  assert.ok(vehicle.speedKmh > 30 && vehicle.speedKmh < 40);
+
+  const [implausible] = addEstimatedSpeeds([{ ...current[0], latitude: 54.3598 }], previous);
+  assert.equal(implausible.speedKmh, null);
+  assert.equal(implausible.speedSource, null);
+});
+
 test("river coordinator reuses a fresh snapshot without spending Browser Run time", async () => {
   const { RiverFeedCoordinator } = await import("../platform/cloudflare-entry.js");
   const stored = new Map([

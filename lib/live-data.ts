@@ -460,7 +460,7 @@ async function fetchTrains(): Promise<TrainPosition[]> {
     const xml = await response.text();
     const observedAt = new Date().toISOString();
     return [...xml.matchAll(/<objTrainPositions>([\s\S]*?)<\/objTrainPositions>/g)]
-      .map((match) => {
+      .map<TrainPosition | null>((match) => {
         const latitude = numberOrNull(textValue(match[1], "TrainLatitude"));
         const longitude = numberOrNull(textValue(match[1], "TrainLongitude"));
         if (
@@ -478,7 +478,9 @@ async function fetchTrains(): Promise<TrainPosition[]> {
           status: textValue(match[1], "TrainStatus") === "R" ? "running" as const : "not-started" as const,
           direction: textValue(match[1], "Direction"),
           message: textValue(match[1], "PublicMessage").replaceAll("\\n", " · "),
-          observedAt
+          observedAt,
+          speedKmh: null,
+          speedSource: null
         };
       })
       .filter((train): train is TrainPosition => train !== null);

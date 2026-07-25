@@ -127,7 +127,9 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
           status: "running",
           direction: "Dublin",
           message: "Test train",
-          observedAt
+          observedAt,
+          speedKmh: 64,
+          speedSource: "calculated"
         }],
         rivers: [],
         sourceStatus: { trains: "live", rivers: "live" }
@@ -146,6 +148,7 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
           longitude: -6.2603,
           bearing: 90,
           speedKmh: 20,
+          speedSource: "calculated",
           observedAt
         }],
         transitStatus: "live"
@@ -163,9 +166,12 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
   await stack.click();
   await expect(page.getByText("1 of 2")).toBeVisible();
   await expect(page.locator(".detail-train")).toBeVisible();
+  await expect(page.locator(".detail-train")).toContainText("≈ 64 km/h");
+  await expect(page.locator(".detail-train")).toContainText("Estimated from the distance");
   await page.getByRole("button", { name: "Next item at this location" }).click();
   await expect(page.locator(".detail-transit")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Route 42" })).toBeVisible();
+  await expect(page.locator(".detail-transit")).toContainText("≈ 20 km/h");
 });
 
 test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {

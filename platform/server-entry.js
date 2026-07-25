@@ -44,7 +44,9 @@ export const fetchTrains = async () => {
         status: value(match[1], "TrainStatus") === "R" ? "running" : "not-started",
         direction: value(match[1], "Direction"),
         message: value(match[1], "PublicMessage").replaceAll("\\n", " · "),
-        observedAt
+        observedAt,
+        speedKmh: null,
+        speedSource: null
       };
     })
     .filter(Boolean);
@@ -640,6 +642,7 @@ export const fetchTransit = async (env) => {
       label: String(vehicle.vehicle?.label ?? vehicle.vehicle?.id ?? "Public transport"),
       bearing: numeric(position?.bearing ?? position?.Bearing),
       speedKmh: numeric(position?.speed ?? position?.Speed) === null ? null : numeric(position?.speed ?? position?.Speed) * 3.6,
+      speedSource: numeric(position?.speed ?? position?.Speed) === null ? null : "reported",
       observedAt: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString()
     }];
   }).slice(0, 1200);

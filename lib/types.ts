@@ -28,6 +28,8 @@ export type TrainPosition = {
   direction: string;
   message: string;
   observedAt: string;
+  speedKmh: number | null;
+  speedSource: "calculated" | null;
 };
 
 export type RiverReading = {
@@ -167,6 +169,7 @@ export type TransitVehicle = {
   label: string;
   bearing: number | null;
   speedKmh: number | null;
+  speedSource: "reported" | "calculated" | null;
   observedAt: string;
 };
 

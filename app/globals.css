@@ -306,6 +306,13 @@ button { color: inherit; }
 .station-card dl div { display: flex; font-size: .72rem; justify-content: space-between; padding: .3rem 0; }
 .station-card dt { color: var(--muted); }
 .station-card dd { margin: 0; }
+.detail-method-note {
+  color: var(--muted);
+  display: block;
+  font-size: .64rem;
+  line-height: 1.45;
+  margin-top: .75rem;
+}
 .warning-strip {
   align-items: center;
   background: #d8b15d;

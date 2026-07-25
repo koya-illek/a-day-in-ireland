@@ -28,6 +28,59 @@ const numeric = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const distanceKm = (
+  first: { latitude: number; longitude: number },
+  second: { latitude: number; longitude: number }
+) => {
+  const radians = Math.PI / 180;
+  const latitudeDelta = (second.latitude - first.latitude) * radians;
+  const longitudeDelta = (second.longitude - first.longitude) * radians;
+  const firstLatitude = first.latitude * radians;
+  const secondLatitude = second.latitude * radians;
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+};
+
+export function addCalculatedSpeeds<
+  T extends {
+    id: string;
+    latitude: number;
+    longitude: number;
+    observedAt: string;
+    speedKmh?: number | null;
+    speedSource?: "reported" | "calculated" | null;
+  }
+>(
+  current: T[],
+  previous: T[],
+  options: { maximumKmh: number; maximumIntervalMinutes: number }
+): T[] {
+  const previousById = new Map(previous.map((item) => [item.id, item]));
+  return current.map((item) => {
+    if (item.speedKmh !== null && item.speedKmh !== undefined) {
+      return { ...item, speedSource: item.speedSource ?? "reported" };
+    }
+    const earlier = previousById.get(item.id);
+    if (!earlier) return { ...item, speedKmh: null, speedSource: null };
+    const elapsedHours =
+      (new Date(item.observedAt).getTime() - new Date(earlier.observedAt).getTime()) / 3_600_000;
+    if (
+      !Number.isFinite(elapsedHours) ||
+      elapsedHours <= 0 ||
+      elapsedHours > options.maximumIntervalMinutes / 60
+    ) {
+      return { ...item, speedKmh: null, speedSource: null };
+    }
+    const calculated = distanceKm(earlier, item) / elapsedHours;
+    if (!Number.isFinite(calculated) || calculated > options.maximumKmh) {
+      return { ...item, speedKmh: null, speedSource: null };
+    }
+    return { ...item, speedKmh: calculated, speedSource: "calculated" };
+  });
+}
+
 const fetchWithRetry = async (url: string, timeoutMs: number) => {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -169,7 +222,12 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
       return previous;
     }
     const now = Date.now();
-    const trains = next.sourceStatus?.trains === "unavailable" ? previous.trains : next.trains;
+    const trains = next.sourceStatus?.trains === "unavailable"
+      ? previous.trains
+      : addCalculatedSpeeds(next.trains, previous.trains, {
+          maximumKmh: 200,
+          maximumIntervalMinutes: 15
+        });
     const rivers = (next.sourceStatus?.rivers === "unavailable" ? previous.rivers : next.rivers)
       .filter((river) => now - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000);
     return {
@@ -189,21 +247,13 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
 
 export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
   try {
-    const [contextsResult, transitResult] = await Promise.allSettled([
-      fetchWithRetry("/api/contexts", 15_000),
-      fetchWithRetry("/api/transit", 15_000)
-    ]);
-    const contextsResponse = contextsResult.status === "fulfilled" ? contextsResult.value : null;
-    const transitResponse = transitResult.status === "fulfilled" ? transitResult.value : null;
-    const next = (contextsResponse?.ok ? await contextsResponse.json() : {}) as Partial<
+    const response = await fetchWithRetry("/api/contexts", 15_000);
+    const next = (response.ok ? await response.json() : {}) as Partial<
       Pick<
         LiveSnapshot,
         "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
         "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
       >
-    >;
-    const transit = (transitResponse?.ok ? await transitResponse.json() : {}) as Partial<
-      Pick<LiveSnapshot, "transit" | "transitStatus">
     >;
     const iss = next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : previous.iss;
     let airQuality = Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality;
@@ -229,12 +279,6 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     }
     const contextUnavailable = (name: keyof LiveSnapshot["contextStatus"]) =>
       contextStatus[name] === "unavailable";
-    const transitStatus = transit.transitStatus ?? previous.transitStatus;
-    const transitVehicles = transitStatus === "live" && Array.isArray(transit.transit)
-      ? transit.transit
-      : previous.transit.filter((vehicle) =>
-          Date.now() - new Date(vehicle.observedAt).getTime() < 5 * 60_000
-        );
     return {
       ...previous,
       marine: Array.isArray(next.marine) && next.marine.length ? next.marine : previous.marine,
@@ -256,9 +300,31 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       earthquakes: !contextUnavailable("earthquakes") && Array.isArray(next.earthquakes)
         ? next.earthquakes
         : previous.earthquakes,
-      transit: transitVehicles,
-      transitStatus,
       contextStatus
+    };
+  } catch {
+    return previous;
+  }
+}
+
+export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapshot> {
+  try {
+    const response = await fetchWithRetry("/api/transit", 15_000);
+    if (!response.ok) return previous;
+    const next = (await response.json()) as Partial<
+      Pick<LiveSnapshot, "transit" | "transitStatus">
+    >;
+    const transitStatus = next.transitStatus ?? previous.transitStatus;
+    if (transitStatus !== "live" || !Array.isArray(next.transit)) {
+      return { ...previous, transitStatus };
+    }
+    return {
+      ...previous,
+      transit: addCalculatedSpeeds(next.transit, previous.transit, {
+        maximumKmh: 130,
+        maximumIntervalMinutes: 10
+      }),
+      transitStatus
     };
   } catch {
     return previous;

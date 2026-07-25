@@ -24,7 +24,7 @@ import type {
   TideReading,
   TrainPosition
 } from "../lib/types";
-import { refreshCurrentContexts, refreshLivingLayers, refreshWeather } from "../lib/browser-live";
+import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 
 type Layer =
   | "weather"
@@ -316,9 +316,18 @@ function DetailCard({
           <p>{item.message || item.direction}</p>
           <dl>
             <div><dt>Status</dt><dd>{item.status === "running" ? "Running" : "Due to start"}</dd></div>
+            <div>
+              <dt>Speed</dt>
+              <dd>{item.speedKmh == null ? "Awaiting next position" : `≈ ${item.speedKmh.toFixed(0)} km/h`}</dd>
+            </div>
             <div><dt>Direction</dt><dd>{item.direction}</dd></div>
             <div><dt>Checked</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
+          <small className="detail-method-note">
+            {item.speedSource === "calculated"
+              ? "Estimated from the distance and time between successive Irish Rail positions."
+              : "Irish Rail does not publish train speed; an estimate appears after a second usable position."}
+          </small>
         </>
       )}
       {type === "river" && (
@@ -419,9 +428,23 @@ function DetailCard({
           <div className="detail-emblem">↗</div>
           <p>{item.label}</p>
           <dl>
-            <div><dt>Speed</dt><dd>{item.speedKmh?.toFixed(0) ?? "—"} km/h</dd></div>
+            <div>
+              <dt>Speed</dt>
+              <dd>
+                {item.speedKmh == null
+                  ? "Awaiting next position"
+                  : `${item.speedSource === "calculated" ? "≈ " : ""}${item.speedKmh.toFixed(0)} km/h`}
+              </dd>
+            </div>
             <div><dt>Updated</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
+          <small className="detail-method-note">
+            {item.speedSource === "reported"
+              ? "Speed reported by the NTA vehicle feed."
+              : item.speedSource === "calculated"
+                ? "Estimated from the distance and time between successive NTA positions."
+                : "The NTA is not reporting speed for this vehicle; an estimate appears after a second usable position."}
+          </small>
         </>
       )}
     </aside>
@@ -594,19 +617,29 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }));
       setRadarFrameIndex(Math.max(0, next.radar.length - 1));
     };
+    const updateTransit = async () => {
+      const next = await refreshTransit(snapshotRef.current);
+      commit((current) => ({
+        ...current,
+        transit: next.transit,
+        transitStatus: next.transitStatus
+      }));
+    };
     const refreshInitial = async () => {
-      await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts()]);
+      await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
       setServicesRefreshing(false);
     };
     void refreshInitial();
     const refresh = window.setInterval(() => void update(), 5 * 60_000);
     const livingRefresh = window.setInterval(() => void updateLivingLayers(), 60_000);
     const contextRefresh = window.setInterval(() => void updateCurrentContexts(), 5 * 60_000);
+    const transitRefresh = window.setInterval(() => void updateTransit(), 65_000);
     return () => {
       window.clearInterval(clock);
       window.clearInterval(refresh);
       window.clearInterval(livingRefresh);
       window.clearInterval(contextRefresh);
+      window.clearInterval(transitRefresh);
     };
   }, []);
 

@@ -7,6 +7,33 @@ const responseHeaders = {
   "cache-control": "public, max-age=60, s-maxage=60, stale-while-revalidate=120"
 };
 
+const distanceKm = (first, second) => {
+  const radians = Math.PI / 180;
+  const latitudeDelta = (second.latitude - first.latitude) * radians;
+  const longitudeDelta = (second.longitude - first.longitude) * radians;
+  const firstLatitude = first.latitude * radians;
+  const secondLatitude = second.latitude * radians;
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+};
+
+export const addEstimatedSpeeds = (current, previous, maximumKmh = 130) => {
+  const previousById = new Map(previous.map((item) => [item.id, item]));
+  return current.map((item) => {
+    if (item.speedKmh != null) return { ...item, speedSource: item.speedSource ?? "reported" };
+    const earlier = previousById.get(item.id);
+    if (!earlier) return item;
+    const elapsedHours =
+      (new Date(item.observedAt).getTime() - new Date(earlier.observedAt).getTime()) / 3_600_000;
+    if (!Number.isFinite(elapsedHours) || elapsedHours <= 0 || elapsedHours > 10 / 60) return item;
+    const speedKmh = distanceKm(earlier, item) / elapsedHours;
+    if (!Number.isFinite(speedKmh) || speedKmh > maximumKmh) return item;
+    return { ...item, speedKmh, speedSource: "calculated" };
+  });
+};
+
 const transitResponse = (value) => new Response(JSON.stringify({
   generatedAt: new Date().toISOString(),
   transit: value.vehicles,
@@ -26,6 +53,7 @@ export class NtaFeedCoordinator {
     try {
       const result = await fetchTransit(this.env);
       if (result.status !== "live") throw new Error(`NTA feed status: ${result.status}`);
+      result.vehicles = addEstimatedSpeeds(result.vehicles, stale?.result?.vehicles ?? []);
       const snapshot = { expiresAt: startedAt + NTA_REFRESH_MS, result };
       await this.state.storage.put("snapshot", snapshot);
       return result;
