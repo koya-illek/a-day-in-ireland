@@ -610,6 +610,25 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     );
     return [...cells.values(), ...modelled];
   }, [snapshot.airQuality]);
+  const transitClusters = useMemo(() => {
+    const cellSize = 22 / mapView.scale;
+    const cells = new Map<string, { x: number; y: number; vehicles: LiveSnapshot["transit"] }>();
+    for (const vehicle of snapshot.transit) {
+      const point = projection([vehicle.longitude, vehicle.latitude]);
+      if (!point || point[0] < 0 || point[0] > 1000 || point[1] < 0 || point[1] > 900) continue;
+      const cellX = Math.floor(point[0] / cellSize);
+      const cellY = Math.floor(point[1] / cellSize);
+      const key = `${cellX}:${cellY}`;
+      const cell = cells.get(key) ?? {
+        x: (cellX + .5) * cellSize,
+        y: (cellY + .5) * cellSize,
+        vehicles: []
+      };
+      cell.vehicles.push(vehicle);
+      cells.set(key, cell);
+    }
+    return [...cells.entries()].map(([key, cell]) => ({ key, ...cell }));
+  }, [mapView.scale, projection, snapshot.transit]);
   const narrative = nationalNarrative(snapshot, now);
   const daylight = solarProgress(now);
   const sunX = 120 + daylight * 760;
@@ -1249,27 +1268,44 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </g>
               ) : null;
             })}
-            {layers.has("transit") && snapshot.transit
-              .filter((_, index) => index % Math.max(1, Math.ceil(snapshot.transit.length / 180)) === 0)
-              .map((vehicle) => {
-                const point = projection([vehicle.longitude, vehicle.latitude]);
-                return point ? (
+            {layers.has("transit") && transitClusters.map((cluster) => {
+                const vehicle = cluster.vehicles[0];
+                const isCluster = cluster.vehicles.length > 1;
+                return (
                   <g
-                    className="transit-marker"
-                    key={vehicle.id}
-                    transform={`translate(${point[0]} ${point[1]})`}
+                    className={isCluster ? "transit-marker transit-cluster" : "transit-marker"}
+                    key={cluster.key}
+                    transform={`translate(${cluster.x} ${cluster.y})`}
                     role="button"
                     tabIndex={0}
-                    aria-label={`${vehicle.route ? `Route ${vehicle.route}` : vehicle.label}, live public transport position`}
-                    onClick={() => setSelected({ type: "transit", item: vehicle })}
+                    aria-label={isCluster
+                      ? `${cluster.vehicles.length} live public transport vehicles nearby; ${mapView.scale < 4 ? "select to zoom in" : "select for a representative vehicle"}`
+                      : `${vehicle.route ? `Route ${vehicle.route}` : vehicle.label}, live public transport position`}
+                    onClick={() => {
+                      if (isCluster && mapView.scale < 4) {
+                        zoomMapAround(1.8, { x: cluster.x, y: cluster.y });
+                        setSelected(null);
+                      } else {
+                        setSelected({ type: "transit", item: vehicle });
+                      }
+                    }}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") setSelected({ type: "transit", item: vehicle });
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      if (isCluster && mapView.scale < 4) {
+                        zoomMapAround(1.8, { x: cluster.x, y: cluster.y });
+                        setSelected(null);
+                      } else {
+                        setSelected({ type: "transit", item: vehicle });
+                      }
                     }}
                   >
-                    <circle r="5" />
-                    <path transform={`rotate(${vehicle.bearing ?? 0})`} d="M0-8L4 3L0 1L-4 3Z" />
+                    <circle r={isCluster ? 9 : 5} />
+                    {isCluster
+                      ? <text textAnchor="middle" y="3">{cluster.vehicles.length > 99 ? "99+" : cluster.vehicles.length}</text>
+                      : <path transform={`rotate(${vehicle.bearing ?? 0})`} d="M0-8L4 3L0 1L-4 3Z" />}
                   </g>
-                ) : null;
+                );
               })}
             </g>
           </g>

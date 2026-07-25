@@ -16,7 +16,8 @@ createServer(async (request, response) => {
   if (pathname.startsWith("/api/")) {
     if (process.env.LIVE_CONTEXTS === "1") {
       const { default: worker } = await import("../platform/server-entry.js");
-      const upstream = await worker.fetch(new Request(`http://127.0.0.1:3000${request.url}`), {});
+      const env = process.env.NTA_API_KEY ? { NTA_API_KEY: process.env.NTA_API_KEY } : {};
+      const upstream = await worker.fetch(new Request(`http://127.0.0.1:3000${request.url}`), env);
       response.writeHead(upstream.status, Object.fromEntries(upstream.headers));
       response.end(Buffer.from(await upstream.arrayBuffer()));
       return;

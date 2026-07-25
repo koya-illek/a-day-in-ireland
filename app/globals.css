@@ -602,9 +602,7 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .map-viewport {
   transform-box: fill-box;
   transform-origin: 0 0;
-  transition: transform .18s ease-out;
 }
-.ireland-map:active .map-viewport { transition: none; }
 .map-navigation {
   align-items: center;
   background: rgba(9, 23, 41, .95);
@@ -722,6 +720,17 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .earthquake-marker path { fill: none; stroke: #ffd2ae; stroke-width: 1.6; }
 .transit-marker circle { fill: #00dbe9; opacity: .76; stroke: #dffeff; stroke-width: .7; }
 .transit-marker path { fill: #4edea3; stroke: #071426; stroke-width: .5; }
+.transit-marker text {
+  fill: #041724;
+  font: 700 5.5px ui-monospace, monospace;
+  pointer-events: none;
+}
+.transit-cluster circle {
+  fill: #4edea3;
+  opacity: .92;
+  stroke: #dffef3;
+  stroke-width: 1;
+}
 .tide-marker:hover circle, .tide-marker:focus circle,
 .bathing-marker:hover circle, .bathing-marker:focus circle,
 .earthquake-marker:hover circle, .earthquake-marker:focus circle,
