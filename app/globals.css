@@ -195,6 +195,8 @@ button { color: inherit; }
 }
 .terrain path { fill: none; opacity: .28; stroke: #d0d7a5; stroke-linecap: round; stroke-width: 3; }
 .sun-glow { transition: cx 3s linear, cy 3s linear; }
+.sun-core { fill: #ffe7a3; filter: drop-shadow(0 0 8px rgba(255, 224, 143, .75)); transition: cx 3s linear, cy 3s linear; }
+.day-arc { fill: none; opacity: .22; stroke: #d9d6a6; stroke-dasharray: 4 12; stroke-width: 1; }
 .wind-field path {
   animation: wind 4s linear infinite;
   fill: none;
@@ -587,7 +589,7 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .workspace-facts button:hover, .workspace-facts button:focus-visible { border-color: rgba(0, 219, 233, .6); transform: translateY(-1px); }
 .workspace-facts b, .workspace-facts small { display: block; font-family: ui-monospace, monospace; }
 .workspace-facts b { color: #00e8f5; font-size: .85rem; }
-.workspace-facts small { color: var(--muted); font-size: .52rem; margin-top: .15rem; text-transform: uppercase; }
+.workspace-facts small { color: var(--muted); font-size: .6rem; line-height: 1.25; margin-top: .15rem; text-transform: uppercase; }
 .map-stage {
   background: #071426;
   border: 1px solid rgba(0, 219, 233, .2);
@@ -938,9 +940,21 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 }
 .notable-signals button { cursor: pointer; }
 .notable-signals button:hover, .notable-signals button:focus-visible { border-color: rgba(0, 219, 233, .52); }
-.notable-signals span { color: #4edea3; font: 600 .5rem ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
-.notable-signals b { font-size: .72rem; }
-.notable-signals small { color: var(--muted); font: .54rem ui-monospace, monospace; }
+.notable-signals span { color: #4edea3; font: 600 .6rem ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.notable-signals b { font-size: .8rem; }
+.notable-signals small { color: var(--muted); font: .62rem ui-monospace, monospace; }
+.notable-signals:not(.show-all) .signal-item:nth-of-type(n + 4) { display: none; }
+.notable-signals .notable-more {
+  background: transparent;
+  border: 1px dashed rgba(78, 222, 163, .42);
+  border-left-width: 1px;
+  color: #4edea3;
+  display: block;
+  font: 600 .68rem ui-monospace, monospace;
+  grid-column: 1 / -1;
+  padding: .65rem .8rem;
+  text-align: center;
+}
 .all-quiet { align-items: center; display: flex; grid-column: 1 / -1; margin: 0; }
 .all-quiet .live-dot { display: inline-block; margin-right: .2rem; }
 .detail-link { color: #4edea3; display: inline-block; font: 600 .62rem ui-monospace, monospace; margin-top: .8rem; }
@@ -948,27 +962,29 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .island-pulse, .dayline { max-width: 96rem; }
 .island-pulse {
   gap: .7rem;
-  grid-template-columns: 1.05fr repeat(3, 1fr);
+  grid-template-columns: .8fr repeat(3, 1fr);
   padding-bottom: 0;
-  padding-top: clamp(3rem, 6vw, 5.5rem);
+  padding-top: 1.5rem;
 }
 .pulse-intro {
   background: linear-gradient(145deg, rgba(0, 219, 233, .06), transparent 62%);
   border: 1px solid var(--line);
   border-radius: .4rem;
-  min-height: 17rem;
-  padding: 1.35rem;
+  min-height: 10rem;
+  padding: 1.1rem;
 }
 .pulse-intro h2 {
-  font-size: clamp(2rem, 3.2vw, 3.3rem);
+  font-size: clamp(1.5rem, 2.4vw, 2.2rem);
   letter-spacing: -.045em;
-  max-width: 8ch;
+  max-width: 11ch;
 }
 .pulse-card {
   background: #101b2e;
   border-radius: .4rem;
   box-shadow: 0 0 1.8rem rgba(0, 219, 233, .025);
-  min-height: 17rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 10rem;
   overflow: hidden;
   padding: 1.05rem;
   position: relative;
@@ -982,12 +998,13 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .pulse-card strong {
   color: var(--ink);
   font-family: ui-monospace, monospace;
-  font-size: clamp(2.6rem, 4vw, 4rem);
+  font-size: clamp(2rem, 3vw, 2.8rem);
   letter-spacing: -.06em;
-  margin-top: 1.2rem;
+  margin-top: .7rem;
 }
-.pulse-card small { max-width: 17rem; min-height: 2.2rem; }
-.pulse-card b { color: #54e2b0; font-family: ui-monospace, monospace; font-size: .6rem; letter-spacing: .03em; }
+.pulse-card small { font-size: .7rem; max-width: 17rem; min-height: 0; }
+.pulse-card b { color: #54e2b0; font-family: ui-monospace, monospace; font-size: .66rem; letter-spacing: .03em; margin-top: auto; padding-top: .65rem; }
+.pulse-card .signal-bars, .pulse-card .signal-line, .pulse-card .signal-wave { display: none; }
 .pulse-card.trains > span, .pulse-card.rivers > span { color: #4edea3; }
 .signal-bars {
   align-items: flex-end;
@@ -1095,6 +1112,10 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 }
 .dayline-heading h2 { font-size: clamp(1.7rem, 3vw, 2.5rem); letter-spacing: -.04em; }
 .dayline-heading > p { font-family: ui-monospace, monospace; font-size: .62rem; }
+.timeline-legend { display: flex; gap: 1rem; margin-top: .9rem; }
+.timeline-legend span { align-items: center; color: var(--muted); display: flex; font: .66rem ui-monospace, monospace; gap: .4rem; }
+.timeline-legend i { background: #00dbe9; border-radius: .12rem; display: inline-block; height: .65rem; width: .65rem; }
+.timeline-legend i.rain { background: #65cbff; box-shadow: 0 0 0 2px rgba(101, 203, 255, .14); }
 .timeline-chart {
   background-image:
     linear-gradient(to top, rgba(117, 150, 184, .12) 1px, transparent 1px);
@@ -1174,9 +1195,9 @@ footer {
   .workspace-heading > div > p:last-child { display: none; }
   .map-stage { aspect-ratio: 10 / 9; height: auto; min-height: 0; }
   .ireland-map { bottom: auto; height: 100%; right: auto; top: 0; width: 100%; }
-  .section-rail nav button { font-size: .57rem; padding: .65rem .55rem; }
+  .section-rail nav button { font-size: .62rem; padding: .65rem .55rem; }
   .section-rail nav button span { display: none; }
-  .map-caption { font-size: .5rem; }
+  .map-caption { font-size: .58rem; }
   .map-navigation { right: .55rem; top: 4.65rem; }
   .map-navigation button { height: 1.9rem; min-width: 1.9rem; padding: 0 .4rem; }
   .map-navigation output { min-width: 2.6rem; padding: 0 .4rem; }
@@ -1193,7 +1214,7 @@ footer {
   }
   .section-rail nav button {
     display: grid;
-    font-size: .48rem;
+    font-size: .56rem;
     gap: .2rem;
     justify-items: center;
     letter-spacing: .04em;
@@ -1202,7 +1223,7 @@ footer {
   .section-rail nav button span { display: block; font-size: .85rem; text-align: center; }
   .island-pulse { grid-template-columns: 1fr; padding-top: 2.4rem; }
   .pulse-intro { min-height: 0; }
-  .pulse-card { min-height: 14rem; }
+  .pulse-card { min-height: 9.5rem; }
   .warning-strip { margin-left: .7rem; margin-right: .7rem; max-width: calc(100% - 1.4rem); }
   .map-notice { left: .55rem; max-width: calc(100% - 1.1rem); padding: .55rem .7rem; top: .55rem; }
   .map-notice > span { margin-bottom: .2rem; }

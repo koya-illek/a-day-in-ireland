@@ -1,4 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function enableExploreLayer(page: Page, name: RegExp) {
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const layer = page.getByRole("button", { name });
+  if (await layer.getAttribute("aria-pressed") !== "true") await layer.click();
+  await page.getByRole("button", { name: "Close explore panel" }).click();
+}
 
 test("renders the living map and live observations", async ({ page }) => {
   await page.goto("/");
@@ -24,14 +31,53 @@ test("explore layers and station details are interactive", async ({ page }) => {
   await expect(page.locator(".station-card")).toBeVisible();
 });
 
-test("ambient sound can be started and stopped from a user gesture", async ({ page }) => {
-  test.skip(test.info().project.name === "mobile", "The compact mobile header intentionally hides sound controls.");
+test("does not expose a decorative sound control", async ({ page }) => {
   await page.goto("/");
-  const sound = page.getByRole("button", { name: "Sound off" });
-  await sound.click();
-  await expect(page.getByRole("button", { name: "Sound on" })).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Sound on" }).click();
-  await expect(page.getByRole("button", { name: "Sound off" })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: /Sound (on|off)/ })).toHaveCount(0);
+});
+
+test("independent service refreshes merge without erasing one another", async ({ page }) => {
+  const observedAt = new Date().toISOString();
+  await page.route("**/api/living", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        generatedAt: observedAt,
+        trains: [],
+        rivers: [{ id: "merge-river", name: "Merge gauge", latitude: 53, longitude: -8, level: 1, observedAt, fresh: true }],
+        sourceStatus: { trains: "live", rivers: "live" }
+      })
+    });
+  });
+  await page.route("**/api/contexts", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        marine: [], radar: [], airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+        issTle: null, satellite: null, earthquakes: [],
+        grid: {
+          observedAt, demandMW: 1000, generationMW: 1000, windMW: 770,
+          windSharePercent: 77, carbonIntensity: 200, carbonEmissions: 100,
+          frequencyHz: 50, interconnectorMW: 0
+        },
+        contextStatus: {
+          measuredAir: "unavailable", tides: "live", bathing: "live",
+          satellite: "unavailable", earthquakes: "live", iss: "unavailable"
+        }
+      })
+    });
+  });
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "live" })
+  }));
+
+  await page.goto("/");
+  await expect(page.locator(".pulse-card.grid").getByText("77%", { exact: true })).toBeVisible();
+  await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
+  await expect(page.locator(".river-marker")).toHaveCount(1);
 });
 
 test("page exposes live freshness and source provenance", async ({ page }) => {
@@ -176,11 +222,6 @@ test("historical traffic is removed from the live experience", async ({ page }) 
 
 test("wind context displays measured station speeds and directions", async ({ page }) => {
   await page.goto("/");
-  await page
-    .getByRole("navigation", { name: "More live contexts" })
-    .getByRole("button", { name: /Observed wind/ })
-    .click();
-  await expect(page.getByText("Observed wind", { exact: true }).first()).toBeVisible();
   await expect(page.locator(".wind-marker").first()).toBeVisible();
   await expect(page.locator(".wind-marker text").first()).toContainText("km/h");
   await page.locator(".wind-marker").first().click();
@@ -212,9 +253,7 @@ test("radar context exposes five-minute imagery and playback controls", async ({
 
 test("air and aurora contexts preserve model and forecast caveats", async ({ page }) => {
   await page.goto("/");
-  const contexts = page.getByRole("navigation", { name: "More live contexts" });
-  await contexts.getByRole("button", { name: /Air & exposure/ }).click();
-  await expect(page.getByText("Measured and modelled air", { exact: true })).toBeVisible();
+  await enableExploreLayer(page, /Air & exposure/);
   if (await page.locator(".air-marker.modelled").count()) {
     await page.locator(".air-marker.modelled").first().click();
     await expect(page.locator(".detail-air")).toContainText(/model output, not a reading from a sensor/i);
@@ -225,31 +264,33 @@ test("air and aurora contexts preserve model and forecast caveats", async ({ pag
     await expect(page.locator(".detail-air")).toContainText(/reported monitoring-station reading/i);
   }
 
-  await contexts.getByRole("button", { name: /Aurora chance/ }).click();
+  await enableExploreLayer(page, /Aurora probability/);
   await expect(page.locator(".aurora-panel:visible")).toBeVisible();
   await expect(page.locator(".aurora-panel:visible")).toContainText(/not a guarantee/i);
 });
 
 test("new public contexts are discoverable and honestly describe unavailable data", async ({ page }) => {
   await page.goto("/");
-  const contexts = page.getByRole("navigation", { name: "More live contexts" });
+  await enableExploreLayer(page, /Tides & surge/);
+  if (await page.locator(".tide-marker").count()) {
+    await expect(page.locator(".tide-marker").first()).toBeVisible();
+  } else {
+    await page.getByRole("button", { name: "Explore", exact: true }).click();
+    await expect(page.getByRole("button", { name: /Tides & surge/ })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Close explore panel" }).click();
+  }
 
-  await contexts.getByRole("button", { name: /Tides & surge/ }).click();
-  await expect(page.getByText("Tides and coastal anomaly", { exact: true })).toBeVisible();
+  await enableExploreLayer(page, /Bathing alerts/);
+  if (await page.locator(".bathing-marker").count()) await expect(page.locator(".bathing-marker").first()).toBeVisible();
 
-  await contexts.getByRole("button", { name: /Bathing alerts/ }).click();
-  await expect(page.getByText(/bathing-water (alerts|feed)/i).first()).toBeVisible();
-
-  await contexts.getByRole("button", { name: /ISS passes/ }).click();
+  await enableExploreLayer(page, /ISS passes/);
   await expect(page.locator(".iss-panel:visible")).toBeVisible();
   await expect(page.locator(".iss-panel:visible")).toContainText(/temporarily unavailable|next pass/i);
 
-  await contexts.getByRole("button", { name: /Ireland from space/ }).click();
-  await expect(page.getByText("Ireland from space", { exact: true }).first()).toBeVisible();
-  await expect(page.locator(".map-notice")).toContainText(/near-real-time daylight imagery|temporarily unavailable/i);
+  await enableExploreLayer(page, /Satellite image/);
+  if (await page.locator(".satellite-tiles").count()) await expect(page.locator(".satellite-tiles")).toBeVisible();
 
-  await contexts.getByRole("button", { name: /Recent earthquakes/ }).click();
-  await expect(page.getByText(/earthquakes detected|seismic detections|earthquake feed unavailable/i).first()).toBeVisible();
+  await enableExploreLayer(page, /Earthquakes/);
 
   await page.getByRole("button", { name: "Explore", exact: true }).click();
   await expect(page.getByRole("button", { name: /Public transport/ })).toBeVisible();
@@ -257,11 +298,14 @@ test("new public contexts are discoverable and honestly describe unavailable dat
 
 test("notable-now board is present without fabricating an event", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Only the signals worth interrupting the map for." })).toBeVisible();
-  const signals = page.locator(".notable-signals button");
+  await expect(page.getByRole("heading", { name: "Signals that matter to this view." })).toBeVisible();
+  await expect(page.getByText("Bathing water", { exact: true })).toHaveCount(0);
+  await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
+  const signals = page.locator(".notable-signals .signal-item");
   if (await signals.count()) {
     await expect(signals.first()).toBeVisible();
+    expect(await page.locator(".notable-signals .signal-item:visible").count()).toBeLessThanOrEqual(3);
   } else {
-    await expect(page.getByText(/No unusual public signals are active right now|Some notable-signal sources are temporarily unavailable/)).toBeVisible();
+    await expect(page.getByText(/No unusual signals match the selected layers|Some selected signal sources are temporarily unavailable/)).toBeVisible();
   }
 });

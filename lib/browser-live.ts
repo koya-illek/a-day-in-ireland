@@ -28,6 +28,24 @@ const numeric = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const fetchWithRetry = async (url: string, timeoutMs: number) => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeoutMs + attempt * 5_000)
+      });
+      if (response.ok || response.status < 500) return response;
+      lastError = new Error(`${url} returned ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 600));
+  }
+  throw lastError instanceof Error ? lastError : new Error(`${url} could not be refreshed`);
+};
+
 function timestamp(date: string, time: string) {
   const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(date);
   if (!match) return null;
@@ -138,10 +156,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
 
 export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveSnapshot> {
   try {
-    const response = await fetch("/api/living", {
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000)
-    });
+    const response = await fetchWithRetry("/api/living", 10_000);
     if (!response.ok) return previous;
     const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers"> & {
       generatedAt: string;
@@ -175,14 +190,8 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
 export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
   try {
     const [contextsResult, transitResult] = await Promise.allSettled([
-      fetch("/api/contexts", {
-        cache: "no-store",
-        signal: AbortSignal.timeout(15_000)
-      }),
-      fetch("/api/transit", {
-        cache: "no-store",
-        signal: AbortSignal.timeout(15_000)
-      })
+      fetchWithRetry("/api/contexts", 15_000),
+      fetchWithRetry("/api/transit", 15_000)
     ]);
     const contextsResponse = contextsResult.status === "fulfilled" ? contextsResult.value : null;
     const transitResponse = transitResult.status === "fulfilled" ? transitResult.value : null;
@@ -210,23 +219,45 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       if (measured.length) {
         airQuality = [...measured, ...airQuality.filter((reading) => reading.source !== "measured")];
         contextStatus = { ...contextStatus, measuredAir: "live" };
+      } else {
+        const retainedMeasured = previous.airQuality.filter((reading) =>
+          reading.source === "measured" &&
+          Date.now() - new Date(reading.observedAt).getTime() < 6 * 60 * 60_000
+        );
+        airQuality = [...retainedMeasured, ...airQuality.filter((reading) => reading.source !== "measured")];
       }
     }
+    const contextUnavailable = (name: keyof LiveSnapshot["contextStatus"]) =>
+      contextStatus[name] === "unavailable";
+    const transitStatus = transit.transitStatus ?? previous.transitStatus;
+    const transitVehicles = transitStatus === "live" && Array.isArray(transit.transit)
+      ? transit.transit
+      : previous.transit.filter((vehicle) =>
+          Date.now() - new Date(vehicle.observedAt).getTime() < 5 * 60_000
+        );
     return {
       ...previous,
-      marine: Array.isArray(next.marine) ? next.marine : previous.marine,
-      radar: Array.isArray(next.radar) ? next.radar : previous.radar,
-      grid: next.grid === null || typeof next.grid === "object" ? next.grid : previous.grid,
+      marine: Array.isArray(next.marine) && next.marine.length ? next.marine : previous.marine,
+      radar: Array.isArray(next.radar) && next.radar.length ? next.radar : previous.radar,
+      grid: next.grid && typeof next.grid === "object" ? next.grid : previous.grid,
       airQuality,
-      aurora: next.aurora === null || typeof next.aurora === "object" ? next.aurora : previous.aurora,
-      tides: Array.isArray(next.tides) ? next.tides : previous.tides,
-      bathingAlerts: Array.isArray(next.bathingAlerts) ? next.bathingAlerts : previous.bathingAlerts,
-      iss,
-      issTle: next.issTle === null || typeof next.issTle === "object" ? next.issTle : previous.issTle,
-      satellite: next.satellite === null || typeof next.satellite === "object" ? next.satellite : previous.satellite,
-      earthquakes: Array.isArray(next.earthquakes) ? next.earthquakes : previous.earthquakes,
-      transit: Array.isArray(transit.transit) ? transit.transit : previous.transit,
-      transitStatus: transit.transitStatus ?? previous.transitStatus,
+      aurora: next.aurora && typeof next.aurora === "object" ? next.aurora : previous.aurora,
+      tides: !contextUnavailable("tides") && Array.isArray(next.tides) ? next.tides : previous.tides,
+      bathingAlerts: !contextUnavailable("bathing") && Array.isArray(next.bathingAlerts)
+        ? next.bathingAlerts
+        : previous.bathingAlerts,
+      iss: contextUnavailable("iss") ? previous.iss : iss,
+      issTle: !contextUnavailable("iss") && (next.issTle === null || typeof next.issTle === "object")
+        ? next.issTle
+        : previous.issTle,
+      satellite: !contextUnavailable("satellite") && next.satellite && typeof next.satellite === "object"
+        ? next.satellite
+        : previous.satellite,
+      earthquakes: !contextUnavailable("earthquakes") && Array.isArray(next.earthquakes)
+        ? next.earthquakes
+        : previous.earthquakes,
+      transit: transitVehicles,
+      transitStatus,
       contextStatus
     };
   } catch {

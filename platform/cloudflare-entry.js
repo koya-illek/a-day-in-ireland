@@ -146,6 +146,45 @@ const staticResponse = async (request) => {
   });
 };
 
+const withCacheHeaders = (response, maxAge, state) => {
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", `public, max-age=${maxAge}`);
+  headers.set("x-island-cache", state);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+};
+
+const cachedApiResponse = async (name, freshSeconds, staleSeconds, context, producer) => {
+  const cache = caches.default;
+  const freshKey = new Request(`https://day.illek.ie/__edge-cache/${name}/fresh`);
+  const staleKey = new Request(`https://day.illek.ie/__edge-cache/${name}/stale`);
+  const fresh = await cache.match(freshKey);
+  if (fresh) return withCacheHeaders(fresh, freshSeconds, "fresh");
+
+  const refresh = async () => {
+    const response = await producer();
+    if (response.ok) {
+      const freshCopy = withCacheHeaders(response.clone(), freshSeconds, "fresh");
+      const staleCopy = withCacheHeaders(response.clone(), staleSeconds, "stale");
+      await Promise.all([
+        cache.put(freshKey, freshCopy),
+        cache.put(staleKey, staleCopy)
+      ]);
+    }
+    return response;
+  };
+
+  const stale = await cache.match(staleKey);
+  if (stale) {
+    context.waitUntil(refresh().catch((error) => console.error(`${name} background refresh failed`, error)));
+    return withCacheHeaders(stale, 30, "stale");
+  }
+  return refresh();
+};
+
 const cloudflareWorker = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
@@ -160,9 +199,11 @@ const cloudflareWorker = {
       context.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
     }
-    if (url.pathname === "/api/living") return livingResponse(env);
+    if (url.pathname === "/api/living") {
+      return cachedApiResponse("living", 60, 3_600, context, () => livingResponse(env));
+    }
     if (url.pathname === "/api/contexts") {
-      return apiWorker.fetch(request, env);
+      return cachedApiResponse("contexts", 300, 3_600, context, () => apiWorker.fetch(request, env));
     }
     if (request.method === "GET" || request.method === "HEAD") return staticResponse(request);
     return new Response("Method not allowed", {

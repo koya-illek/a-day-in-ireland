@@ -30,6 +30,7 @@ The Cloudflare production architecture uses:
 - A Worker custom domain on `day.illek.ie` that serves the API and edge-caches the Pages origin. This lets Cloudflare provision DNS without a separate DNS-write credential.
 - A SQLite-backed Durable Object as the single global NTA refresh coordinator.
 - A 65-second upstream refresh floor and 60-second edge response cache, satisfying the NTA token limit across Cloudflare locations.
+- Independent weather, living and context state merges, two-attempt browser refreshes, and one-hour stale edge fallbacks prevent a single slow upstream from clearing otherwise healthy layers.
 - Browser-side EEA monitoring-station retrieval, avoiding heavy CSV processing within the Workers Free CPU allowance.
 - Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error.
 

@@ -484,13 +484,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [selected, setSelected] = useState<Selection | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<"weather" | "movement" | "water" | "all" | "custom">("weather");
-  const [sound, setSound] = useState(false);
+  const [servicesRefreshing, setServicesRefreshing] = useState(true);
+  const [showAllNotables, setShowAllNotables] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => new Date(initialSnapshot.generatedAt));
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
   const [radarPlaying, setRadarPlaying] = useState(false);
   const [mapView, setMapView] = useState({ scale: 1, x: 0, y: 0 });
-  const audioRef = useRef<AudioContext | null>(null);
+  const snapshotRef = useRef(initialSnapshot);
   const mapRef = useRef<SVGSVGElement | null>(null);
   const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
   const mapGestureRef = useRef<{ center: { x: number; y: number }; distance: number } | null>(null);
@@ -499,36 +500,73 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useEffect(() => {
     const clock = window.setInterval(() => setNow(new Date()), 1000);
-    const update = () => {
+    const commit = (merge: (current: LiveSnapshot) => LiveSnapshot) => {
       setSnapshot((current) => {
-        void refreshWeather(current).then((next) => {
-          setSnapshot(next);
-          setLastUpdated(new Date(next.generatedAt));
-        });
-        return current;
+        const next = merge(current);
+        snapshotRef.current = next;
+        return next;
       });
     };
-    const updateLivingLayers = () => {
-      setSnapshot((current) => {
-        void refreshLivingLayers(current).then(setSnapshot);
-        return current;
-      });
+    const update = async () => {
+      const next = await refreshWeather(snapshotRef.current);
+      commit((current) => ({
+        ...current,
+        generatedAt: next.generatedAt,
+        stations: next.stations,
+        warnings: next.warnings,
+        timeline: next.timeline,
+        summary: {
+          ...current.summary,
+          warmest: next.summary.warmest,
+          wettest: next.summary.wettest,
+          windiest: next.summary.windiest,
+          reporting: next.summary.reporting
+        }
+      }));
+      setLastUpdated(new Date(next.generatedAt));
     };
-    const updateCurrentContexts = () => {
-      setSnapshot((current) => {
-        void refreshCurrentContexts(current).then((next) => {
-          setSnapshot(next);
-          setRadarFrameIndex(Math.max(0, next.radar.length - 1));
-        });
-        return current;
-      });
+    const updateLivingLayers = async () => {
+      const next = await refreshLivingLayers(snapshotRef.current);
+      commit((current) => ({
+        ...current,
+        trains: next.trains,
+        rivers: next.rivers,
+        summary: {
+          ...current.summary,
+          runningTrains: next.summary.runningTrains,
+          riverStations: next.summary.riverStations
+        }
+      }));
     };
-    update();
-    updateLivingLayers();
-    updateCurrentContexts();
-    const refresh = window.setInterval(update, 5 * 60_000);
-    const livingRefresh = window.setInterval(updateLivingLayers, 60_000);
-    const contextRefresh = window.setInterval(updateCurrentContexts, 5 * 60_000);
+    const updateCurrentContexts = async () => {
+      const next = await refreshCurrentContexts(snapshotRef.current);
+      commit((current) => ({
+        ...current,
+        marine: next.marine,
+        radar: next.radar,
+        grid: next.grid,
+        airQuality: next.airQuality,
+        aurora: next.aurora,
+        tides: next.tides,
+        bathingAlerts: next.bathingAlerts,
+        iss: next.iss,
+        issTle: next.issTle,
+        satellite: next.satellite,
+        earthquakes: next.earthquakes,
+        transit: next.transit,
+        transitStatus: next.transitStatus,
+        contextStatus: next.contextStatus
+      }));
+      setRadarFrameIndex(Math.max(0, next.radar.length - 1));
+    };
+    const refreshInitial = async () => {
+      await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts()]);
+      setServicesRefreshing(false);
+    };
+    void refreshInitial();
+    const refresh = window.setInterval(() => void update(), 5 * 60_000);
+    const livingRefresh = window.setInterval(() => void updateLivingLayers(), 60_000);
+    const contextRefresh = window.setInterval(() => void updateCurrentContexts(), 5 * 60_000);
     return () => {
       window.clearInterval(clock);
       window.clearInterval(refresh);
@@ -538,6 +576,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, []);
 
   useEffect(() => {
+    setShowAllNotables(false);
+  }, [layers]);
+
+  useEffect(() => {
     if (!radarPlaying || !layers.has("radar") || snapshot.radar.length < 2) return;
     const animation = window.setInterval(() => {
       setRadarFrameIndex((index) => (index + 1) % snapshot.radar.length);
@@ -545,58 +587,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     return () => window.clearInterval(animation);
   }, [layers, radarPlaying, snapshot.radar.length]);
 
-  useEffect(() => {
-    return () => {
-      void audioRef.current?.close();
-      audioRef.current = null;
-    };
-  }, []);
-
-  const toggleSound = useCallback(async () => {
-    if (audioRef.current) {
-      await audioRef.current.close();
-      audioRef.current = null;
-      setSound(false);
-      return;
-    }
-    try {
-      const context = new window.AudioContext();
-      const master = context.createGain();
-      const lowpass = context.createBiquadFilter();
-      const base = context.createOscillator();
-      const overtone = context.createOscillator();
-      const overtoneGain = context.createGain();
-      const pulse = context.createOscillator();
-      const pulseDepth = context.createGain();
-
-      base.type = "sine";
-      base.frequency.value = 146.83 + Math.min(22, (snapshot.summary.windiest?.windSpeed ?? 0) / 2);
-      overtone.type = "sine";
-      overtone.frequency.value = base.frequency.value * 1.5;
-      overtoneGain.gain.value = .28;
-      pulse.type = "sine";
-      pulse.frequency.value = .09;
-      pulseDepth.gain.value = .008;
-      lowpass.type = "lowpass";
-      lowpass.frequency.value = 520;
-      master.gain.value = .032;
-
-      pulse.connect(pulseDepth).connect(master.gain);
-      base.connect(lowpass);
-      overtone.connect(overtoneGain).connect(lowpass);
-      lowpass.connect(master).connect(context.destination);
-      base.start();
-      overtone.start();
-      pulse.start();
-      void context.resume();
-      audioRef.current = context;
-      setSound(true);
-    } catch {
-      void audioRef.current?.close();
-      audioRef.current = null;
-      setSound(false);
-    }
-  }, [snapshot.summary.windiest?.windSpeed]);
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -668,10 +658,29 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     .sort((a, b) => Math.abs(b.surge ?? 0) - Math.abs(a.surge ?? 0))[0] ?? null;
   const largestEarthquake = [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null;
   const visibleIssPass = snapshot.iss?.passes.find((pass) => pass.visible) ?? null;
-  const notableSourcesLive = snapshot.contextStatus.bathing === "live" &&
-    snapshot.contextStatus.tides === "live" &&
-    snapshot.contextStatus.earthquakes === "live" &&
-    snapshot.contextStatus.iss === "live";
+  const showWeatherNotable = layers.has("warnings");
+  const showSeaNotables = layers.has("sea") || layers.has("bathing") || layers.has("tides");
+  const showEarthquakeNotable = layers.has("earthquakes");
+  const showIssNotable = layers.has("iss");
+  const hasVisibleNotable =
+    Boolean(showWeatherNotable && activeWarning) ||
+    Boolean(showSeaNotables && snapshot.bathingAlerts.length) ||
+    Boolean(showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) ||
+    Boolean(showEarthquakeNotable && largestEarthquake) ||
+    Boolean(showIssNotable && visibleIssPass);
+  const notableItemCount =
+    (showWeatherNotable && activeWarning ? 1 : 0) +
+    (showSeaNotables ? snapshot.bathingAlerts.length : 0) +
+    (showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
+    (showEarthquakeNotable && largestEarthquake ? 1 : 0) +
+    (showIssNotable && visibleIssPass ? 1 : 0);
+  const selectedNotableSourceStates = [
+    showSeaNotables ? snapshot.contextStatus.bathing : null,
+    showSeaNotables ? snapshot.contextStatus.tides : null,
+    showEarthquakeNotable ? snapshot.contextStatus.earthquakes : null,
+    showIssNotable ? snapshot.contextStatus.iss : null
+  ].filter((status): status is "live" | "unavailable" => status !== null);
+  const notableSourcesLive = selectedNotableSourceStates.every((status) => status === "live");
   const liveServiceCount = [
     snapshot.stations.length > 0,
     snapshot.trains.length > 0,
@@ -948,7 +957,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, []);
 
   return (
-    <main className={`experience ${isNight ? "is-night" : ""}`} data-sound={sound}>
+    <main className={`experience ${isNight ? "is-night" : ""}`}>
       <a className="skip-link" href="#live-map">Skip to live map</a>
       <header className="topbar">
         <a className="brand" href="#" aria-label="A Day in Ireland, home">
@@ -966,9 +975,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <time>{formatTime(lastUpdated)}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
-          <button className="icon-button" onClick={toggleSound} aria-pressed={sound}>
-            {sound ? "Sound on" : "Sound off"}
-          </button>
           <button className="panel-button" onClick={() => setPanelOpen((value) => !value)} aria-expanded={panelOpen}>
             Explore <span aria-hidden="true">⌁</span>
           </button>
@@ -979,7 +985,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <aside className="section-rail" aria-label="Live view summary">
           <div className="rail-status">
             <span className={`live-dot ${snapshot.sourceStatus}`} />
-            <span><b>Live systems</b><small>{liveServiceCount} services connected</small></span>
+            <span><b>Live systems</b><small>{servicesRefreshing ? "Refreshing services…" : `${liveServiceCount} services connected`}</small></span>
           </div>
           <nav aria-label="Map view shortcuts">
             <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
@@ -1084,7 +1090,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               data-scale={mapView.scale.toFixed(2)}
               transform={`translate(${mapView.x} ${mapView.y}) scale(${mapView.scale})`}
             >
-            <circle cx={sunX} cy={sunY} r="135" fill="url(#sunGlow)" className="sun-glow" />
+            <path className="day-arc" d="M120 145 Q500 -65 880 145" />
+            <circle cx={sunX} cy={sunY} r="82" fill="url(#sunGlow)" className="sun-glow" />
+            <circle cx={sunX} cy={sunY} r="7" className="sun-core" />
             {layers.has("aurora") && (
               <path
                 className="aurora-curtain"
@@ -1445,35 +1453,40 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <section className="notable-now" aria-labelledby="notable-heading">
         <div>
           <p className="eyebrow">Notable now</p>
-          <h2 id="notable-heading">Only the signals worth interrupting the map for.</h2>
+          <h2 id="notable-heading">Signals that matter to this view.</h2>
         </div>
-        <div className="notable-signals">
-          {activeWarning && <button onClick={() => focusContext("warnings")}><span>Weather</span><b>{activeWarning.headline}</b><small>{activeWarning.level} notice</small></button>}
-          {snapshot.bathingAlerts.map((alert) => (
-            <button key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
+        <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`}>
+          {showWeatherNotable && activeWarning && <button className="signal-item" onClick={() => focusContext("warnings")}><span>Weather</span><b>{activeWarning.headline}</b><small>{activeWarning.level} notice</small></button>}
+          {showSeaNotables && snapshot.bathingAlerts.map((alert) => (
+            <button className="signal-item" key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
               <span>Bathing water</span><b>{alert.name}</b><small>{alert.restriction}</small>
             </button>
           ))}
-          {unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
-            <button onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
+          {showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
+            <button className="signal-item" onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
               <span>Sea-level anomaly</span><b>{unusualTide.name}</b><small>{Math.abs(unusualTide.surge ?? 0).toFixed(2)} m {Number(unusualTide.surge) >= 0 ? "above" : "below"} modelled tide</small>
             </button>
           )}
-          {largestEarthquake && (
-            <button onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
+          {showEarthquakeNotable && largestEarthquake && (
+            <button className="signal-item" onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
               <span>Seismic detection</span><b>M {largestEarthquake.magnitude.toFixed(1)} · {largestEarthquake.place}</b><small>{formatDate(new Date(largestEarthquake.observedAt))}</small>
             </button>
           )}
-          {visibleIssPass && (
-            <button onClick={() => focusContext("iss")}>
+          {showIssNotable && visibleIssPass && (
+            <button className="signal-item" onClick={() => focusContext("iss")}>
               <span>Night sky</span><b>ISS pass at {formatTime(new Date(visibleIssPass.startsAt))}</b><small>{formatDate(new Date(visibleIssPass.startsAt))} · up to {visibleIssPass.maxElevation.toFixed(0)}°</small>
             </button>
           )}
-          {!activeWarning && !snapshot.bathingAlerts.length && !(unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) && !largestEarthquake && !visibleIssPass && notableSourcesLive && (
-            <p className="all-quiet"><span className="live-dot live" />No unusual public signals are active right now.</p>
+          {!hasVisibleNotable && notableSourcesLive && (
+            <p className="all-quiet"><span className="live-dot live" />No unusual signals match the selected layers.</p>
           )}
-          {!activeWarning && !snapshot.bathingAlerts.length && !(unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) && !largestEarthquake && !visibleIssPass && !notableSourcesLive && (
-            <p className="all-quiet"><span className="live-dot partial" />Some notable-signal sources are temporarily unavailable.</p>
+          {!hasVisibleNotable && !notableSourcesLive && (
+            <p className="all-quiet"><span className="live-dot partial" />Some selected signal sources are temporarily unavailable.</p>
+          )}
+          {notableItemCount > 3 && (
+            <button className="notable-more" onClick={() => setShowAllNotables((current) => !current)}>
+              {showAllNotables ? "Show fewer" : `View ${notableItemCount - 3} more`}
+            </button>
           )}
         </div>
       </section>
@@ -1507,42 +1520,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </button>
       </section>
 
-      <nav className="context-actions" aria-label="More live contexts">
-        <button onClick={() => focusContext("wind")}>
-          <span>↝</span><b>Observed wind</b><small>{snapshot.summary.windiest?.windSpeed ?? "—"} km/h strongest shown</small><i>View arrows →</i>
-        </button>
-        <button onClick={() => focusContext("air")}>
-          <span>◌</span><b>Air & exposure</b><small>{snapshot.airQuality.filter((item) => item.source === "measured").length} measured · {snapshot.airQuality.filter((item) => item.source === "modelled").length} modelled</small><i>Explore air →</i>
-        </button>
-        <button onClick={() => focusContext("aurora")}>
-          <span>✦</span><b>Aurora chance</b><small>{snapshot.aurora ? `${snapshot.aurora.probability}% overhead probability` : "Guidance unavailable"}</small><i>Look north →</i>
-        </button>
-        <button onClick={() => focusContext("warnings")}>
-          <span>△</span><b>Weather notices</b><small>{activeWarning ? `${activeWarning.level}: ${activeWarning.headline}` : "No active warning"}</small><i>View context →</i>
-        </button>
-        <button onClick={() => focusContext("tides")}>
-          <span>≋</span><b>Tides & surge</b><small>{snapshot.contextStatus.tides === "unavailable" ? "Feed unavailable" : `${snapshot.tides.length} fresh coastal gauges`}</small><i>Follow the coast →</i>
-        </button>
-        <button onClick={() => focusContext("bathing")}>
-          <span>!</span><b>Bathing alerts</b><small>{snapshot.contextStatus.bathing === "unavailable" ? "Feed unavailable" : snapshot.bathingAlerts.length ? `${snapshot.bathingAlerts.length} active EPA alerts` : "No active EPA alert"}</small><i>Check the water →</i>
-        </button>
-        <button onClick={() => focusContext("iss")}>
-          <span>◒</span><b>ISS passes</b><small>{snapshot.iss?.passes[0] ? `Next ${formatDate(new Date(snapshot.iss.passes[0].startsAt))} at ${formatTime(new Date(snapshot.iss.passes[0].startsAt))}` : "Calculating passes"}</small><i>Look up →</i>
-        </button>
-        <button onClick={() => focusContext("satellite")}>
-          <span>◍</span><b>Ireland from space</b><small>{snapshot.satellite ? "Latest complete daylight pass" : "Imagery unavailable"}</small><i>View satellite →</i>
-        </button>
-        <button onClick={() => focusContext("earthquakes")}>
-          <span>⌁</span><b>Recent earthquakes</b><small>{snapshot.contextStatus.earthquakes === "unavailable" ? "Feed unavailable" : snapshot.earthquakes.length ? `${snapshot.earthquakes.length} detected nearby` : "None in the past week"}</small><i>View detections →</i>
-        </button>
-      </nav>
-
       <section className="dayline" aria-label="Today so far">
         <div className="dayline-heading">
           <div><p className="eyebrow">Today so far</p><h2>The shape of the day</h2></div>
-          <p>Hourly observations from reporting Met Éireann stations.</p>
+          <p>Bar height is average temperature; cyan marks hours with observed rain.</p>
         </div>
-        <div className="timeline-chart">
+        <div className="timeline-legend" aria-label="Chart legend">
+          <span><i className="temperature" />Average temperature</span>
+          <span><i className="rain" />Observed rain</span>
+        </div>
+        <div className="timeline-chart" role="img" aria-label="Hourly average temperature and observed rainfall across reporting Met Éireann stations">
           {snapshot.timeline.length === 0 && (
             <p className="timeline-empty">The day is just beginning. Hourly observations will gather here as stations report.</p>
           )}
