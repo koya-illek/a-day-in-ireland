@@ -188,12 +188,27 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       >
     >;
     const iss = next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : previous.iss;
+    let airQuality = Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality;
+    let contextStatus = next.contextStatus && typeof next.contextStatus === "object"
+      ? next.contextStatus
+      : previous.contextStatus;
+    if (
+      window.location.hostname !== "127.0.0.1" &&
+      window.location.hostname !== "localhost" &&
+      !airQuality.some((reading) => reading.source === "measured")
+    ) {
+      const measured = await fetchMeasuredAirFallback();
+      if (measured.length) {
+        airQuality = [...measured, ...airQuality.filter((reading) => reading.source !== "measured")];
+        contextStatus = { ...contextStatus, measuredAir: "live" };
+      }
+    }
     return {
       ...previous,
       marine: Array.isArray(next.marine) ? next.marine : previous.marine,
       radar: Array.isArray(next.radar) ? next.radar : previous.radar,
       grid: next.grid === null || typeof next.grid === "object" ? next.grid : previous.grid,
-      airQuality: Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality,
+      airQuality,
       aurora: next.aurora === null || typeof next.aurora === "object" ? next.aurora : previous.aurora,
       tides: Array.isArray(next.tides) ? next.tides : previous.tides,
       bathingAlerts: Array.isArray(next.bathingAlerts) ? next.bathingAlerts : previous.bathingAlerts,
@@ -203,12 +218,94 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       earthquakes: Array.isArray(next.earthquakes) ? next.earthquakes : previous.earthquakes,
       transit: Array.isArray(next.transit) ? next.transit : previous.transit,
       transitStatus: next.transitStatus ?? previous.transitStatus,
-      contextStatus: next.contextStatus && typeof next.contextStatus === "object"
-        ? next.contextStatus
-        : previous.contextStatus
+      contextStatus
     };
   } catch {
     return previous;
+  }
+}
+
+const eeaTimestamp = (value: string) => {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(value);
+  return match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z` : "";
+};
+
+const webMercatorToLonLat = (x: number, y: number) => ({
+  longitude: x / 6378137 * 180 / Math.PI,
+  latitude: (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI
+});
+
+const measuredAqi = (reading: Pick<LiveSnapshot["airQuality"][number], "pm25" | "pm10" | "nitrogenDioxide" | "ozone">) => {
+  const bands: Array<[number | null, number[]]> = [
+    [reading.pm25, [10, 20, 25, 50, 75]],
+    [reading.pm10, [20, 40, 50, 100, 150]],
+    [reading.nitrogenDioxide, [40, 90, 120, 230, 340]],
+    [reading.ozone, [50, 100, 130, 240, 380]]
+  ];
+  const scores = bands.flatMap(([value, thresholds]) => {
+    if (value === null) return [];
+    const index = thresholds.findIndex((threshold) => value <= threshold);
+    return [index < 0 ? 110 : [10, 30, 50, 70, 90][index]];
+  });
+  return scores.length ? Math.max(...scores) : null;
+};
+
+async function fetchMeasuredAirFallback(): Promise<LiveSnapshot["airQuality"]> {
+  try {
+    const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const stamp = observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
+    const pollutants = [
+      ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
+    ] as const;
+    const results = await Promise.allSettled(pollutants.map(async ([pollutant, field]) => {
+      const response = await fetch(
+        `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
+        { signal: AbortSignal.timeout(9000) }
+      );
+      if (!response.ok) throw new Error(String(response.status));
+      return [field, await response.text()] as const;
+    }));
+    const stations = new Map<string, LiveSnapshot["airQuality"][number]>();
+    for (const result of results) {
+      if (result.status !== "fulfilled") continue;
+      const [field, csv] = result.value;
+      for (const line of csv.split(/\r?\n/).slice(1)) {
+        if (!line.startsWith("SPO.IE.")) continue;
+        const columns = line.split(",");
+        const pollutantValue = numeric(columns[4]);
+        const x = numeric(columns[11]);
+        const y = numeric(columns[12]);
+        if (pollutantValue === null || x === null || y === null) continue;
+        const id = columns[9];
+        const location = webMercatorToLonLat(x, y);
+        const current = stations.get(id) ?? {
+          id: `measured-${id}`,
+          name: columns[10].replace(/^(Ireland|Dublin|Cork|Kerry|Galway|Limerick|Clare|Mayo|Donegal|Wicklow|Kildare|Louth|Sligo|Offaly|Carlow|Cavan|Roscommon|Waterford)\s+/i, ""),
+          ...location,
+          observedAt: eeaTimestamp(columns[2]),
+          europeanAqi: null,
+          pm25: null,
+          pm10: null,
+          nitrogenDioxide: null,
+          ozone: null,
+          uvIndex: null,
+          grassPollen: null,
+          source: "measured",
+          stationClassification: columns[6] || null
+        };
+        current[field] = pollutantValue;
+        stations.set(id, current);
+      }
+    }
+    return [...stations.values()].map((station) => ({
+      ...station,
+      europeanAqi: measuredAqi(station)
+    })).filter((station) =>
+      station.latitude >= 51.2 && station.latitude <= 55.6 &&
+      station.longitude >= -10.8 && station.longitude <= -5.2
+    );
+  } catch {
+    return [];
   }
 }
 

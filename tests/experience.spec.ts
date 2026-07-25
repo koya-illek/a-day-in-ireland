@@ -150,9 +150,14 @@ test("air and aurora contexts preserve model and forecast caveats", async ({ pag
   const contexts = page.getByRole("navigation", { name: "More live contexts" });
   await contexts.getByRole("button", { name: /Air & exposure/ }).click();
   await expect(page.getByText("Measured and modelled air", { exact: true })).toBeVisible();
-  if (await page.locator(".air-marker").count()) {
-    await page.locator(".air-marker").first().click();
+  if (await page.locator(".air-marker.modelled").count()) {
+    await page.locator(".air-marker.modelled").first().click();
     await expect(page.locator(".detail-air")).toContainText(/model output, not a reading from a sensor/i);
+    await page.getByRole("button", { name: "Close map details" }).click({ force: true });
+  }
+  if (await page.locator(".air-marker.measured").count()) {
+    await page.locator(".air-marker.measured").first().click();
+    await expect(page.locator(".detail-air")).toContainText(/reported monitoring-station reading/i);
   }
 
   await contexts.getByRole("button", { name: /Aurora chance/ }).click();

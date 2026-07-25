@@ -348,7 +348,7 @@ const fetchMeasuredAirQuality = async () => {
   const pollutants = [
     ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
   ];
-  const responses = await Promise.all(pollutants.map(async ([pollutant, field]) => {
+  const results = await Promise.allSettled(pollutants.map(async ([pollutant, field]) => {
     const response = await fetch(
       `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
       { cf: { cacheEverything: true, cacheTtl: 1800 } }
@@ -356,6 +356,11 @@ const fetchMeasuredAirQuality = async () => {
     if (!response.ok) throw new Error(`EEA ${pollutant} returned ${response.status}`);
     return [field, await response.text()];
   }));
+  const responses = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+  if (!responses.length) {
+    const reasons = results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []);
+    throw new Error(`EEA measured air unavailable: ${reasons.join("; ")}`);
+  }
   const stations = new Map();
   for (const [field, csv] of responses) {
     for (const line of csv.split(/\r?\n/).slice(1)) {
