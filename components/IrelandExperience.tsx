@@ -519,6 +519,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span>Live and near-real-time observations · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
+        <div className="live-signal-dock" aria-label="Live island signals">
+          <strong><span className="live-dot live" />Live now</strong>
+          <span><time>{formatTime(lastUpdated)}</time>{snapshot.summary.reporting} weather stations reporting</span>
+          <span><time>{formatTime(now)}</time>{snapshot.summary.runningTrains} trains sharing positions</span>
+          <span><time>{formatTime(now)}</time>{snapshot.summary.riverStations} fresh river gauges</span>
+        </div>
+
         {selected && <DetailCard selected={selected} onClose={() => setSelected(null)} />}
       </section>
         </div>
@@ -539,26 +546,29 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       <section className="island-pulse" aria-labelledby="pulse-heading">
         <div className="pulse-intro">
-          <p className="eyebrow">The island in motion</p>
-          <h2 id="pulse-heading">More than weather.</h2>
-          <p>Live movement and water readings add another rhythm to the day. Every number keeps its own timestamp and meaning.</p>
+          <p className="eyebrow">National signal board</p>
+          <h2 id="pulse-heading">Ireland, at a glance.</h2>
+          <p>Movement and water readings alongside the weather. Every signal keeps its own timestamp and meaning.</p>
         </div>
         <button className="pulse-card traffic" onClick={() => showPreset("movement")}>
-          <span>Roads</span>
+          <span><i>↗</i> Road context</span>
           <strong>{snapshot.summary.busiestRoad ? compactNumber.format(snapshot.summary.busiestRoad.averageDailyTraffic) : "—"}</strong>
           <small>vehicles on the busiest displayed counter in a typical day</small>
+          <div className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
           <b>Show movement →</b>
         </button>
         <button className="pulse-card trains" onClick={() => showPreset("movement")}>
-          <span>Rail</span>
+          <span><i>⌁</i> Rail positions</span>
           <strong>{snapshot.summary.runningTrains}</strong>
           <small>trains currently reporting a position across the network</small>
+          <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
         <button className="pulse-card rivers" onClick={() => showPreset("water")}>
-          <span>Rivers</span>
+          <span><i>≈</i> River network</span>
           <strong>{snapshot.summary.riverStations}</strong>
           <small>fresh OPW gauges distilled into a readable national view</small>
+          <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
         </button>
       </section>
@@ -584,6 +594,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
       </section>
 
+      {panelOpen && (
+        <button
+          className="panel-backdrop"
+          aria-label="Close layer panel backdrop"
+          onClick={() => setPanelOpen(false)}
+        />
+      )}
       <aside
         className={`explore-panel ${panelOpen ? "is-open" : ""}`}
         aria-hidden={!panelOpen}

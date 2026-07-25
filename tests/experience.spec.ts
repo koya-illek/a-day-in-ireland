@@ -26,7 +26,7 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
-  await expect(page.getByText("More than weather.")).toBeVisible();
+  await expect(page.getByText("Ireland, at a glance.")).toBeVisible();
   const timelinePoints = await page.locator(".timeline-point").count();
   if (timelinePoints === 0) {
     await expect(page.getByText(/The day is just beginning/)).toBeVisible();
@@ -50,4 +50,20 @@ test("movement and water presets expose the new v2 layers", async ({ page }) => 
   await expect(page.locator(".river-marker").first()).toBeVisible();
   await page.locator(".river-marker").first().click();
   await expect(page.locator(".detail-river")).toBeVisible();
+});
+
+test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".island-shape path")).toHaveCount(1);
+  expect(await page.locator(".road-network path").count()).toBeGreaterThan(50);
+  await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
+  if (test.info().project.name === "desktop") {
+    await expect(page.getByText("Live now", { exact: true })).toBeVisible();
+  }
+
+  const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
+  const map = await page.getByLabel("Live map of Ireland").boundingBox();
+  expect(heading).not.toBeNull();
+  expect(map).not.toBeNull();
+  expect((heading?.y ?? 0) + (heading?.height ?? 0)).toBeLessThan(map?.y ?? 0);
 });
