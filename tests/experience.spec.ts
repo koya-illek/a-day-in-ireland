@@ -67,3 +67,37 @@ test("Stitch map workspace uses an island-only coastline and visible roads", asy
   expect(map).not.toBeNull();
   expect((heading?.y ?? 0) + (heading?.height ?? 0)).toBeLessThan(map?.y ?? 0);
 });
+
+test("context cards focus one layer, explain its freshness and return to the map", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".pulse-card.traffic").click();
+  await expect(page.getByText("Road-volume context", { exact: true })).toBeVisible();
+  await expect(page.locator(".map-notice").getByText(/not live congestion/i)).toBeVisible();
+  await expect(page.locator(".traffic-marker").first()).toBeVisible();
+  await expect(page.locator(".train-marker")).toHaveCount(0);
+
+  await page.locator(".pulse-card.trains").click();
+  await expect(page.getByText("Live rail positions", { exact: true })).toBeVisible();
+  if (await page.locator(".train-marker").count()) {
+    await expect(page.locator(".train-marker").first()).toBeVisible();
+  } else {
+    await expect(page.getByText(/not reporting any train positions/i)).toBeVisible();
+  }
+  await expect(page.locator(".traffic-marker")).toHaveCount(0);
+});
+
+test("sea context exposes clickable buoy details", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "More live contexts" })
+    .getByRole("button", { name: /Sea conditions/ })
+    .click();
+  await expect(page.getByText("Offshore conditions", { exact: true })).toBeVisible();
+  if (await page.locator(".buoy").count()) {
+    await page.locator(".buoy").first().click();
+    await expect(page.locator(".detail-buoy")).toBeVisible();
+    await expect(page.getByText(/Sea temperature/)).toBeVisible();
+  } else {
+    await expect(page.getByText(/No Marine Institute buoy observations/)).toBeVisible();
+  }
+});

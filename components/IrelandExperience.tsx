@@ -28,7 +28,10 @@ type Selection =
   | { type: "station"; item: StationReading }
   | { type: "train"; item: TrainPosition }
   | { type: "river"; item: RiverReading }
-  | { type: "traffic"; item: TrafficCounter };
+  | { type: "traffic"; item: TrafficCounter }
+  | { type: "buoy"; item: LiveSnapshot["marine"][number] };
+
+type ContextFocus = "weather" | "traffic" | "trains" | "rivers" | "sea" | "warnings";
 
 const PLACES = [
   { name: "Dublin", lon: -6.2603, lat: 53.3498 },
@@ -167,14 +170,27 @@ function DetailCard({ selected, onClose }: { selected: Selection; onClose: () =>
       )}
       {type === "traffic" && (
         <>
-          <p className="eyebrow">TII traffic counter · context</p>
+          <p className="eyebrow">TII traffic counter · historical context</p>
           <h2>{item.name.replace("TMU ", "")}</h2>
           <div className="station-temperature">{compactNumber.format(item.averageDailyTraffic)}</div>
           <p>{item.description}</p>
           <dl>
             <div><dt>Typical volume</dt><dd>{item.averageDailyTraffic.toLocaleString("en-IE")} vehicles/day</dd></div>
             <div><dt>Road class</dt><dd>{item.category}</dd></div>
-            <div><dt>Meaning</dt><dd>Latest signed-off AADT</dd></div>
+            <div><dt>Meaning</dt><dd>Historical AADT—not live traffic</dd></div>
+          </dl>
+        </>
+      )}
+      {type === "buoy" && (
+        <>
+          <p className="eyebrow">Marine Institute buoy · near real time</p>
+          <h2>{item.id}</h2>
+          <div className="station-temperature">{item.waveHeight?.toFixed(1) ?? "—"}<small> m waves</small></div>
+          <p>Observed conditions at an offshore buoy. Measurements can be delayed or temporarily unavailable.</p>
+          <dl>
+            <div><dt>Wind</dt><dd>{item.windSpeedKnots?.toFixed(1) ?? "—"} knots</dd></div>
+            <div><dt>Sea temperature</dt><dd>{item.seaTemperature?.toFixed(1) ?? "—"}°C</dd></div>
+            <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
         </>
       )}
@@ -193,6 +209,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [activePreset, setActivePreset] = useState<"weather" | "movement" | "water" | "all" | "custom">("weather");
   const [sound, setSound] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => new Date(initialSnapshot.generatedAt));
+  const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
   const audioRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -291,7 +308,57 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     setLayers(new Set(presets[preset]));
     setActivePreset(preset);
     setSelected(null);
+    setMapNotice(null);
   }, []);
+
+  const focusContext = useCallback((focus: ContextFocus) => {
+    const contextLayers: Record<ContextFocus, Layer[]> = {
+      weather: ["weather", "rain", "wind", "places"],
+      traffic: ["traffic", "places"],
+      trains: ["trains", "places"],
+      rivers: ["rivers", "places"],
+      sea: ["sea", "wind", "places"],
+      warnings: ["warnings", "weather", "places"]
+    };
+    const notices: Record<ContextFocus, { title: string; detail: string }> = {
+      weather: {
+        title: "Weather observations",
+        detail: `${snapshot.summary.reporting} fresh Met Éireann stations. Select a temperature marker for its latest reading.`
+      },
+      traffic: {
+        title: "Road-volume context",
+        detail: `${snapshot.traffic.length} TII counters showing latest signed-off average daily traffic—not live congestion. Select a marker for details.`
+      },
+      trains: {
+        title: "Live rail positions",
+        detail: snapshot.trains.length
+          ? `${snapshot.summary.runningTrains} running trains and ${snapshot.trains.length - snapshot.summary.runningTrains} due to start. Select a train for its direction and status.`
+          : "Iarnród Éireann is not reporting any train positions right now. The map will refresh automatically."
+      },
+      rivers: {
+        title: "Fresh river readings",
+        detail: `${snapshot.summary.riverStations} OPW gauges observed within the last three hours. These are local levels, not flood warnings.`
+      },
+      sea: {
+        title: "Offshore conditions",
+        detail: snapshot.marine.length
+          ? `${snapshot.marine.length} Marine Institute buoys with recent observations. Select a buoy for wave, wind and sea temperature.`
+          : "No Marine Institute buoy observations are fresh enough to display right now."
+      },
+      warnings: {
+        title: activeWarning ? "Active weather notice" : "No active weather warnings",
+        detail: activeWarning?.headline ?? "Met Éireann is not currently publishing a warning for Ireland."
+      }
+    };
+    setLayers(new Set(contextLayers[focus]));
+    setActivePreset("custom");
+    setSelected(null);
+    setMapNotice(notices[focus]);
+    window.requestAnimationFrame(() => {
+      document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [activeWarning, snapshot]);
 
   const toggleLayer = useCallback((layer: Layer) => {
     setActivePreset("custom");
@@ -360,6 +427,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </div>
 
       <section id="live-map" className="map-stage" aria-label="Live map of Ireland">
+        {mapNotice && (
+          <aside className="map-notice" aria-live="polite">
+            <span>Focused view</span>
+            <button onClick={() => setMapNotice(null)} aria-label="Dismiss map context">×</button>
+            <strong>{mapNotice.title}</strong>
+            <p>{mapNotice.detail}</p>
+          </aside>
+        )}
         <nav className="map-presets" aria-label="Map views">
           <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" />Weather</button>
           <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" />Movement</button>
@@ -475,7 +550,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             {layers.has("sea") && snapshot.marine.map((buoy) => {
               const point = projection([buoy.longitude, buoy.latitude]);
               return point ? (
-                <g className="buoy" key={buoy.id} transform={`translate(${point[0]} ${point[1]})`}>
+                <g
+                  className="buoy"
+                  key={buoy.id}
+                  transform={`translate(${point[0]} ${point[1]})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${buoy.id} marine buoy, ${buoy.waveHeight?.toFixed(1) ?? "unknown"} metre waves`}
+                  onClick={() => setSelected({ type: "buoy", item: buoy })}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") setSelected({ type: "buoy", item: buoy });
+                  }}
+                >
                   <circle className="buoy-wave" r={10 + (buoy.waveHeight ?? 0) * 5} />
                   <circle className="buoy-core" r="3" />
                   <text x="8" y="4">{buoy.waveHeight?.toFixed(1) ?? "—"} m</text>
@@ -532,7 +618,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </section>
 
       {activeWarning && layers.has("warnings") && (
-        <aside className={`warning-strip ${activeWarning.level.toLowerCase()}`} aria-label="Active weather warning">
+        <aside id="active-warning" className={`warning-strip ${activeWarning.level.toLowerCase()}`} aria-label="Active weather warning">
           <span>{activeWarning.level}</span>
           <div><b>{activeWarning.headline}</b><small>{activeWarning.description}</small></div>
           <time>Until {new Date(activeWarning.expiry).toLocaleString("en-IE", {
@@ -550,21 +636,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <h2 id="pulse-heading">Ireland, at a glance.</h2>
           <p>Movement and water readings alongside the weather. Every signal keeps its own timestamp and meaning.</p>
         </div>
-        <button className="pulse-card traffic" onClick={() => showPreset("movement")}>
-          <span><i>↗</i> Road context</span>
+        <button className="pulse-card traffic" onClick={() => focusContext("traffic")}>
+          <span><i>↗</i> Historical road context</span>
           <strong>{snapshot.summary.busiestRoad ? compactNumber.format(snapshot.summary.busiestRoad.averageDailyTraffic) : "—"}</strong>
-          <small>vehicles on the busiest displayed counter in a typical day</small>
+          <small>latest signed-off AADT at the busiest displayed TII counter—not current traffic</small>
           <div className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
           <b>Show movement →</b>
         </button>
-        <button className="pulse-card trains" onClick={() => showPreset("movement")}>
+        <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
           <strong>{snapshot.summary.runningTrains}</strong>
           <small>trains currently reporting a position across the network</small>
           <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
-        <button className="pulse-card rivers" onClick={() => showPreset("water")}>
+        <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
           <strong>{snapshot.summary.riverStations}</strong>
           <small>fresh OPW gauges distilled into a readable national view</small>
@@ -572,6 +658,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <b>See the water →</b>
         </button>
       </section>
+
+      <nav className="context-actions" aria-label="More live contexts">
+        <button onClick={() => focusContext("weather")}>
+          <span>☁</span><b>Weather stations</b><small>{snapshot.summary.reporting} reporting now</small><i>View context →</i>
+        </button>
+        <button onClick={() => focusContext("sea")}>
+          <span>⌁</span><b>Sea conditions</b><small>{snapshot.marine.length} recent buoy observations</small><i>View context →</i>
+        </button>
+        <button onClick={() => focusContext("warnings")}>
+          <span>△</span><b>Weather notices</b><small>{activeWarning ? `${activeWarning.level}: ${activeWarning.headline}` : "No active warning"}</small><i>View context →</i>
+        </button>
+      </nav>
 
       <section className="dayline" aria-label="Today so far">
         <div className="dayline-heading">
@@ -621,7 +719,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             ["warnings", "Warnings", "Current official Met Éireann warnings"],
             ["sea", "Sea conditions", "Near-real-time Marine Institute buoy observations"],
             ["trains", "Moving trains", "Current Iarnród Éireann train positions"],
-            ["traffic", "Road traffic", "Latest signed-off average daily volume from TII counters"],
+            ["traffic", "Historical road volume", "Latest signed-off TII AADT; not current traffic or congestion"],
             ["rivers", "River levels", "Latest fresh OPW readings; stale gauges expire automatically"],
             ["places", "Places", "Major towns and cities"]
           ] as Array<[Layer, string, string]>).map(([id, label, detail]) => (
