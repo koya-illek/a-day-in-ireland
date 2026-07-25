@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { geoMercator, geoPath } from "d3-geo";
-import { feature } from "topojson-client";
-import landTopology from "world-atlas/land-50m.json";
+import islandBoundary from "../public/map/island.json";
+import majorRoads from "../public/map/major-roads.json";
 import type {
   LiveSnapshot,
   RiverReading,
@@ -259,15 +259,20 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [panelOpen]);
 
   const projection = useMemo(
-    () => geoMercator().center([-8.05, 53.45]).scale(5000).translate([555, 445]),
+    () => geoMercator().center([-8.05, 53.45]).scale(5350).translate([500, 462]),
     []
   );
-  const landPath = useMemo(() => {
-    const land = feature(
-      landTopology as unknown as Parameters<typeof feature>[0],
-      (landTopology as unknown as { objects: { land: Parameters<typeof feature>[1] } }).objects.land
-    );
-    return geoPath(projection)(land) ?? "";
+  const islandPaths = useMemo(() => {
+    const path = geoPath(projection);
+    return [path(islandBoundary.features[0] as never) ?? ""];
+  }, [projection]);
+  const roadPaths = useMemo(() => {
+    const path = geoPath(projection);
+    return majorRoads.features.map((road) => ({
+      path: path(road as never) ?? "",
+      roadClass: road.properties.class,
+      ref: road.properties.ref
+    }));
   }, [projection]);
   const narrative = nationalNarrative(snapshot, now);
   const daylight = solarProgress(now);
@@ -303,8 +308,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <a className="skip-link" href="#live-map">Skip to live map</a>
       <header className="topbar">
         <a className="brand" href="#" aria-label="A Day in Ireland, home">
-          <span className="brand-mark" aria-hidden="true">É</span>
-          <span><b>A Day in Ireland</b><small>See Ireland happening</small></span>
+          <span className="brand-mark" aria-hidden="true">AI</span>
+          <span><b>A Day in Ireland</b><small>Live island view</small></span>
         </a>
         <div className="live-state" title={`Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}>
           <span className={`live-dot ${snapshot.sourceStatus}`} />
@@ -321,17 +326,38 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </nav>
       </header>
 
-      <section className="hero-copy" aria-labelledby="moment-heading">
-        <p className="eyebrow">{formatDate(now)} · {formatTime(now)} IST</p>
-        <h1 id="moment-heading">{narrative.period}</h1>
-        <p>{narrative.detail}</p>
-        <div className="moment-facts" aria-label="Current national highlights">
-          <span><b>{snapshot.summary.warmest?.temperature ?? "—"}°</b> warmest</span>
-          <span><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b> recent rain</span>
-          <span><b>{snapshot.summary.runningTrains}</b> trains moving</span>
-          <span><b>{snapshot.summary.riverStations}</b> river gauges live</span>
-        </div>
-      </section>
+      <section className="dashboard-shell">
+        <aside className="section-rail" aria-label="Live view summary">
+          <div className="rail-status">
+            <span className={`live-dot ${snapshot.sourceStatus}`} />
+            <span><b>Island online</b><small>{snapshot.summary.reporting} stations reporting</small></span>
+          </div>
+          <nav aria-label="Map view shortcuts">
+            <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
+            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Movement</button>
+            <button className={activePreset === "water" ? "active" : ""} onClick={() => showPreset("water")}><span>≈</span>Water</button>
+            <button className={activePreset === "all" ? "active" : ""} onClick={() => showPreset("all")}><span>⌘</span>All layers</button>
+          </nav>
+          <div className="rail-metrics">
+            <p><span>Warmest</span><strong>{snapshot.summary.warmest?.temperature ?? "—"}°</strong><small>{snapshot.summary.warmest?.name ?? "No report"}</small></p>
+            <p><span>Trains moving</span><strong>{snapshot.summary.runningTrains}</strong><small>Live positions</small></p>
+            <p><span>River gauges</span><strong>{snapshot.summary.riverStations}</strong><small>Fresh readings</small></p>
+          </div>
+        </aside>
+
+        <div className="map-workspace">
+          <div className="workspace-heading">
+            <div>
+              <p className="eyebrow">{formatDate(now)} · {formatTime(now)} IST</p>
+              <h1 id="moment-heading">{narrative.period}</h1>
+              <p>{narrative.detail}</p>
+            </div>
+            <div className="workspace-facts" aria-label="Current national highlights">
+              <span><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b><small>recent rain</small></span>
+              <span><b>{snapshot.traffic.length}</b><small>traffic counters</small></span>
+              <span><b>{snapshot.marine.length}</b><small>marine buoys</small></span>
+            </div>
+          </div>
 
       <section id="live-map" className="map-stage" aria-label="Live map of Ireland">
         <nav className="map-presets" aria-label="Map views">
@@ -363,7 +389,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <stop offset="1" stopColor="#344f45" />
             </linearGradient>
             <filter id="landShadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="18" stdDeviation="16" floodColor="#001311" floodOpacity=".55" />
+              <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#00dbe9" floodOpacity=".22" />
             </filter>
             <clipPath id="viewportClip"><rect width="1000" height="900" rx="42" /></clipPath>
           </defs>
@@ -375,7 +401,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <path key={index} d={`M -40 ${150 + index * 88} Q 230 ${120 + index * 88}, 520 ${155 + index * 88} T 1040 ${140 + index * 88}`} />
               ))}
             </g>
-            <path d={landPath} fill="url(#land)" stroke="#abc093" strokeWidth="1.3" filter="url(#landShadow)" />
+            <g className="island-shape" filter="url(#landShadow)">
+              {islandPaths.map((path, index) => <path key={index} d={path} />)}
+            </g>
+            <g className="road-network" aria-label="Major roads from OpenStreetMap">
+              {roadPaths.map((road, index) => (
+                <path key={`${road.ref}-${index}`} d={road.path} className={road.roadClass} />
+              ))}
+            </g>
             <rect className="night-shade" x={isNight ? 0 : Math.max(0, sunX - 700)} width={isNight ? 1000 : 460} height="900" />
             {layers.has("wind") && (
               <g className="wind-field" aria-hidden="true">
@@ -483,10 +516,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
         <div className="map-caption">
           <span className="compass">N</span>
-          <span>Live and near-real-time observations</span>
+          <span>Live and near-real-time observations · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
         {selected && <DetailCard selected={selected} onClose={() => setSelected(null)} />}
+      </section>
+        </div>
       </section>
 
       {activeWarning && layers.has("warnings") && (
@@ -589,7 +624,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       <footer>
         <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie (OPW), TII and the Marine Institute under CC BY 4.0. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie (OPW), TII and the Marine Institute under CC BY 4.0. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
   );

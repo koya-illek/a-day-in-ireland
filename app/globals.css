@@ -444,3 +444,243 @@ footer b { color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .001ms !important; }
 }
+
+/* Stitch-derived live-map workspace */
+:root {
+  --ink: #dae2fd;
+  --muted: #91a2bd;
+  --green: #4edea3;
+  --sea: #071322;
+  --deep: #050d1b;
+  --panel: rgba(10, 22, 40, .94);
+  --line: rgba(117, 150, 184, .2);
+  --amber: #00dbe9;
+}
+
+body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif; }
+.experience {
+  background:
+    radial-gradient(circle at 69% 33%, rgba(0, 219, 233, .08), transparent 34rem),
+    #050d1b;
+  overflow: clip;
+}
+.topbar {
+  background: rgba(12, 23, 42, .96);
+  border-bottom: 1px solid var(--line);
+  min-height: 4.75rem;
+  padding: .75rem 1.5rem;
+  position: relative;
+}
+.brand-mark {
+  background: rgba(0, 219, 233, .1);
+  border-color: rgba(0, 219, 233, .45);
+  border-radius: .6rem;
+  color: #00f0ff;
+  font-family: "DM Sans", sans-serif;
+  font-size: .7rem;
+  font-weight: 700;
+}
+.brand b { font-family: "DM Sans", sans-serif; font-size: 1rem; font-weight: 600; }
+.brand small, .eyebrow { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+.live-state, .icon-button {
+  background: rgba(18, 32, 54, .8);
+  border-radius: .35rem;
+}
+.panel-button {
+  background: #00dbe9;
+  border: 0;
+  border-radius: .35rem;
+  color: #001b20;
+}
+.dashboard-shell {
+  display: grid;
+  grid-template-columns: 15.5rem minmax(0, 1fr);
+  min-height: calc(100vh - 4.75rem);
+}
+.section-rail {
+  background: #0c172b;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 4.75rem);
+  padding: 1.35rem 1rem;
+}
+.rail-status {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: .7rem;
+  padding: .65rem .6rem 1.4rem;
+}
+.rail-status b, .rail-status small { display: block; }
+.rail-status b { font-size: .75rem; letter-spacing: .04em; }
+.rail-status small { color: #4edea3; font: 600 .61rem ui-monospace, monospace; margin-top: .2rem; text-transform: uppercase; }
+.section-rail nav { display: grid; gap: .35rem; margin-top: 1.3rem; }
+.section-rail nav button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: .35rem;
+  color: #9dacc2;
+  cursor: pointer;
+  display: flex;
+  font: 600 .68rem ui-monospace, monospace;
+  gap: .8rem;
+  letter-spacing: .08em;
+  padding: .78rem .7rem;
+  text-align: left;
+  text-transform: uppercase;
+}
+.section-rail nav button span { color: #bfd0e2; font-size: 1rem; width: 1.1rem; }
+.section-rail nav button:hover, .section-rail nav button.active {
+  background: rgba(0, 219, 233, .09);
+  border-color: rgba(0, 219, 233, .2);
+  color: #4edea3;
+}
+.section-rail nav button.active span { color: #00f0ff; }
+.rail-metrics { border-top: 1px solid var(--line); display: grid; gap: .65rem; margin-top: auto; padding-top: 1rem; }
+.rail-metrics p {
+  background: #101d33;
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  margin: 0;
+  padding: .7rem;
+}
+.rail-metrics span, .rail-metrics small { color: var(--muted); font: .58rem ui-monospace, monospace; text-transform: uppercase; }
+.rail-metrics strong { color: #00e8f5; font: 600 1.05rem ui-monospace, monospace; grid-row: span 2; }
+.rail-metrics small { margin-top: .25rem; }
+.map-workspace { min-width: 0; padding: 1.15rem; }
+.workspace-heading {
+  align-items: end;
+  display: flex;
+  gap: 2rem;
+  justify-content: space-between;
+  margin: 0 auto .8rem;
+  max-width: 92rem;
+}
+.workspace-heading .eyebrow { color: #4edea3; margin-bottom: .35rem; }
+.workspace-heading h1 {
+  font-family: "DM Sans", sans-serif;
+  font-size: clamp(1.6rem, 3vw, 2.8rem);
+  font-weight: 600;
+  letter-spacing: -.04em;
+  line-height: 1;
+  margin: 0;
+}
+.workspace-heading > div > p:last-child { color: var(--muted); font-size: .72rem; margin: .55rem 0 0; max-width: 42rem; }
+.workspace-facts { display: flex; gap: .5rem; }
+.workspace-facts span {
+  background: #101d33;
+  border: 1px solid var(--line);
+  border-radius: .35rem;
+  min-width: 6.7rem;
+  padding: .55rem .65rem;
+}
+.workspace-facts b, .workspace-facts small { display: block; font-family: ui-monospace, monospace; }
+.workspace-facts b { color: #00e8f5; font-size: .85rem; }
+.workspace-facts small { color: var(--muted); font-size: .52rem; margin-top: .15rem; text-transform: uppercase; }
+.map-stage {
+  background: #071426;
+  border: 1px solid rgba(0, 219, 233, .2);
+  border-radius: .5rem;
+  box-shadow: 0 0 2rem rgba(0, 219, 233, .045);
+  height: calc(100vh - 10.7rem);
+  min-height: 37rem;
+}
+.ireland-map {
+  height: 100%;
+  inset: 0;
+  min-width: 0;
+  position: absolute;
+  width: 100%;
+}
+.island-shape { pointer-events: none; }
+.island-shape path {
+  fill: #14263a;
+  stroke: #5a91a6;
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+}
+.road-network { pointer-events: none; }
+.road-network path {
+  fill: none;
+  opacity: .74;
+  stroke: #00cbd9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+  vector-effect: non-scaling-stroke;
+}
+.road-network path.motorway {
+  filter: drop-shadow(0 0 3px rgba(0, 240, 255, .75));
+  opacity: .98;
+  stroke: #00f0ff;
+  stroke-width: 2.4;
+}
+.road-network path.trunk { stroke: #55bdcf; stroke-width: 1.45; }
+.sea-lines path { opacity: .09; stroke: #287b98; }
+.night-shade { fill: #020712; opacity: .24; }
+.is-night .night-shade { opacity: .46; }
+.wind-field path { stroke: #64d8e8; }
+.place circle { fill: #4edea3; }
+.place text { fill: #cce9ee; font-family: ui-monospace, monospace; font-size: 10px; stroke: #071426; }
+.station-marker text { fill: #eafcff; font-family: ui-monospace, monospace; font-size: 11px; stroke: #071426; }
+.station-core { fill: #00e8f5; }
+.station-halo { fill: rgba(0, 219, 233, .13); stroke: rgba(0, 219, 233, .5); }
+.map-presets {
+  background: rgba(10, 24, 43, .94);
+  border-radius: .4rem;
+  bottom: auto;
+  display: none;
+  left: auto;
+  right: 1rem;
+  top: 1rem;
+}
+.map-caption { bottom: .65rem; right: .8rem; z-index: 10; }
+.map-caption a { color: inherit; }
+.compass { background: #0c1a2d; border-radius: .35rem; }
+.station-card {
+  background: rgba(9, 23, 41, .96);
+  border-color: rgba(0, 219, 233, .3);
+  border-radius: .4rem;
+}
+.station-card h2, .station-temperature, .detail-emblem { font-family: "DM Sans", sans-serif; }
+.station-temperature, .detail-emblem { color: #00e8f5; }
+.warning-strip { margin-top: 1rem; }
+.island-pulse, .dayline { max-width: 96rem; }
+.pulse-intro h2, .dayline-heading h2, .pulse-card strong, .panel-heading h2 { font-family: "DM Sans", sans-serif; }
+.pulse-card, .explore-panel { border-radius: .4rem; }
+
+@media (max-width: 900px) {
+  .dashboard-shell { display: block; }
+  .section-rail {
+    border-bottom: 1px solid var(--line);
+    border-right: 0;
+    min-height: 0;
+    padding: .45rem .75rem;
+  }
+  .rail-status, .rail-metrics { display: none; }
+  .section-rail nav { display: flex; margin: 0; overflow-x: auto; }
+  .section-rail nav button { flex: 1 0 auto; justify-content: center; }
+  .map-workspace { padding: .8rem; }
+  .workspace-facts { display: none; }
+  .map-stage { aspect-ratio: 10 / 9; height: auto; min-height: 0; }
+}
+
+@media (max-width: 600px) {
+  .topbar { min-height: 4rem; padding: .55rem .75rem; }
+  .brand small { display: none; }
+  .brand-mark { height: 2.25rem; width: 2.25rem; }
+  .panel-button { padding: .58rem .7rem; }
+  .map-workspace { padding: .7rem; }
+  .workspace-heading { margin-bottom: .65rem; }
+  .workspace-heading h1 { font-size: 1.45rem; }
+  .workspace-heading > div > p:last-child { display: none; }
+  .map-stage { aspect-ratio: 10 / 9; height: auto; min-height: 0; }
+  .ireland-map { bottom: auto; height: 100%; right: auto; top: 0; width: 100%; }
+  .section-rail nav button { font-size: .57rem; padding: .65rem .55rem; }
+  .section-rail nav button span { display: none; }
+  .map-caption { font-size: .5rem; }
+}

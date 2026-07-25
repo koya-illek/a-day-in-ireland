@@ -43,7 +43,10 @@ test("movement and water presets expose the new v2 layers", async ({ page }) => 
     await page.locator(".train-marker").first().click();
     await expect(page.locator(".detail-train")).toBeVisible();
   }
-  await page.getByRole("button", { name: /Water/ }).click();
+  await page
+    .getByRole("navigation", { name: "Map view shortcuts" })
+    .getByRole("button", { name: /Water/ })
+    .click();
   await expect(page.locator(".river-marker").first()).toBeVisible();
   await page.locator(".river-marker").first().click();
   await expect(page.locator(".detail-river")).toBeVisible();
