@@ -546,30 +546,57 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [layers, radarPlaying, snapshot.radar.length]);
 
   useEffect(() => {
-    if (!sound) {
+    return () => {
       void audioRef.current?.close();
       audioRef.current = null;
+    };
+  }, []);
+
+  const toggleSound = useCallback(async () => {
+    if (audioRef.current) {
+      await audioRef.current.close();
+      audioRef.current = null;
+      setSound(false);
       return;
     }
-    const AudioContextClass = window.AudioContext;
-    const context = new AudioContextClass();
-    const oscillator = context.createOscillator();
-    const oscillatorGain = context.createGain();
-    const lowpass = context.createBiquadFilter();
-    oscillator.type = "sine";
-    oscillator.frequency.value = 68 + Math.min(35, snapshot.summary.windiest?.windSpeed ?? 0);
-    oscillatorGain.gain.value = 0.018;
-    lowpass.type = "lowpass";
-    lowpass.frequency.value = 190;
-    oscillator.connect(lowpass).connect(oscillatorGain).connect(context.destination);
-    oscillator.start();
-    audioRef.current = context;
-    return () => {
-      oscillator.stop();
-      void context.close();
+    try {
+      const context = new window.AudioContext();
+      const master = context.createGain();
+      const lowpass = context.createBiquadFilter();
+      const base = context.createOscillator();
+      const overtone = context.createOscillator();
+      const overtoneGain = context.createGain();
+      const pulse = context.createOscillator();
+      const pulseDepth = context.createGain();
+
+      base.type = "sine";
+      base.frequency.value = 146.83 + Math.min(22, (snapshot.summary.windiest?.windSpeed ?? 0) / 2);
+      overtone.type = "sine";
+      overtone.frequency.value = base.frequency.value * 1.5;
+      overtoneGain.gain.value = .28;
+      pulse.type = "sine";
+      pulse.frequency.value = .09;
+      pulseDepth.gain.value = .008;
+      lowpass.type = "lowpass";
+      lowpass.frequency.value = 520;
+      master.gain.value = .032;
+
+      pulse.connect(pulseDepth).connect(master.gain);
+      base.connect(lowpass);
+      overtone.connect(overtoneGain).connect(lowpass);
+      lowpass.connect(master).connect(context.destination);
+      base.start();
+      overtone.start();
+      pulse.start();
+      void context.resume();
+      audioRef.current = context;
+      setSound(true);
+    } catch {
+      void audioRef.current?.close();
       audioRef.current = null;
-    };
-  }, [sound, snapshot.summary.windiest?.windSpeed]);
+      setSound(false);
+    }
+  }, [snapshot.summary.windiest?.windSpeed]);
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -631,7 +658,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [mapView.scale, projection, snapshot.transit]);
   const narrative = nationalNarrative(snapshot, now);
   const daylight = solarProgress(now);
-  const sunX = 120 + daylight * 760;
+  const sunX = 880 - daylight * 760;
   const sunY = 145 - Math.sin(daylight * Math.PI) * 105;
   const currentHour = irelandHour(now);
   const isNight = currentHour < 6 || currentHour >= 21;
@@ -645,6 +672,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     snapshot.contextStatus.tides === "live" &&
     snapshot.contextStatus.earthquakes === "live" &&
     snapshot.contextStatus.iss === "live";
+  const liveServiceCount = [
+    snapshot.stations.length > 0,
+    snapshot.trains.length > 0,
+    snapshot.rivers.length > 0,
+    snapshot.marine.length > 0,
+    snapshot.radar.length > 0,
+    Boolean(snapshot.grid),
+    snapshot.airQuality.length > 0,
+    snapshot.contextStatus.tides === "live",
+    snapshot.contextStatus.bathing === "live",
+    snapshot.contextStatus.satellite === "live",
+    snapshot.contextStatus.earthquakes === "live",
+    snapshot.contextStatus.iss === "live",
+    snapshot.transitStatus === "live",
+    Boolean(snapshot.aurora)
+  ].filter(Boolean).length;
   const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
   const constrainMapView = useCallback((scale: number, x: number, y: number) => {
     const nextScale = Math.min(4, Math.max(1, scale));
@@ -748,7 +791,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const showPreset = useCallback((preset: "weather" | "movement" | "water" | "all") => {
     const presets: Record<typeof preset, Layer[]> = {
       weather: ["weather", "rain", "wind", "warnings", "places"],
-      movement: ["trains", "places"],
+      movement: ["trains", "transit", "places"],
       water: ["rain", "rivers", "sea", "tides", "bathing", "warnings", "places"],
       all: ["weather", "rain", "wind", "warnings", "places", "sea", "trains", "rivers", "radar", "grid", "air", "aurora", "tides", "bathing", "iss", "earthquakes"]
     };
@@ -909,7 +952,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <a className="skip-link" href="#live-map">Skip to live map</a>
       <header className="topbar">
         <a className="brand" href="#" aria-label="A Day in Ireland, home">
-          <span className="brand-mark" aria-hidden="true">AI</span>
+          <span className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path className="brand-sun" d="M11 15a5 5 0 0 1 10 0" />
+              <path className="brand-horizon" d="M5 18h22M8 22h16" />
+            </svg>
+          </span>
           <span><b>A Day in Ireland</b><small>Live island view</small></span>
         </a>
         <div className="live-state" title={`Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}>
@@ -918,7 +966,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <time>{formatTime(lastUpdated)}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
-          <button className="icon-button" onClick={() => setSound((value) => !value)} aria-pressed={sound}>
+          <button className="icon-button" onClick={toggleSound} aria-pressed={sound}>
             {sound ? "Sound on" : "Sound off"}
           </button>
           <button className="panel-button" onClick={() => setPanelOpen((value) => !value)} aria-expanded={panelOpen}>
@@ -931,12 +979,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <aside className="section-rail" aria-label="Live view summary">
           <div className="rail-status">
             <span className={`live-dot ${snapshot.sourceStatus}`} />
-            <span><b>Island online</b><small>{snapshot.summary.reporting} stations reporting</small></span>
+            <span><b>Live systems</b><small>{liveServiceCount} services connected</small></span>
           </div>
           <nav aria-label="Map view shortcuts">
             <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
-            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Rail</button>
+            <button className="rail-extra" onClick={() => focusContext("radar")}><span>◉</span>Rain radar</button>
+            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Transport</button>
             <button className={activePreset === "water" ? "active" : ""} onClick={() => showPreset("water")}><span>≈</span>Water</button>
+            <button className="rail-extra" onClick={() => focusContext("sea")}><span>⌁</span>Sea</button>
+            <button className="rail-extra" onClick={() => focusContext("grid")}><span>ϟ</span>Energy</button>
+            <button className="rail-extra" onClick={() => focusContext("air")}><span>◌</span>Air</button>
             <button className={activePreset === "all" ? "active" : ""} onClick={() => showPreset("all")}><span>⌘</span>All layers</button>
           </nav>
           <div className="rail-metrics">
@@ -955,9 +1007,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <p>{narrative.detail}</p>
             </div>
             <div className="workspace-facts" aria-label="Current national highlights">
-              <span><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b><small>recent rain</small></span>
-              <span><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>grid demand from wind</small></span>
-              <span><b>{snapshot.marine.length}</b><small>marine buoys</small></span>
+              <button onClick={() => focusContext("grid")}><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>demand met by wind</small></button>
+              <button onClick={() => focusContext("sea")}><b>{snapshot.marine.length}</b><small>buoys reporting at sea</small></button>
+              <button onClick={() => focusContext("radar")}><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b><small>recent observed rain</small></button>
             </div>
           </div>
 
@@ -1456,17 +1508,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </section>
 
       <nav className="context-actions" aria-label="More live contexts">
-        <button onClick={() => focusContext("weather")}>
-          <span>☁</span><b>Weather stations</b><small>{snapshot.summary.reporting} reporting now</small><i>View context →</i>
-        </button>
         <button onClick={() => focusContext("wind")}>
           <span>↝</span><b>Observed wind</b><small>{snapshot.summary.windiest?.windSpeed ?? "—"} km/h strongest shown</small><i>View arrows →</i>
-        </button>
-        <button onClick={() => focusContext("radar")}>
-          <span>◉</span><b>Rainfall radar</b><small>{snapshot.radar.length ? `${snapshot.radar.length} five-minute frames` : "Temporarily unavailable"}</small><i>Replay rain →</i>
-        </button>
-        <button onClick={() => focusContext("sea")}>
-          <span>⌁</span><b>Sea conditions</b><small>{snapshot.marine.length} recent buoy observations</small><i>View context →</i>
         </button>
         <button onClick={() => focusContext("air")}>
           <span>◌</span><b>Air & exposure</b><small>{snapshot.airQuality.filter((item) => item.source === "measured").length} measured · {snapshot.airQuality.filter((item) => item.source === "modelled").length} modelled</small><i>Explore air →</i>
@@ -1491,9 +1534,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </button>
         <button onClick={() => focusContext("earthquakes")}>
           <span>⌁</span><b>Recent earthquakes</b><small>{snapshot.contextStatus.earthquakes === "unavailable" ? "Feed unavailable" : snapshot.earthquakes.length ? `${snapshot.earthquakes.length} detected nearby` : "None in the past week"}</small><i>View detections →</i>
-        </button>
-        <button onClick={() => focusContext("transit")}>
-          <span>↗</span><b>Live public transport</b><small>{snapshot.transitStatus === "live" ? `${snapshot.transit.length} vehicle positions` : "NTA developer access required"}</small><i>View vehicles →</i>
         </button>
       </nav>
 

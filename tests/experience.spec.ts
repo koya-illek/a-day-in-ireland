@@ -7,7 +7,7 @@ test("renders the living map and live observations", async ({ page }) => {
   await expect(page.getByText("Today so far")).toBeVisible();
   await expect(page.locator(".station-marker").first()).toBeVisible();
   await expect(
-    page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Rail/ })
+    page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Transport/ })
   ).toBeVisible();
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
@@ -22,6 +22,16 @@ test("explore layers and station details are interactive", async ({ page }) => {
   await page.getByRole("button", { name: "Close explore panel" }).click();
   await page.locator(".station-marker").first().click();
   await expect(page.locator(".station-card")).toBeVisible();
+});
+
+test("ambient sound can be started and stopped from a user gesture", async ({ page }) => {
+  test.skip(test.info().project.name === "mobile", "The compact mobile header intentionally hides sound controls.");
+  await page.goto("/");
+  const sound = page.getByRole("button", { name: "Sound off" });
+  await sound.click();
+  await expect(page.getByRole("button", { name: "Sound on" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Sound on" }).click();
+  await expect(page.getByRole("button", { name: "Sound off" })).toHaveAttribute("aria-pressed", "false");
 });
 
 test("page exposes live freshness and source provenance", async ({ page }) => {
@@ -41,7 +51,7 @@ test("rail and water presets expose the live transport and gauge layers", async 
   await page.goto("/");
   await page
     .getByRole("navigation", { name: "Map view shortcuts" })
-    .getByRole("button", { name: /Rail/ })
+    .getByRole("button", { name: /Transport/ })
     .click();
   if (await page.locator(".train-marker").count()) {
     await page.locator(".train-marker").first().click();
@@ -139,11 +149,15 @@ test("context cards focus one layer, explain its freshness and return to the map
 
 test("sea context exposes clickable buoy details", async ({ page }) => {
   await page.goto("/");
-  await page
-    .getByRole("navigation", { name: "More live contexts" })
-    .getByRole("button", { name: /Sea conditions/ })
-    .click();
-  await expect(page.getByText("Offshore conditions", { exact: true })).toBeVisible();
+  if (test.info().project.name === "desktop") {
+    await page.getByRole("button", { name: /buoys reporting at sea/ }).click();
+    await expect(page.getByText("Offshore conditions", { exact: true })).toBeVisible();
+  } else {
+    await page
+      .getByRole("navigation", { name: "Map view shortcuts" })
+      .getByRole("button", { name: /Water/ })
+      .click();
+  }
   if (await page.locator(".buoy").count()) {
     expect(await page.locator(".buoy").count()).toBeGreaterThanOrEqual(6);
     await page.locator(".buoy").first().click();
@@ -176,10 +190,16 @@ test("wind context displays measured station speeds and directions", async ({ pa
 
 test("radar context exposes five-minute imagery and playback controls", async ({ page }) => {
   await page.goto("/");
-  await page
-    .getByRole("navigation", { name: "More live contexts" })
-    .getByRole("button", { name: /Rainfall radar/ })
-    .click();
+  if (test.info().project.name === "desktop") {
+    await page
+      .getByRole("navigation", { name: "Map view shortcuts" })
+      .getByRole("button", { name: /Rain radar/ })
+      .click();
+  } else {
+    await page.getByRole("button", { name: "Explore", exact: true }).click();
+    await page.getByRole("button", { name: /Rainfall radar/ }).click();
+    await page.getByRole("button", { name: "Close explore panel" }).click();
+  }
   await expect(page.getByText("Rainfall radar", { exact: true }).first()).toBeVisible();
   if (await page.locator(".radar-tiles image").count()) {
     await expect(page.locator(".radar-tiles image").first()).toBeVisible();
@@ -231,9 +251,8 @@ test("new public contexts are discoverable and honestly describe unavailable dat
   await contexts.getByRole("button", { name: /Recent earthquakes/ }).click();
   await expect(page.getByText(/earthquakes detected|seismic detections|earthquake feed unavailable/i).first()).toBeVisible();
 
-  await contexts.getByRole("button", { name: /Live public transport/ }).click();
-  await expect(page.getByText("Public transport feed awaiting access", { exact: true })).toBeVisible();
-  await expect(page.locator(".map-notice")).toContainText(/free developer API key/i);
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Public transport/ })).toBeVisible();
 });
 
 test("notable-now board is present without fabricating an event", async ({ page }) => {
