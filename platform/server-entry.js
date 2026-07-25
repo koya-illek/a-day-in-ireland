@@ -569,7 +569,8 @@ const fetchTransit = async (env) => {
   if (!env.NTA_API_KEY) return { vehicles: [], status: "credential-required" };
   const response = await fetch("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
     headers: { "x-api-key": env.NTA_API_KEY },
-    cf: { cacheEverything: true, cacheTtl: 30 }
+    // NTA permits each token to call the GTFS-R API at most once per 60 seconds.
+    cf: { cacheEverything: true, cacheTtl: 60 }
   });
   if (!response.ok) throw new Error(`NTA vehicles returned ${response.status}`);
   const body = await response.json();
