@@ -17,7 +17,7 @@ const value = (xml, name) =>
     .replaceAll("&#39;", "'")
     .trim();
 
-const fetchTrains = async () => {
+export const fetchTrains = async () => {
   const response = await fetch(
     "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
     { cf: { cacheEverything: true, cacheTtl: 60 } }
@@ -50,16 +50,67 @@ const fetchTrains = async () => {
     .filter(Boolean);
 };
 
-const fetchRivers = async () => {
+const decodeHtml = (value) => value
+  .replaceAll("&quot;", "\"")
+  .replaceAll("&#39;", "'")
+  .replaceAll("&#x27;", "'")
+  .replaceAll("&lt;", "<")
+  .replaceAll("&gt;", ">")
+  .replaceAll("&amp;", "&");
+
+const fetchRiversThroughBrowser = async (env) => {
+  if (!env?.BROWSER?.quickAction) throw new Error("Browser Run binding unavailable");
+  const response = await env.BROWSER.quickAction("content", {
+    url: "https://waterlevel.ie/geojson/latest/",
+    gotoOptions: { waitUntil: "domcontentloaded", timeout: 30_000 },
+    rejectResourceTypes: ["image", "stylesheet", "font", "media"]
+  });
+  if (!response.ok) throw new Error(`Browser Run returned ${response.status}`);
+  const rendered = await response.text();
+  const pre = /<pre[^>]*>([\s\S]*?)<\/pre>/i.exec(rendered)?.[1];
+  const decoded = decodeHtml(pre ?? rendered);
+  const normalized = decoded.startsWith("{\\\"") ? decoded.replaceAll("\\\"", "\"") : decoded;
+  try {
+    return JSON.parse(normalized);
+  } catch (error) {
+    throw new Error(`${error.message}; response starts ${JSON.stringify(normalized.slice(0, 240))}`);
+  }
+};
+
+export const fetchRivers = async (env) => {
   const response = await fetch("https://waterlevel.ie/geojson/latest/", {
     headers: {
       "accept": "application/json",
       "referer": "https://waterlevel.ie/",
-      "user-agent": "A-Day-in-Ireland/2.0 (+https://a-day-in-ireland.koya-illek.chatgpt.site)"
+      "user-agent": "A-Day-in-Ireland/2.0 (+https://day.illek.ie)"
     }
   });
-  if (!response.ok) throw new Error(`OPW returned ${response.status}`);
-  const body = await response.json();
+  let body;
+  if (!response.ok) {
+    const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
+    if (env?.EDGE_RUNTIME === "cloudflare") {
+      try {
+        body = await fetchRiversThroughBrowser(env);
+      } catch (browserError) {
+        throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`);
+      }
+    }
+    if (!body) {
+      const bridge = await fetch("https://a-day-in-ireland.koya-illek.chatgpt.site/api/living?source=opw-bridge", {
+        cf: { cacheEverything: true, cacheTtl: 900 }
+      });
+      if (bridge.ok) {
+        const bridged = await bridge.json();
+        if (Array.isArray(bridged.rivers) && bridged.rivers.length) {
+          return bridged.rivers.filter((river) =>
+            Date.now() - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000
+          );
+        }
+      }
+      throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
+    }
+  }
+  body ??= await response.json();
   const cells = new Map();
   for (const item of body.features ?? []) {
     if (item.properties?.sensor_ref !== "0001") continue;
@@ -565,7 +616,7 @@ const fetchIssTle = async () => {
   return { line1: lines.at(-2), line2: lines.at(-1), observedAt: new Date().toISOString() };
 };
 
-const fetchTransit = async (env) => {
+export const fetchTransit = async (env) => {
   if (!env.NTA_API_KEY) return { vehicles: [], status: "credential-required" };
   const response = await fetch("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
     headers: { "x-api-key": env.NTA_API_KEY },
@@ -623,10 +674,10 @@ const fetchAurora = async () => {
   };
 };
 
-const livingLayers = async () => {
+const livingLayers = async (env) => {
   const [trains, rivers] = await Promise.allSettled([
     fetchTrains(),
-    fetchRivers()
+    fetchRivers(env)
   ]);
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (rivers.status === "rejected") console.error("OPW river refresh failed", rivers.reason);
@@ -642,34 +693,31 @@ const livingLayers = async () => {
 };
 
 const currentContexts = async (env) => {
+  const measuredAirAtEdge = env.EDGE_RUNTIME !== "cloudflare";
   const [
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, transit
+    bathingAlerts, satellite, earthquakes, issTle
   ] = await Promise.allSettled([
     fetchMarine(),
     fetchRadar(),
     fetchGrid(),
     fetchAirQuality(),
-    fetchMeasuredAirQuality(),
+    measuredAirAtEdge ? fetchMeasuredAirQuality() : Promise.resolve([]),
     fetchAurora(),
     fetchTides(),
     fetchBathingAlerts(),
     fetchSatellite(),
     fetchEarthquakes(),
-    fetchIssTle(),
-    fetchTransit(env)
+    fetchIssTle()
   ]);
   for (const [name, result] of Object.entries({
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, transit
+    bathingAlerts, satellite, earthquakes, issTle
   })) {
     if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
   }
   const modelled = modelledAir.status === "fulfilled" ? modelledAir.value : [];
   const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
-  const transitValue = transit.status === "fulfilled"
-    ? transit.value
-    : { vehicles: [], status: env.NTA_API_KEY ? "unavailable" : "credential-required" };
   return json({
     generatedAt: new Date().toISOString(),
     marine: marine.status === "fulfilled" ? marine.value : [],
@@ -682,10 +730,8 @@ const currentContexts = async (env) => {
     satellite: satellite.status === "fulfilled" ? satellite.value : null,
     earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
     issTle: issTle.status === "fulfilled" ? issTle.value : null,
-    transit: transitValue.vehicles,
-    transitStatus: transitValue.status,
     contextStatus: {
-      measuredAir: measuredAir.status === "fulfilled" ? "live" : "unavailable",
+      measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
       tides: tides.status === "fulfilled" ? "live" : "unavailable",
       bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
       satellite: satellite.status === "fulfilled" ? "live" : "unavailable",
@@ -695,12 +741,30 @@ const currentContexts = async (env) => {
   }, 200, 300);
 };
 
+const transitContext = async (env) => {
+  try {
+    const result = await fetchTransit(env);
+    return json({
+      generatedAt: new Date().toISOString(),
+      transit: result.vehicles,
+      transitStatus: result.status
+    }, 200, 60);
+  } catch (error) {
+    console.error("NTA transit refresh failed", error);
+    return json({
+      generatedAt: new Date().toISOString(),
+      transit: [],
+      transitStatus: env.NTA_API_KEY ? "unavailable" : "credential-required"
+    }, 200, 60);
+  }
+};
+
 const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/living") {
       try {
-        return await livingLayers();
+        return await livingLayers(env);
       } catch (error) {
         console.error("Living layers failed", error);
         return json({ error: "Live layers are temporarily unavailable." }, 503);
@@ -714,6 +778,7 @@ const worker = {
         return json({ error: "Current island contexts are temporarily unavailable." }, 503);
       }
     }
+    if (url.pathname === "/api/transit") return transitContext(env);
 
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404) return response;

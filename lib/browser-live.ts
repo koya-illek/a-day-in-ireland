@@ -174,18 +174,27 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
 
 export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
   try {
-    const response = await fetch("/api/contexts", {
-      cache: "no-store",
-      signal: AbortSignal.timeout(15_000)
-    });
-    if (!response.ok) return previous;
-    const next = (await response.json()) as Partial<
+    const [contextsResult, transitResult] = await Promise.allSettled([
+      fetch("/api/contexts", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000)
+      }),
+      fetch("/api/transit", {
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000)
+      })
+    ]);
+    const contextsResponse = contextsResult.status === "fulfilled" ? contextsResult.value : null;
+    const transitResponse = transitResult.status === "fulfilled" ? transitResult.value : null;
+    const next = (contextsResponse?.ok ? await contextsResponse.json() : {}) as Partial<
       Pick<
         LiveSnapshot,
         "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
-        "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "transit" | "transitStatus"
-        | "contextStatus"
+        "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
       >
+    >;
+    const transit = (transitResponse?.ok ? await transitResponse.json() : {}) as Partial<
+      Pick<LiveSnapshot, "transit" | "transitStatus">
     >;
     const iss = next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : previous.iss;
     let airQuality = Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality;
@@ -216,8 +225,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       issTle: next.issTle === null || typeof next.issTle === "object" ? next.issTle : previous.issTle,
       satellite: next.satellite === null || typeof next.satellite === "object" ? next.satellite : previous.satellite,
       earthquakes: Array.isArray(next.earthquakes) ? next.earthquakes : previous.earthquakes,
-      transit: Array.isArray(next.transit) ? next.transit : previous.transit,
-      transitStatus: next.transitStatus ?? previous.transitStatus,
+      transit: Array.isArray(transit.transit) ? transit.transit : previous.transit,
+      transitStatus: transit.transitStatus ?? previous.transitStatus,
       contextStatus
     };
   } catch {

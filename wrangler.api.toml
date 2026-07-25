@@ -1,0 +1,30 @@
+name = "a-day-in-ireland-api"
+main = "platform/cloudflare-entry.js"
+compatibility_date = "2026-07-25"
+workers_dev = true
+
+routes = [
+  { pattern = "day.illek.ie", custom_domain = true }
+]
+
+[vars]
+EDGE_RUNTIME = "cloudflare"
+
+[[durable_objects.bindings]]
+name = "NTA_FEED"
+class_name = "NtaFeedCoordinator"
+
+[[durable_objects.bindings]]
+name = "RIVER_FEED"
+class_name = "RiverFeedCoordinator"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["NtaFeedCoordinator"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RiverFeedCoordinator"]
+
+[browser]
+binding = "BROWSER"

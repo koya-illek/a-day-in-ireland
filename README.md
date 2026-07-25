@@ -20,7 +20,29 @@ A living, near-real-time portrait of weather, water, energy and movement across 
 
 Weather, radar and the additional island contexts refresh every five minutes; train positions refresh every minute. OPW normally publishes river levels about every fifteen minutes, and deployed readings automatically expire after three hours if an upstream refresh is unavailable. Marine observations expire after six hours. Missing or stale values are not represented as zero.
 
-The NTA integration is credential-aware: without `NTA_API_KEY`, the UI explains that developer access is required and never substitutes scheduled or historical positions. Create a free key at [developer.nationaltransport.ie](https://developer.nationaltransport.ie/), then store it as a secret production environment variable in Sites and publish a new version.
+The NTA integration is credential-aware: without `NTA_API_KEY`, the UI explains that developer access is required and never substitutes scheduled or historical positions. Create a free key at [developer.nationaltransport.ie](https://developer.nationaltransport.ie/), then store it as an encrypted deployment secret.
+
+## Cloudflare deployment
+
+The Cloudflare production architecture uses:
+
+- Pages for the static export in `dist/client`.
+- A Worker custom domain on `day.illek.ie` that serves the API and edge-caches the Pages origin. This lets Cloudflare provision DNS without a separate DNS-write credential.
+- A SQLite-backed Durable Object as the single global NTA refresh coordinator.
+- A 65-second upstream refresh floor and 60-second edge response cache, satisfying the NTA token limit across Cloudflare locations.
+- Browser-side EEA monitoring-station retrieval, avoiding heavy CSV processing within the Workers Free CPU allowance.
+- Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error.
+
+The account’s Workers Free plan automatically enforces its 10 ms CPU ceiling; Cloudflare does not accept an explicit CPU override on that plan. Requests on the custom hostname pass through the Worker, while immutable Next.js assets are cached for a year at the edge and HTML is cached for five minutes. The direct `pages.dev` origin remains available as a fallback.
+
+```bash
+npm run build
+npm run deploy:cloudflare:api
+npx wrangler secret put NTA_API_KEY --config wrangler.api.toml
+npm run deploy:cloudflare:pages
+```
+
+Never place the NTA key in `wrangler.api.toml`, `.env`, or source control.
 
 ## Development
 
