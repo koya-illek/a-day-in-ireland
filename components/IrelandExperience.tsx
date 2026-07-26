@@ -601,6 +601,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       commit((current) => ({
         ...current,
         generatedAt: next.generatedAt,
+        sourceStatus: next.sourceStatus,
         stations: next.stations,
         warnings: next.warnings,
         timeline: next.timeline,
@@ -661,6 +662,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       setServicesRefreshing(false);
     };
     void refreshInitial();
+    const recoveryRefresh = window.setTimeout(() => {
+      const current = snapshotRef.current;
+      const missingCoreService =
+        current.stations.length === 0 ||
+        current.rivers.length === 0 ||
+        current.marine.length === 0 ||
+        current.radar.length === 0 ||
+        current.transitStatus !== "live";
+      if (missingCoreService) {
+        void Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
+      }
+    }, 20_000);
     const refresh = window.setInterval(() => void update(), 5 * 60_000);
     const livingRefresh = window.setInterval(() => void updateLivingLayers(), 60_000);
     const contextRefresh = window.setInterval(() => void updateCurrentContexts(), 5 * 60_000);
@@ -671,6 +684,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       window.clearInterval(livingRefresh);
       window.clearInterval(contextRefresh);
       window.clearInterval(transitRefresh);
+      window.clearTimeout(recoveryRefresh);
     };
   }, []);
 
