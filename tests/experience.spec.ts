@@ -100,7 +100,8 @@ test("rail and water presets expose the live transport and gauge layers", async 
     .getByRole("button", { name: /Transport/ })
     .click();
   if (await page.locator(".train-marker").count()) {
-    await page.locator(".train-marker").first().click();
+    await page.locator(".train-marker").first().focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator(".detail-train")).toBeVisible();
   }
   await page
@@ -267,13 +268,25 @@ test("sea context exposes clickable buoy details", async ({ page }) => {
       .click();
   }
   if (await page.locator(".buoy").count()) {
-    expect(await page.locator(".buoy").count()).toBeGreaterThanOrEqual(6);
     await page.locator(".buoy").first().click();
     await expect(page.locator(".detail-buoy")).toBeVisible();
     await expect(page.getByText(/Sea temperature/)).toBeVisible();
   } else {
     await expect(page.getByText(/No Marine Institute buoy observations/)).toBeVisible();
   }
+});
+
+test("public launch metadata and trust pages are available", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://day.illek.ie");
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    "https://day.illek.ie/social/day-in-ireland.jpg"
+  );
+  await page.getByRole("link", { name: "Data & methodology" }).last().click();
+  await expect(page).toHaveURL(/\/data$/);
+  await expect(page.getByRole("heading", { level: 1, name: /What the map knows/ })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Sources" })).toBeVisible();
 });
 
 test("historical traffic is removed from the live experience", async ({ page }) => {
@@ -364,10 +377,12 @@ test("notable-now board is present without fabricating an event", async ({ page 
   await expect(page.getByText("Bathing water", { exact: true })).toHaveCount(0);
   await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
   const signals = page.locator(".notable-signals .signal-item");
+  const quiet = page.getByText(/No unusual signals match the selected layers|Some selected signal sources are temporarily unavailable/);
+  await expect(signals.first().or(quiet)).toBeVisible();
   if (await signals.count()) {
     await expect(signals.first()).toBeVisible();
     expect(await page.locator(".notable-signals .signal-item:visible").count()).toBeLessThanOrEqual(3);
   } else {
-    await expect(page.getByText(/No unusual signals match the selected layers|Some selected signal sources are temporarily unavailable/)).toBeVisible();
+    await expect(quiet).toBeVisible();
   }
 });

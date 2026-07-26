@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap");
-
 :root {
   --ink: #f4f1e6;
   --muted: #aebdb1;
@@ -88,7 +86,7 @@ button { color: inherit; }
 .live-dot { background: #ddad67; border-radius: 50%; box-shadow: 0 0 0 4px rgba(221, 173, 103, .1); height: .42rem; width: .42rem; }
 .live-dot.live { animation: pulse 2.2s infinite; background: #8fcf97; box-shadow: 0 0 0 4px rgba(143, 207, 151, .1); }
 .header-actions { display: flex; gap: .55rem; justify-self: end; }
-.icon-button, .panel-button {
+.icon-button, .panel-button, .share-button {
   background: rgba(5, 22, 20, .48);
   border: 1px solid var(--line);
   border-radius: 2rem;
@@ -96,6 +94,12 @@ button { color: inherit; }
   font-size: .75rem;
   padding: .65rem .9rem;
 }
+.share-button {
+  background: transparent;
+  border-color: rgba(0, 219, 233, .35);
+  color: var(--ink);
+}
+.share-button:hover, .share-button:focus-visible { border-color: #4edea3; color: #8ef0c4; }
 .panel-button { background: var(--ink); color: var(--deep); font-weight: 600; }
 .hero-copy {
   left: clamp(1.2rem, 6vw, 6rem);
@@ -325,7 +329,7 @@ button { color: inherit; }
 }
 .warning-strip > span { border: 1px solid currentColor; border-radius: 2rem; font-size: .65rem; font-weight: 600; padding: .3rem .55rem; text-transform: uppercase; }
 .warning-strip b, .warning-strip small { display: block; }
-.warning-strip small { margin-top: .15rem; opacity: .75; }
+.warning-strip small { color: #aebbd0; margin-top: .15rem; }
 .warning-strip time { font-size: .72rem; white-space: nowrap; }
 .warning-strip.orange { background: #d78548; }
 .warning-strip.red { background: #b94a3f; color: white; }
@@ -435,6 +439,95 @@ footer {
 }
 footer p { margin: 0; max-width: 36rem; }
 footer b { color: var(--ink); }
+footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .55rem 1rem;
+  margin-top: .75rem;
+}
+footer nav a { color: #8cecdf; }
+footer nav a:hover, footer nav a:focus-visible { color: white; }
+
+.info-page {
+  background:
+    radial-gradient(circle at 82% 8%, rgba(0, 219, 233, .09), transparent 30rem),
+    #050d1b;
+  color: var(--ink);
+  min-height: 100vh;
+}
+.info-header {
+  border-bottom: 1px solid var(--line);
+  padding: 1rem clamp(1rem, 5vw, 4rem);
+}
+.info-brand {
+  align-items: center;
+  color: var(--ink);
+  display: inline-flex;
+  gap: .8rem;
+}
+.info-brand > span:first-child {
+  align-items: center;
+  border: 1px solid rgba(0, 219, 233, .35);
+  border-radius: 50%;
+  color: #4edea3;
+  display: inline-flex;
+  height: 2.2rem;
+  justify-content: center;
+  width: 2.2rem;
+}
+.info-brand b, .info-brand small { display: block; }
+.info-brand small { color: var(--muted); font-size: .62rem; margin-top: .15rem; text-transform: uppercase; }
+.info-page article {
+  margin: 0 auto;
+  max-width: 54rem;
+  padding: clamp(4rem, 9vw, 8rem) 1.2rem;
+}
+.info-page h1 {
+  font-size: clamp(2.7rem, 7vw, 5.8rem);
+  letter-spacing: -.055em;
+  line-height: .95;
+  margin: .65rem 0 1.4rem;
+  max-width: 13ch;
+}
+.info-introduction {
+  color: #c3cede;
+  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  line-height: 1.65;
+  max-width: 42rem;
+}
+.info-content {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 2.5rem;
+  margin-top: 3.5rem;
+  padding-top: 2.5rem;
+}
+.info-content section { max-width: 46rem; }
+.info-content h2 { font-size: 1.1rem; margin: 0 0 .8rem; }
+.info-content p { color: var(--muted); line-height: 1.75; margin: .6rem 0; }
+.info-content a { color: #7fe8dc; text-decoration: underline; text-decoration-color: rgba(127, 232, 220, .35); text-underline-offset: .2rem; }
+.info-email { font-size: 1.25rem; }
+.source-directory { display: grid; gap: .55rem; }
+.source-directory a {
+  align-items: center;
+  background: rgba(13, 25, 43, .8);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: .3rem 1rem;
+  grid-template-columns: 1fr auto;
+  padding: .9rem 1rem;
+  text-decoration: none;
+}
+.source-directory a:hover, .source-directory a:focus-visible { border-color: rgba(78, 222, 163, .6); }
+.source-directory b { color: var(--ink); }
+.source-directory span { color: var(--muted); font-size: .75rem; grid-column: 1; }
+.source-directory i { color: #4edea3; font-style: normal; grid-column: 2; grid-row: 1 / 3; }
+.info-footer {
+  display: block;
+  margin: 0 auto;
+  max-width: 54rem;
+}
+.info-footer nav { margin: 0; }
 
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(143, 207, 151, 0); } }
 @keyframes tide { to { transform: translateX(18px); } }

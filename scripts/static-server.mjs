@@ -28,6 +28,7 @@ createServer(async (request, response) => {
   }
   const requested = normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, requested === "/" ? "index.html" : requested);
+  if (!existsSync(file) && !extname(file) && existsSync(`${file}.html`)) file = `${file}.html`;
   if (!existsSync(file) && !extname(file)) file = join(root, "index.html");
   if (!existsSync(file)) {
     response.writeHead(404);

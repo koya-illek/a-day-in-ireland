@@ -11,6 +11,7 @@ import {
   useState
 } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
@@ -90,6 +91,35 @@ const PLACES = [
   { name: "Derry", lon: -7.309, lat: 54.9966 }
 ];
 
+const emptyDisplaySnapshot = (snapshot: LiveSnapshot): LiveSnapshot => ({
+  ...snapshot,
+  sourceStatus: "partial",
+  stations: [],
+  warnings: [],
+  marine: [],
+  trains: [],
+  rivers: [],
+  radar: [],
+  grid: null,
+  airQuality: [],
+  aurora: null,
+  tides: [],
+  bathingAlerts: [],
+  iss: null,
+  satellite: null,
+  earthquakes: [],
+  transit: [],
+  summary: {
+    warmest: null,
+    wettest: null,
+    windiest: null,
+    reporting: 0,
+    runningTrains: 0,
+    riverStations: 0
+  },
+  timeline: []
+});
+
 const formatTime = (date: Date) =>
   new Intl.DateTimeFormat("en-IE", {
     hour: "2-digit",
@@ -162,7 +192,7 @@ function StationMarker({
       {wet && <circle className="rain-ring" r="17" />}
       <circle className="station-halo" r="11" />
       <circle className="station-core" r="4" />
-      <text x="10" y="-7">{station.temperature ?? "—"}°</text>
+      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "—"}°</text>
     </g>
   );
 }
@@ -534,7 +564,7 @@ function IssPanel({ iss, className = "" }: { iss: LiveSnapshot["iss"]; className
 }
 
 export default function IrelandExperience({ initialSnapshot }: { initialSnapshot: LiveSnapshot }) {
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [snapshot, setSnapshot] = useState(() => emptyDisplaySnapshot(initialSnapshot));
   const [now, setNow] = useState(() => new Date(initialSnapshot.generatedAt));
   const [layers, setLayers] = useState<Set<Layer>>(
     () => new Set(["weather", "rain", "wind", "warnings", "places"])
@@ -549,6 +579,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
   const [radarPlaying, setRadarPlaying] = useState(false);
   const [mapView, setMapView] = useState({ scale: 1, x: 0, y: 0 });
+  const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const snapshotRef = useRef(initialSnapshot);
   const mapRef = useRef<SVGSVGElement | null>(null);
   const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
@@ -1086,6 +1117,32 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     });
   }, []);
 
+  const shareExperience = useCallback(async () => {
+    const shareData = {
+      title: "A Day in Ireland",
+      text: "See weather, movement, water and energy across Ireland—happening now.",
+      url: "https://day.illek.ie"
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        return;
+      }
+      await navigator.clipboard.writeText(shareData.url);
+      setShareStatus("copied");
+      window.setTimeout(() => setShareStatus("idle"), 1800);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      try {
+        await navigator.clipboard.writeText(shareData.url);
+        setShareStatus("copied");
+        window.setTimeout(() => setShareStatus("idle"), 1800);
+      } catch {
+        window.prompt("Copy this link", shareData.url);
+      }
+    }
+  }, []);
+
   return (
     <main className={`experience ${isNight ? "is-night" : ""}`}>
       <a className="skip-link" href="#live-map">Skip to live map</a>
@@ -1099,12 +1156,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </span>
           <span><b>A Day in Ireland</b><small>Live island view</small></span>
         </a>
-        <div className="live-state" title={`Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}>
+        <div className="live-state" title={servicesRefreshing ? "Connecting to live services" : `Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}>
           <span className={`live-dot ${snapshot.sourceStatus}`} />
-          <span>{snapshot.sourceStatus === "live" ? "Live observations" : "Partial observations"}</span>
-          <time>{formatTime(lastUpdated)}</time>
+          <span>{servicesRefreshing ? "Connecting" : snapshot.sourceStatus === "live" ? "Live observations" : "Partial observations"}</span>
+          <time>{servicesRefreshing ? "Now" : formatTime(lastUpdated)}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
+          <button className="share-button" onClick={() => void shareExperience()}>
+            {shareStatus === "copied" ? "Copied" : "Share"}
+          </button>
           <button className="panel-button" onClick={() => setPanelOpen((value) => !value)} aria-expanded={panelOpen}>
             Explore <span aria-hidden="true">⌁</span>
           </button>
@@ -1139,8 +1199,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <div className="workspace-heading">
             <div>
               <p className="eyebrow">{formatDate(now)} · {formatTime(now)} IST</p>
-              <h1 id="moment-heading">{narrative.period}</h1>
-              <p>{narrative.detail}</p>
+              <h1 id="moment-heading">See Ireland happening.</h1>
+              <p>{servicesRefreshing ? "Connecting to live observations across the island…" : `${narrative.period} ${narrative.detail}`}</p>
             </div>
             <div className="workspace-facts" aria-label="Current national highlights">
               <button onClick={() => focusContext("grid")}><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>demand met by wind</small></button>
@@ -1241,7 +1301,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </g>
             {layers.has("satellite") && snapshot.satellite && <SatelliteTiles frame={snapshot.satellite} projection={projection} />}
             {layers.has("radar") && radarFrame && <RadarTiles frame={radarFrame} projection={projection} />}
-            <g className="road-network" aria-label="Major roads from OpenStreetMap">
+            <g className="road-network" role="img" aria-label="Major roads from OpenStreetMap">
               {roadPaths.map((road, index) => (
                 <path key={`${road.ref}-${index}`} d={road.path} className={road.roadClass} />
               ))}
@@ -1378,7 +1438,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 >
                   <circle r="12" />
                   <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
-                  <text x="14" y="4">{station.windSpeed} km/h</text>
+                  <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>
                 </g>
               );
             })}
@@ -1727,7 +1787,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </aside>
 
       <footer>
-        <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
+        <div>
+          <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
+          <nav aria-label="Project information">
+            <Link href="/about">About</Link>
+            <Link href="/data">Data &amp; methodology</Link>
+            <Link href="/privacy">Privacy</Link>
+            <Link href="/contact">Contact</Link>
+          </nav>
+        </div>
         <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
