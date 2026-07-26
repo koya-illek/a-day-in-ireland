@@ -27,8 +27,8 @@ export default function PrivacyPage() {
         <p>The map requests some public imagery and data from external providers. Opening an official-source link takes you to that provider’s website and privacy practices.</p>
       </section>
       <section>
-        <h2>Future analytics</h2>
-        <p>If privacy-preserving audience measurement is introduced, this page will be updated before it is enabled. Advertising trackers are not currently part of the experience.</p>
+        <h2>Aggregate analytics</h2>
+        <p>Cloudflare Web Analytics measures aggregate page usage and performance. It does not use advertising cookies or create cross-site advertising profiles. Advertising trackers are not part of the experience.</p>
       </section>
     </InfoPage>
   );
