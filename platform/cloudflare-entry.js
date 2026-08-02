@@ -7,6 +7,10 @@ const responseHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "public, max-age=15, s-maxage=15"
 };
+const partialHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=0"
+};
 const transitLiveHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0"
@@ -167,10 +171,18 @@ export class RiverFeedCoordinator {
   }
 }
 
+let trainsInFlight = null;
+const dedupedFetchTrains = () => {
+  if (!trainsInFlight) {
+    trainsInFlight = fetchTrains().finally(() => { trainsInFlight = null; });
+  }
+  return trainsInFlight;
+};
+
 const livingResponse = async (env) => {
   const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
   const [trains, riverResponse] = await Promise.allSettled([
-    fetchTrains(),
+    dedupedFetchTrains(),
     riverCoordinator.fetch("https://internal/rivers")
   ]);
   const riverResult = riverResponse.status === "fulfilled"
@@ -179,6 +191,8 @@ const livingResponse = async (env) => {
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (riverResponse.status === "rejected") console.error("OPW coordinator failed", riverResponse.reason);
   const allLive = trains.status === "fulfilled" && trains.value.length && riverResult.status === "live";
+  const anyLive = (trains.status === "fulfilled" && trains.value.length) || riverResult.status === "live";
+  const headers = allLive ? responseHeaders : anyLive ? partialHeaders : transitUnavailableHeaders;
   return new Response(JSON.stringify({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],
@@ -196,7 +210,7 @@ const livingResponse = async (env) => {
       }),
       rivers: riverResult.provenance ?? makeRiverProvenance({ status: riverResult.status ?? "unavailable", readings: riverResult.rivers ?? [] })
     }
-  }), { headers: allLive ? responseHeaders : transitUnavailableHeaders });
+  }), { headers });
 };
 
 const staticResponse = async (request, env) => {

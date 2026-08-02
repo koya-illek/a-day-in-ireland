@@ -10,9 +10,13 @@ async function enableExploreLayer(page: Page, name: RegExp) {
 test("renders the living map and live observations", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  const headingText = await page.getByRole("heading", { level: 1 }).textContent();
+  expect(headingText).toMatch(/Ireland/i);
   await expect(page.getByLabel("Live map of Ireland")).toBeVisible();
   await expect(page.getByText("Today so far")).toBeVisible();
   await expect(page.locator(".station-marker").first()).toBeVisible();
+  const markerLabel = await page.locator(".station-marker").first().getAttribute("aria-label");
+  expect(markerLabel).toMatch(/degrees|unknown/);
   await expect(
     page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ })
   ).toBeVisible();
@@ -84,6 +88,9 @@ test("explore layers and station details are interactive", async ({ page }) => {
   await page.getByRole("button", { name: "Close explore panel" }).click();
   await page.locator(".station-marker").first().click();
   await expect(page.locator(".station-card")).toBeVisible();
+  await expect(page.locator(".station-card h2")).not.toHaveText("");
+  await expect(page.locator(".station-card .station-temperature")).toContainText(/°/);
+  await expect(page.locator(".station-card dl")).toBeVisible();
 });
 
 test("explore layers stay grouped while preserving all layer IDs", async ({ page }) => {
@@ -231,11 +238,24 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
   await expect(page.getByText("Ireland, at a glance.")).toBeVisible();
+  const freshnessChips = page.locator(".freshness-chip");
+  await expect(freshnessChips.first()).toBeVisible();
+  const chipCount = await freshnessChips.count();
+  expect(chipCount).toBeGreaterThanOrEqual(3);
+  for (let i = 0; i < chipCount; i++) {
+    const chip = freshnessChips.nth(i);
+    await expect(chip.locator("b")).not.toHaveText("");
+    await expect(chip.locator("small")).not.toHaveText("");
+  }
   const timelinePoints = await page.locator(".timeline-point").count();
   if (timelinePoints === 0) {
     await expect(page.getByText(/The day is just beginning/)).toBeVisible();
   } else {
     expect(timelinePoints).toBeGreaterThanOrEqual(1);
+    const firstPoint = page.locator(".timeline-point").first();
+    await expect(firstPoint).toHaveAttribute("aria-label", /temperature.*degrees.*rainfall.*millimetres/);
+    const ariaLabel = await firstPoint.getAttribute("aria-label");
+    expect(ariaLabel).toMatch(/\d/);
   }
 });
 
@@ -324,10 +344,13 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
 test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".island-shape path")).toHaveCount(1);
-  expect(await page.locator(".road-network path").count()).toBeGreaterThan(50);
+  const roadCount = await page.locator(".road-network path").count();
+  expect(roadCount).toBeGreaterThan(50);
   await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
   if (test.info().project.name === "desktop") {
     await expect(page.getByText("Current feeds", { exact: true })).toBeVisible();
+    const feedsText = await page.locator(".live-signal-dock").textContent();
+    expect(feedsText).toMatch(/weather stations|observations unavailable/i);
   }
 
   const heading = await page.getByRole("heading", { level: 1 }).boundingBox();

@@ -315,6 +315,7 @@ button { color: inherit; }
 .detail-modal-layer {
   background: rgba(1, 8, 15, .48);
   inset: 0;
+  pointer-events: auto;
   position: fixed;
   z-index: 50;
 }
@@ -1450,6 +1451,7 @@ footer {
 .freshness-strip {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: .45rem;
   margin: 0 auto .75rem;
   max-width: 92rem;
@@ -1857,6 +1859,7 @@ footer {
 }
 
 @media (max-width: 600px) {
+  html { scroll-padding-top: 4.75rem; }
   .place-context { padding: .95rem; }
   .official-notices { margin-left: 0; margin-right: 0; padding: .8rem; }
   .official-notices-heading h2 { font-size: 1rem; }
