@@ -1,9 +1,23 @@
-const json = (body, status = 200, cacheSeconds = 60) =>
+import {
+  RIVER_ENDPOINT,
+  latestEirGridValue,
+  latestObservedAt,
+  makeRiverProvenance,
+  normalizeRiverReadings,
+  normalizeBathingAlerts,
+  normalizeOfficialNotices,
+  normalizeProviderTimestamp,
+  parseRiverGeoJson
+} from "./river-source.js";
+
+const json = (body, status = 200, cacheSeconds = 60, staleSeconds = 0) =>
   new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds * 2}`,
+      "cache-control": status >= 400 || cacheSeconds <= 0
+        ? "no-store"
+        : `public, max-age=${cacheSeconds}, s-maxage=${cacheSeconds}${staleSeconds > 0 ? `, stale-while-revalidate=${staleSeconds}` : ""}`,
       "access-control-allow-origin": "*"
     }
   });
@@ -52,6 +66,22 @@ export const fetchTrains = async () => {
     .filter(Boolean);
 };
 
+export const normalizeWeatherWarnings = (rows, now = Date.now()) => normalizeOfficialNotices(rows, now).map((row) => ({
+  level: String(row.level ?? "Advisory"),
+  headline: String(row.headline ?? "Weather advisory"),
+  description: String(row.description ?? ""),
+  onset: normalizeProviderTimestamp(row.onset) ?? String(row.onset ?? ""),
+  expiry: normalizeProviderTimestamp(row.expiry) ?? String(row.expiry ?? "")
+}));
+
+const fetchWarnings = async () => {
+  const response = await fetch("https://www.met.ie/Open_Data/json/warning_IRELAND.json", {
+    cf: { cacheEverything: true, cacheTtl: 300, cacheTtlByStatus: { "200-299": 300, "400-599": 0 } }
+  });
+  if (!response.ok) throw new Error(`Met Éireann warnings returned ${response.status}`);
+  return normalizeWeatherWarnings(await response.json());
+};
+
 const decodeHtml = (value) => value
   .replaceAll("&quot;", "\"")
   .replaceAll("&#39;", "'")
@@ -63,7 +93,7 @@ const decodeHtml = (value) => value
 const fetchRiversThroughBrowser = async (env) => {
   if (!env?.BROWSER?.quickAction) throw new Error("Browser Run binding unavailable");
   const response = await env.BROWSER.quickAction("content", {
-    url: "https://waterlevel.ie/geojson/latest/",
+    url: RIVER_ENDPOINT,
     gotoOptions: { waitUntil: "domcontentloaded", timeout: 30_000 },
     rejectResourceTypes: ["image", "stylesheet", "font", "media"]
   });
@@ -79,8 +109,9 @@ const fetchRiversThroughBrowser = async (env) => {
   }
 };
 
-export const fetchRivers = async (env) => {
-  const response = await fetch("https://waterlevel.ie/geojson/latest/", {
+export const fetchRiversResult = async (env) => {
+  const fetchedAt = new Date().toISOString();
+  const response = await fetch(RIVER_ENDPOINT, {
     headers: {
       "accept": "application/json",
       "referer": "https://waterlevel.ie/",
@@ -88,11 +119,14 @@ export const fetchRivers = async (env) => {
     }
   });
   let body;
+  let fallback = null;
+  let status = "live";
   if (!response.ok) {
     const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
     if (env?.EDGE_RUNTIME === "cloudflare") {
       try {
         body = await fetchRiversThroughBrowser(env);
+        fallback = "Cloudflare Browser Run";
       } catch (browserError) {
         throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`);
       }
@@ -104,56 +138,44 @@ export const fetchRivers = async (env) => {
       if (bridge.ok) {
         const bridged = await bridge.json();
         if (Array.isArray(bridged.rivers) && bridged.rivers.length) {
-          return bridged.rivers.filter((river) =>
-            Date.now() - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000
-          );
+          const rivers = normalizeRiverReadings(bridged.rivers);
+          if (rivers.length) {
+            return {
+              rivers,
+              provenance: makeRiverProvenance({
+                status: "fallback",
+                fetchedAt,
+                readings: rivers,
+                fallback: "OpenAI-hosted river bridge"
+              })
+            };
+          }
         }
       }
       throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
     }
   }
   body ??= await response.json();
-  const cells = new Map();
-  for (const item of body.features ?? []) {
-    if (item.properties?.sensor_ref !== "0001") continue;
-    const [longitude, latitude] = item.geometry?.coordinates ?? [];
-    const level = Number.parseFloat(item.properties?.value);
-    const observedAt = String(item.properties?.datetime ?? "");
-    const stationNumber = Number.parseInt(String(item.properties?.station_ref ?? ""), 10);
-    const fresh = Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000;
-    if (
-      !Number.isFinite(latitude) ||
-      !Number.isFinite(longitude) ||
-      !Number.isFinite(level) ||
-      !observedAt ||
-      stationNumber > 41000 ||
-      !fresh
-    ) continue;
-    const reading = {
-      id: String(item.properties?.station_ref ?? ""),
-      name: String(item.properties?.station_name ?? "River gauge"),
-      latitude,
-      longitude,
-      level,
-      observedAt,
-      fresh
-    };
-    const key = `${Math.round(longitude * 4)}:${Math.round(latitude * 5)}`;
-    const current = cells.get(key);
-    if (!current || new Date(reading.observedAt) > new Date(current.observedAt)) {
-      cells.set(key, reading);
-    }
-  }
-  return [...cells.values()].slice(0, 90);
+  const rivers = parseRiverGeoJson(body);
+  if (!rivers.length) throw new Error("OPW returned no fresh river gauges");
+  return {
+    rivers,
+    provenance: makeRiverProvenance({ status, fetchedAt, readings: rivers, fallback })
+  };
 };
+
+export const fetchRivers = async (env) => (await fetchRiversResult(env)).rivers;
 
 const numeric = (value) => {
   const parsed = Number.parseFloat(String(value ?? ""));
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const freshEnough = (value, hours = 6) =>
-  Date.now() - new Date(value).getTime() < hours * 60 * 60 * 1000;
+const freshEnough = (value, hours = 6) => {
+  const timestamp = new Date(value).getTime();
+  const age = Date.now() - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age < hours * 60 * 60 * 1000;
+};
 
 const fetchWeatherBuoys = async () => {
   const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -235,6 +257,9 @@ const fetchMarine = async () => {
   const coastal = results.slice(1).flatMap((result) =>
     result.status === "fulfilled" && result.value ? [result.value] : []
   );
+  if (!results.some((result) => result.status === "fulfilled")) {
+    throw new Error("Marine Institute providers are unavailable");
+  }
   return [...weather, ...coastal];
 };
 
@@ -265,18 +290,6 @@ const fetchRadar = async () => {
   });
 };
 
-const eirMonths = {
-  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
-};
-
-const eirTimestamp = (value) => {
-  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}:\d{2}:\d{2})$/.exec(value);
-  return match && eirMonths[match[2]]
-    ? `${match[3]}-${eirMonths[match[2]]}-${match[1]}T${match[4]}Z`
-    : null;
-};
-
 const fetchGridRows = async (chartType, areas) => {
   const day = new Date().toISOString().slice(0, 10);
   const url = new URL("https://www.smartgriddashboard.com/api/chart/");
@@ -290,18 +303,6 @@ const fetchGridRows = async (chartType, areas) => {
   return (await response.json()).Rows ?? [];
 };
 
-const latestGridValue = (rows, field) => {
-  const row = [...rows].reverse().find(
-    (item) =>
-      String(item.FieldName) === field &&
-      item.Value !== null &&
-      item.Value !== undefined &&
-      item.Value !== "" &&
-      Number.isFinite(Number(item.Value))
-  );
-  return row ? { value: Number(row.Value), observedAt: eirTimestamp(String(row.EffectiveTime)) } : null;
-};
-
 const fetchGrid = async () => {
   const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
     await Promise.all([
@@ -312,13 +313,14 @@ const fetchGrid = async () => {
       fetchGridRows("frequency", "frequency"),
       fetchGridRows("interconnection", "interconnection")
     ]);
-  const demand = latestGridValue(demandRows, "SYSTEM_DEMAND");
-  const generation = latestGridValue(generationRows, "GEN_EXP");
-  const wind = latestGridValue(windRows, "WIND_ACTUAL");
-  const intensity = latestGridValue(carbonRows, "CO2_INTENSITY");
-  const emissions = latestGridValue(carbonRows, "CO2_EMISSIONS");
-  const frequency = latestGridValue(frequencyRows, "SYS_FREQUENCY");
-  const interconnector = latestGridValue(interconnectionRows, "INTER_NET");
+  const now = Date.now();
+  const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
+  const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
+  const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
+  const intensity = latestEirGridValue(carbonRows, "CO2_INTENSITY", now);
+  const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
+  const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
+  const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
   const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
     .map((item) => item?.observedAt).filter(Boolean).sort();
   if (!timestamps.length) return null;
@@ -549,7 +551,7 @@ const fetchBathingAlerts = async () => {
     cf: { cacheEverything: true, cacheTtl: 900 }
   });
   if (!alertsResponse.ok) throw new Error(`EPA bathing alerts returned ${alertsResponse.status}`);
-  const alerts = (await alertsResponse.json()).list ?? [];
+  const alerts = normalizeBathingAlerts((await alertsResponse.json()).list ?? []);
   if (!alerts.length) return [];
   const locationsResponse = await fetch("https://data.epa.ie/bw/api/v1/locations?per_page=500", {
     cf: { cacheEverything: true, cacheTtl: 86400 }
@@ -561,6 +563,15 @@ const fetchBathingAlerts = async () => {
     const east = numeric(location?.easting);
     const north = numeric(location?.northing);
     if (east === null || north === null) return [];
+    const startedAt = normalizeProviderTimestamp(alert.incident_start_date) ?? "";
+    const explicitEnd = normalizeProviderTimestamp(alert.incident_end_date);
+    const expectedDuration = numeric(alert.incident_expected_duration);
+    // Optional response metadata: older consumers ignore endsAt; browser refresh uses it to age cached alerts.
+    const endsAt = explicitEnd ?? (
+      startedAt && expectedDuration !== null && expectedDuration > 0
+        ? new Date(Date.parse(startedAt) + expectedDuration * 86_400_000).toISOString()
+        : null
+    );
     return [{
       id: `bathing-${alert.incident_id}`,
       name: String(alert.beach_name),
@@ -568,7 +579,8 @@ const fetchBathingAlerts = async () => {
       ...irishGridToLonLat(east, north),
       restriction: String(alert.bathing_restriction_type ?? "Bathing alert"),
       description: String(alert.incident_description ?? ""),
-      startedAt: String(alert.incident_start_date ?? ""),
+      startedAt,
+      endsAt,
       updatedAt: String(alert.last_updated ?? ""),
       noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
     }];
@@ -579,7 +591,7 @@ const fetchSatellite = async () => {
   const date = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return {
     observedAt: `${date}T13:30:00Z`,
-    label: "VIIRS true colour · latest complete daylight pass",
+    label: "VIIRS true colour · previous-day archive frame",
     tileTemplate: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`
   };
 };
@@ -623,7 +635,11 @@ export const fetchTransit = async (env) => {
   const response = await fetch("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
     headers: { "x-api-key": env.NTA_API_KEY },
     // NTA permits each token to call the GTFS-R API at most once per 60 seconds.
-    cf: { cacheEverything: true, cacheTtl: 60 }
+    cf: {
+      cacheEverything: true,
+      cacheTtl: 60,
+      cacheTtlByStatus: { "200-299": 60, "400-599": 0 }
+    }
   });
   if (!response.ok) throw new Error(`NTA vehicles returned ${response.status}`);
   const body = await response.json();
@@ -635,6 +651,10 @@ export const fetchTransit = async (env) => {
     const longitude = numeric(position?.longitude ?? position?.Longitude);
     if (latitude === null || longitude === null || latitude < 51.2 || latitude > 55.6 || longitude < -10.8 || longitude > -5.2) return [];
     const timestamp = numeric(vehicle.timestamp ?? vehicle.Timestamp);
+    if (timestamp === null) return [];
+    const observedAt = new Date(timestamp * 1000);
+    const age = Date.now() - observedAt.getTime();
+    if (!Number.isFinite(observedAt.getTime()) || age < 0 || age >= 30 * 60_000) return [];
     return [{
       id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? crypto.randomUUID()),
       latitude, longitude,
@@ -643,10 +663,10 @@ export const fetchTransit = async (env) => {
       bearing: numeric(position?.bearing ?? position?.Bearing),
       speedKmh: numeric(position?.speed ?? position?.Speed) === null ? null : numeric(position?.speed ?? position?.Speed) * 3.6,
       speedSource: numeric(position?.speed ?? position?.Speed) === null ? null : "reported",
-      observedAt: timestamp ? new Date(timestamp * 1000).toISOString() : new Date().toISOString()
+      observedAt: observedAt.toISOString()
     }];
   }).slice(0, 1200);
-  return { vehicles, status: "live" };
+  return { vehicles, status: vehicles.length ? "live" : "unavailable" };
 };
 
 const fetchAurora = async () => {
@@ -680,17 +700,30 @@ const fetchAurora = async () => {
 const livingLayers = async (env) => {
   const [trains, rivers] = await Promise.allSettled([
     fetchTrains(),
-    fetchRivers(env)
+    fetchRiversResult(env)
   ]);
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (rivers.status === "rejected") console.error("OPW river refresh failed", rivers.reason);
   return json({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],
-    rivers: rivers.status === "fulfilled" ? rivers.value : [],
+    rivers: rivers.status === "fulfilled" ? rivers.value.rivers : [],
     sourceStatus: {
-      trains: trains.status === "fulfilled" ? "live" : "unavailable",
-      rivers: rivers.status === "fulfilled" ? "live" : "unavailable"
+      trains: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
+      rivers: rivers.status === "fulfilled" ? rivers.value.provenance.status : "unavailable"
+    },
+    sourceProvenance: {
+      trains: {
+        provider: "Irish Rail",
+        endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+        status: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
+        fetchedAt: new Date().toISOString(),
+        latestObservedAt: trains.status === "fulfilled" ? latestObservedAt(trains.value) : null,
+        fallback: null
+      },
+      rivers: rivers.status === "fulfilled"
+        ? rivers.value.provenance
+        : makeRiverProvenance({ status: "unavailable" })
     }
   });
 };
@@ -699,7 +732,7 @@ const currentContexts = async (env) => {
   const measuredAirAtEdge = env.EDGE_RUNTIME !== "cloudflare";
   const [
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle
+    bathingAlerts, satellite, earthquakes, issTle, warnings
   ] = await Promise.allSettled([
     fetchMarine(),
     fetchRadar(),
@@ -711,16 +744,27 @@ const currentContexts = async (env) => {
     fetchBathingAlerts(),
     fetchSatellite(),
     fetchEarthquakes(),
-    fetchIssTle()
+    fetchIssTle(),
+    fetchWarnings()
   ]);
   for (const [name, result] of Object.entries({
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle
+    bathingAlerts, satellite, earthquakes, issTle, warnings
   })) {
     if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
   }
   const modelled = modelledAir.status === "fulfilled" ? modelledAir.value : [];
   const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
+  const contextStatus = {
+    marine: marine.status === "fulfilled" ? "live" : "unavailable",
+    measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
+    tides: tides.status === "fulfilled" ? "live" : "unavailable",
+    bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
+    satellite: satellite.status === "fulfilled" ? "fallback" : "unavailable",
+    earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
+    iss: issTle.status === "fulfilled" ? "live" : "unavailable",
+    warnings: warnings.status === "fulfilled" ? "live" : "unavailable"
+  };
   return json({
     generatedAt: new Date().toISOString(),
     marine: marine.status === "fulfilled" ? marine.value : [],
@@ -730,18 +774,13 @@ const currentContexts = async (env) => {
     aurora: aurora.status === "fulfilled" ? aurora.value : null,
     tides: tides.status === "fulfilled" ? tides.value : [],
     bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value : [],
+    warnings: warnings.status === "fulfilled" ? warnings.value : [],
+    warningsStatus: warnings.status === "fulfilled" ? "live" : "unavailable",
     satellite: satellite.status === "fulfilled" ? satellite.value : null,
     earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
     issTle: issTle.status === "fulfilled" ? issTle.value : null,
-    contextStatus: {
-      measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
-      tides: tides.status === "fulfilled" ? "live" : "unavailable",
-      bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
-      satellite: satellite.status === "fulfilled" ? "live" : "unavailable",
-      earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
-      iss: issTle.status === "fulfilled" ? "live" : "unavailable"
-    }
-  }, 200, 300);
+    contextStatus
+  }, 200, Object.values(contextStatus).includes("unavailable") ? 0 : 60, 0);
 };
 
 const transitContext = async (env) => {
@@ -751,14 +790,14 @@ const transitContext = async (env) => {
       generatedAt: new Date().toISOString(),
       transit: result.vehicles,
       transitStatus: result.status
-    }, 200, 60);
+    }, 200, result.status === "live" ? 15 : 0, 0);
   } catch (error) {
     console.error("NTA transit refresh failed", error);
     return json({
       generatedAt: new Date().toISOString(),
       transit: [],
       transitStatus: env.NTA_API_KEY ? "unavailable" : "credential-required"
-    }, 200, 60);
+    }, 200, 0, 0);
   }
 };
 

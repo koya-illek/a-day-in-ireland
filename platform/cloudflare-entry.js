@@ -1,10 +1,19 @@
-import apiWorker, { fetchRivers, fetchTrains, fetchTransit } from "./server-entry.js";
+import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./server-entry.js";
+import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
 const responseHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=60, s-maxage=60, stale-while-revalidate=120"
+  "cache-control": "public, max-age=15, s-maxage=15"
+};
+const transitLiveHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0"
+};
+const transitUnavailableHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store"
 };
 
 const distanceKm = (first, second) => {
@@ -36,9 +45,9 @@ export const addEstimatedSpeeds = (current, previous, maximumKmh = 130) => {
 
 const transitResponse = (value) => new Response(JSON.stringify({
   generatedAt: new Date().toISOString(),
-  transit: value.vehicles,
+  transit: value.status === "live" ? value.vehicles : [],
   transitStatus: value.status
-}), { headers: responseHeaders });
+}), { headers: value.status === "live" ? transitLiveHeaders : transitUnavailableHeaders });
 
 export class NtaFeedCoordinator {
   constructor(state, env) {
@@ -52,28 +61,32 @@ export class NtaFeedCoordinator {
     await this.state.storage.put("nextAllowedAt", startedAt + NTA_REFRESH_MS);
     try {
       const result = await fetchTransit(this.env);
-      if (result.status !== "live") throw new Error(`NTA feed status: ${result.status}`);
+      if (result.status !== "live" || !result.vehicles.length) return { vehicles: [], status: "unavailable" };
       result.vehicles = addEstimatedSpeeds(result.vehicles, stale?.result?.vehicles ?? []);
       const snapshot = { expiresAt: startedAt + NTA_REFRESH_MS, result };
       await this.state.storage.put("snapshot", snapshot);
       return result;
     } catch (error) {
       console.error("NTA coordinated refresh failed", error);
-      return stale?.result ?? { vehicles: [], status: "unavailable" };
+      return { vehicles: [], status: "unavailable" };
     }
   }
 
   async fetch() {
     const now = Date.now();
     const snapshot = await this.state.storage.get("snapshot");
-    if (snapshot?.expiresAt > now) return transitResponse(snapshot.result);
+    if (snapshot?.expiresAt > now && snapshot.result?.status === "live" && snapshot.result.vehicles?.length) {
+      return transitResponse(snapshot.result);
+    }
 
     if (!this.refreshPromise) {
-      const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
-      if (typeof nextAllowedAt === "number" && nextAllowedAt > now) {
-        return transitResponse(snapshot?.result ?? { vehicles: [], status: "unavailable" });
-      }
-      this.refreshPromise = this.refresh(snapshot).finally(() => {
+      this.refreshPromise = (async () => {
+        const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
+        if (typeof nextAllowedAt === "number" && nextAllowedAt > Date.now()) {
+          return { vehicles: [], status: "unavailable" };
+        }
+        return this.refresh(snapshot);
+      })().finally(() => {
         this.refreshPromise = null;
       });
     }
@@ -92,22 +105,30 @@ export class RiverFeedCoordinator {
     const startedAt = Date.now();
     await this.state.storage.put("nextAllowedAt", startedAt + RIVER_REFRESH_MS);
     try {
-      const rivers = await fetchRivers(this.env);
-      if (!rivers.length) throw new Error("OPW returned no fresh river gauges");
+      const result = await fetchRiversResult(this.env);
+      const rivers = normalizeRiverReadings(result.rivers, startedAt);
+      if (!rivers.length) throw new Error("OPW returned no valid fresh river gauges");
       const snapshot = {
         expiresAt: startedAt + RIVER_REFRESH_MS,
-        rivers
+        rivers,
+        provenance: result.provenance
       };
       await this.state.storage.put("snapshot", snapshot);
-      return { rivers, status: "live" };
+      return { rivers, status: result.provenance.status, provenance: result.provenance };
     } catch (error) {
       console.error("OPW coordinated refresh failed", error);
-      const freshRivers = (stale?.rivers ?? []).filter((river) =>
-        Date.now() - new Date(river.observedAt).getTime() < 3 * 60 * 60_000
-      );
+      const freshRivers = normalizeRiverReadings(stale?.rivers ?? [], Date.now());
+      const provenance = stale?.provenance
+        ? { ...stale.provenance, status: freshRivers.length ? "stale" : "unavailable", fetchedAt: new Date().toISOString(), fallback: "Cached coordinator snapshot" }
+        : makeRiverProvenance({
+            status: freshRivers.length ? "stale" : "unavailable",
+            readings: freshRivers,
+            fallback: freshRivers.length ? "Cached coordinator snapshot" : null
+          });
       return {
         rivers: freshRivers,
-        status: freshRivers.length ? "stale" : "unavailable"
+        status: provenance.status,
+        provenance
       };
     }
   }
@@ -115,21 +136,30 @@ export class RiverFeedCoordinator {
   async fetch() {
     const now = Date.now();
     const snapshot = await this.state.storage.get("snapshot");
-    if (snapshot?.expiresAt > now) {
-      return Response.json({ rivers: snapshot.rivers, status: "live" });
+    const snapshotRivers = normalizeRiverReadings(snapshot?.rivers ?? [], now);
+    if (snapshot?.expiresAt > now && snapshotRivers.length) {
+      return Response.json({
+        rivers: snapshotRivers,
+        status: snapshot.provenance?.status ?? "live",
+        provenance: snapshot.provenance ?? makeRiverProvenance({ status: "live", readings: snapshotRivers })
+      });
     }
     if (!this.refreshPromise) {
-      const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
-      if (typeof nextAllowedAt === "number" && nextAllowedAt > now) {
-        const freshRivers = (snapshot?.rivers ?? []).filter((river) =>
-          now - new Date(river.observedAt).getTime() < 3 * 60 * 60_000
-        );
-        return Response.json({
-          rivers: freshRivers,
-          status: freshRivers.length ? "stale" : "unavailable"
-        });
-      }
-      this.refreshPromise = this.refresh(snapshot).finally(() => {
+      this.refreshPromise = (async () => {
+        const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
+        if (typeof nextAllowedAt === "number" && nextAllowedAt > Date.now()) {
+          const freshRivers = normalizeRiverReadings(snapshot?.rivers ?? [], Date.now());
+          const status = freshRivers.length ? "stale" : "unavailable";
+          return {
+            rivers: freshRivers,
+            status,
+            provenance: snapshot?.provenance
+              ? { ...snapshot.provenance, status, fetchedAt: new Date().toISOString(), fallback: "Cached coordinator snapshot" }
+              : makeRiverProvenance({ status, readings: freshRivers, fallback: freshRivers.length ? "Cached coordinator snapshot" : null })
+          };
+        }
+        return this.refresh(snapshot);
+      })().finally(() => {
         this.refreshPromise = null;
       });
     }
@@ -145,23 +175,34 @@ const livingResponse = async (env) => {
   ]);
   const riverResult = riverResponse.status === "fulfilled"
     ? await riverResponse.value.json()
-    : { rivers: [], status: "unavailable" };
+    : { rivers: [], status: "unavailable", provenance: makeRiverProvenance({ status: "unavailable" }) };
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (riverResponse.status === "rejected") console.error("OPW coordinator failed", riverResponse.reason);
+  const allLive = trains.status === "fulfilled" && trains.value.length && riverResult.status === "live";
   return new Response(JSON.stringify({
     generatedAt: new Date().toISOString(),
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: riverResult.rivers,
     sourceStatus: {
-      trains: trains.status === "fulfilled" ? "live" : "unavailable",
+      trains: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
       rivers: riverResult.status
+    },
+    sourceProvenance: {
+      trains: makeSourceProvenance({
+        provider: "Irish Rail",
+        endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+        status: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
+        readings: trains.status === "fulfilled" ? trains.value : []
+      }),
+      rivers: riverResult.provenance ?? makeRiverProvenance({ status: riverResult.status ?? "unavailable", readings: riverResult.rivers ?? [] })
     }
-  }), { headers: responseHeaders });
+  }), { headers: allLive ? responseHeaders : transitUnavailableHeaders });
 };
 
-const staticResponse = async (request) => {
+const staticResponse = async (request, env) => {
   const incoming = new URL(request.url);
-  const origin = new URL(`${incoming.pathname}${incoming.search}`, "https://a-day-in-ireland.pages.dev");
+  const pagesOrigin = env.PAGES_ORIGIN || "https://a-day-in-ireland.pages.dev";
+  const origin = new URL(`${incoming.pathname}${incoming.search}`, pagesOrigin);
   return fetch(new Request(origin, request), {
     cf: {
       cacheEverything: true,
@@ -174,66 +215,20 @@ const staticResponse = async (request) => {
   });
 };
 
-const withCacheHeaders = (response, maxAge, state) => {
-  const headers = new Headers(response.headers);
-  headers.set("cache-control", `public, max-age=${maxAge}`);
-  headers.set("x-island-cache", state);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
-  });
-};
-
-const cachedApiResponse = async (name, freshSeconds, staleSeconds, context, producer) => {
-  const cache = caches.default;
-  const freshKey = new Request(`https://day.illek.ie/__edge-cache/${name}/fresh`);
-  const staleKey = new Request(`https://day.illek.ie/__edge-cache/${name}/stale`);
-  const fresh = await cache.match(freshKey);
-  if (fresh) return withCacheHeaders(fresh, freshSeconds, "fresh");
-
-  const refresh = async () => {
-    const response = await producer();
-    if (response.ok) {
-      const freshCopy = withCacheHeaders(response.clone(), freshSeconds, "fresh");
-      const staleCopy = withCacheHeaders(response.clone(), staleSeconds, "stale");
-      await Promise.all([
-        cache.put(freshKey, freshCopy),
-        cache.put(staleKey, staleCopy)
-      ]);
-    }
-    return response;
-  };
-
-  const stale = await cache.match(staleKey);
-  if (stale) {
-    context.waitUntil(refresh().catch((error) => console.error(`${name} background refresh failed`, error)));
-    return withCacheHeaders(stale, 30, "stale");
-  }
-  return refresh();
-};
-
 const cloudflareWorker = {
-  async fetch(request, env, context) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/transit") {
-      const cache = caches.default;
-      const cacheKey = new Request("https://day.illek.ie/__edge-cache/transit");
-      const cached = await cache.match(cacheKey);
-      if (cached) return cached;
-
       const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
-      const response = await coordinator.fetch("https://internal/transit");
-      context.waitUntil(cache.put(cacheKey, response.clone()));
-      return response;
+      return coordinator.fetch("https://internal/transit");
     }
     if (url.pathname === "/api/living") {
-      return cachedApiResponse("living", 60, 3_600, context, () => livingResponse(env));
+      return livingResponse(env);
     }
     if (url.pathname === "/api/contexts") {
-      return cachedApiResponse("contexts", 300, 3_600, context, () => apiWorker.fetch(request, env));
+      return apiWorker.fetch(request, env);
     }
-    if (request.method === "GET" || request.method === "HEAD") return staticResponse(request);
+    if (request.method === "GET" || request.method === "HEAD") return staticResponse(request, env);
     return new Response("Method not allowed", {
       status: 405,
       headers: { allow: "GET, HEAD" }

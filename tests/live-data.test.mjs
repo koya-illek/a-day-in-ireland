@@ -5,6 +5,7 @@ import test from "node:test";
 test("project declares production scripts", async () => {
   const packageJson = await import("../package.json", { with: { type: "json" } });
   assert.match(packageJson.default.scripts.build, /^next build/);
+  assert.match(packageJson.default.scripts.build, /river-source\.js/);
   assert.ok(packageJson.default.scripts["test:e2e"]);
   assert.ok(packageJson.default.scripts["deploy:cloudflare:api"]);
   assert.ok(packageJson.default.scripts["deploy:cloudflare:pages"]);
@@ -23,6 +24,7 @@ test("Cloudflare configuration preserves the free-tier architecture", async () =
   assert.match(config, /new_sqlite_classes = \["RiverFeedCoordinator"\]/);
   assert.match(config, /\[browser\]\s+binding = "BROWSER"/);
   assert.match(config, /EDGE_RUNTIME = "cloudflare"/);
+  assert.match(config, /PAGES_ORIGIN = "https:\/\/a-day-in-ireland\.pages\.dev"/);
 });
 
 test("NTA coordinator serves a fresh globally stored snapshot without refetching", async () => {
@@ -107,4 +109,35 @@ test("river coordinator reuses a fresh snapshot without spending Browser Run tim
   const body = await response.json();
   assert.equal(body.status, "live");
   assert.equal(body.rivers[0].id, "river-test");
+  assert.equal(body.provenance.provider, "OPW waterlevel.ie");
+  assert.equal(body.provenance.status, "live");
+});
+
+test("shared river parser keeps the newest fresh reading and drops stale or invalid data", async () => {
+  const { parseRiverGeoJson } = await import("../platform/river-source.js");
+  const now = Date.parse("2026-07-25T12:00:00.000Z");
+  const body = {
+    features: [
+      {
+        properties: { sensor_ref: "0001", station_ref: "100", station_name: "Older", value: "1.1", datetime: "2026-07-25T11:00:00.000Z" },
+        geometry: { coordinates: [-7.2, 53.3] }
+      },
+      {
+        properties: { sensor_ref: "0001", station_ref: "101", station_name: "Newer", value: "1.7", datetime: "2026-07-25T11:30:00.000Z" },
+        geometry: { coordinates: [-7.2, 53.3] }
+      },
+      {
+        properties: { sensor_ref: "0001", station_ref: "102", station_name: "Stale", value: "2.1", datetime: "2026-07-25T07:00:00.000Z" },
+        geometry: { coordinates: [-8.2, 54.3] }
+      },
+      {
+        properties: { sensor_ref: "0001", station_ref: "103", station_name: "Invalid", value: "not-a-level", datetime: "2026-07-25T11:00:00.000Z" },
+        geometry: { coordinates: [-8.2, 54.3] }
+      }
+    ]
+  };
+  const rivers = parseRiverGeoJson(body, now);
+  assert.deepEqual(rivers.map((river) => river.id), ["101"]);
+  assert.equal(rivers[0].level, 1.7);
+  assert.equal(rivers[0].fresh, true);
 });

@@ -12,11 +12,11 @@ export default function PrivacyPage() {
     <InfoPage
       eyebrow="Privacy"
       title="No account. No personal profile."
-      introduction="The public map does not ask you to sign in, provide a location or submit personal information."
+      introduction="The public map does not ask you to sign in, create an account or submit personal information. If you choose to use your browser location, the app uses it to select the nearest mapped place."
     >
       <section>
         <h2>What the site stores</h2>
-        <p>The experience does not set advertising cookies or create an account for you. Map preferences currently last only for the open page and are not retained as a personal profile.</p>
+        <p>The experience does not set advertising cookies or create an account for you. The selected place is saved as an identifier in your browser&apos;s local storage so it can be restored on a later visit. The app does not save your GPS coordinates or create a personal profile. Other map-view choices are reflected in the page URL.</p>
       </section>
       <section>
         <h2>Infrastructure logs</h2>

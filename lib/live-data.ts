@@ -10,7 +10,14 @@ import type {
   TrainPosition,
   WeatherWarning
 } from "./types";
-import { parseLatestObservations } from "./latest-observations";
+import { parseIrelandLocalTimestamp, parseLatestObservations } from "./latest-observations";
+import {
+  RIVER_ENDPOINT,
+  latestEirGridValue,
+  latestObservedAt,
+  makeRiverProvenance,
+  normalizeRiverReadings
+} from "../platform/river-source.js";
 
 const STATIONS = [
   { id: "malin-head", endpoint: "malin-head", csvName: "Malin Head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
@@ -29,13 +36,23 @@ const numberOrNull = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-const irelandTimestamp = (date: string, time: string): string | null => {
-  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(date);
-  if (!match || !time) return null;
-  const [, day, month, year] = match;
-  const parsed = new Date(`${year}-${month}-${day}T${time}:00`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
-};
+const irelandTimestamp = parseIrelandLocalTimestamp;
+
+export const normalizeWeatherWarnings = (
+  rows: Array<Record<string, unknown>>,
+  now = Date.now()
+): WeatherWarning[] => rows.flatMap((row) => {
+  const onset = Date.parse(String(row.onset ?? ""));
+  const expiry = Date.parse(String(row.expiry ?? ""));
+  if (!Number.isFinite(expiry) || expiry <= now || (Number.isFinite(onset) && onset > now)) return [];
+  return [{
+    level: String(row.level ?? "Advisory"),
+    headline: String(row.headline ?? "Weather advisory"),
+    description: String(row.description ?? ""),
+    onset: String(row.onset ?? ""),
+    expiry: String(row.expiry ?? "")
+  }];
+});
 
 type StationResult = {
   reading: StationReading;
@@ -66,7 +83,7 @@ async function fetchStation(station: (typeof STATIONS)[number]): Promise<Station
         windDirection: String(latest.cardinalWindDirection ?? "").trim(),
         description: String(latest.weatherDescription ?? "Observation available"),
         observedAt,
-        fresh: age < 3 * 60 * 60 * 1000
+        fresh: age >= 0 && age < 3 * 60 * 60 * 1000
       },
       history: rows.map((row) => ({
         time: String(row.reportTime ?? ""),
@@ -80,26 +97,17 @@ async function fetchStation(station: (typeof STATIONS)[number]): Promise<Station
   }
 }
 
-async function fetchWarnings(): Promise<WeatherWarning[]> {
+async function fetchWarnings(): Promise<{ warnings: WeatherWarning[]; status: "live" | "unavailable" }> {
   try {
     const response = await fetch("https://www.met.ie/Open_Data/json/warning_IRELAND.json", {
       next: { revalidate: 300 },
       signal: AbortSignal.timeout(7000)
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { warnings: [], status: "unavailable" };
     const rows = (await response.json()) as Array<Record<string, unknown>>;
-    const now = Date.now();
-    return rows
-      .filter((row) => new Date(String(row.expiry)).getTime() > now)
-      .map((row) => ({
-        level: String(row.level ?? "Advisory"),
-        headline: String(row.headline ?? "Weather advisory"),
-        description: String(row.description ?? ""),
-        onset: String(row.onset ?? ""),
-        expiry: String(row.expiry ?? "")
-      }));
+    return { warnings: normalizeWeatherWarnings(rows), status: "live" };
   } catch {
-    return [];
+    return { warnings: [], status: "unavailable" };
   }
 }
 
@@ -116,8 +124,11 @@ async function fetchLatestStationFallback(): Promise<StationReading[]> {
   }
 }
 
-const freshEnough = (value: string, hours = 6) =>
-  Date.now() - new Date(value).getTime() < hours * 60 * 60 * 1000;
+const freshEnough = (value: string, hours = 6) => {
+  const timestamp = new Date(value).getTime();
+  const age = Date.now() - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age < hours * 60 * 60 * 1000;
+};
 
 async function fetchWeatherBuoys(): Promise<MarineReading[]> {
   try {
@@ -264,18 +275,6 @@ async function fetchRadar(): Promise<RadarFrame[]> {
   }
 }
 
-const EIRGRID_MONTHS: Record<string, string> = {
-  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
-};
-
-const eirGridTimestamp = (value: string) => {
-  const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}:\d{2}:\d{2})$/.exec(value);
-  return match && EIRGRID_MONTHS[match[2]]
-    ? `${match[3]}-${EIRGRID_MONTHS[match[2]]}-${match[1]}T${match[4]}Z`
-    : null;
-};
-
 type GridRow = { EffectiveTime?: unknown; FieldName?: unknown; Value?: unknown };
 
 async function fetchGridRows(chartType: string, areas: string): Promise<GridRow[]> {
@@ -298,18 +297,6 @@ async function fetchGridRows(chartType: string, areas: string): Promise<GridRow[
   return body.Rows ?? [];
 }
 
-const latestGridValue = (rows: GridRow[], field: string) => {
-  const row = [...rows].reverse().find(
-    (item) =>
-      String(item.FieldName) === field &&
-      item.Value !== null &&
-      item.Value !== undefined &&
-      item.Value !== "" &&
-      Number.isFinite(Number(item.Value))
-  );
-  return row ? { value: Number(row.Value), observedAt: eirGridTimestamp(String(row.EffectiveTime)) } : null;
-};
-
 async function fetchGrid(): Promise<GridReading | null> {
   try {
     const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
@@ -321,13 +308,14 @@ async function fetchGrid(): Promise<GridReading | null> {
         fetchGridRows("frequency", "frequency"),
         fetchGridRows("interconnection", "interconnection")
       ]);
-    const demand = latestGridValue(demandRows, "SYSTEM_DEMAND");
-    const generation = latestGridValue(generationRows, "GEN_EXP");
-    const wind = latestGridValue(windRows, "WIND_ACTUAL");
-    const intensity = latestGridValue(carbonRows, "CO2_INTENSITY");
-    const emissions = latestGridValue(carbonRows, "CO2_EMISSIONS");
-    const frequency = latestGridValue(frequencyRows, "SYS_FREQUENCY");
-    const interconnector = latestGridValue(interconnectionRows, "INTER_NET");
+    const now = Date.now();
+    const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
+    const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
+    const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
+    const intensity = latestEirGridValue(carbonRows, "CO2_INTENSITY", now);
+    const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
+    const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
+    const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
     const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
       .map((item) => item?.observedAt)
       .filter((value): value is string => Boolean(value))
@@ -491,50 +479,31 @@ async function fetchTrains(): Promise<TrainPosition[]> {
 
 async function fetchRivers(): Promise<RiverReading[]> {
   try {
-    const response = await fetch("https://waterlevel.ie/geojson/latest/", {
+    const response = await fetch(RIVER_ENDPOINT, {
       next: { revalidate: 900 },
       signal: AbortSignal.timeout(9000)
     });
     if (!response.ok) return [];
-    const body = (await response.json()) as {
-      features?: Array<{
-        properties?: Record<string, unknown>;
-        geometry?: { coordinates?: number[] };
-      }>;
-    };
-    const readings = (body.features ?? [])
-      .filter((item) => item.properties?.sensor_ref === "0001")
-      .map((item) => {
-        const [longitude, latitude] = item.geometry?.coordinates ?? [];
-        const level = numberOrNull(item.properties?.value);
-        const observedAt = String(item.properties?.datetime ?? "");
-        const stationNumber = Number.parseInt(String(item.properties?.station_ref ?? ""), 10);
-        if (
-          !Number.isFinite(latitude) ||
-          !Number.isFinite(longitude) ||
-          level === null ||
-          !observedAt ||
-          stationNumber > 41000
-        ) return null;
-        return {
-          id: String(item.properties?.station_ref ?? ""),
-          name: String(item.properties?.station_name ?? "River gauge"),
-          latitude,
-          longitude,
-          level,
-          observedAt,
-          fresh: Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000
-        };
+    const body = await response.json() as { features?: unknown[] };
+    return normalizeRiverReadings(
+      (body.features ?? []).flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const feature = item as { properties?: Record<string, unknown>; geometry?: { coordinates?: number[] } };
+        if (feature.properties?.sensor_ref !== "0001") return [];
+        const [longitude, latitude] = feature.geometry?.coordinates ?? [];
+        const stationNumber = Number.parseInt(String(feature.properties?.station_ref ?? ""), 10);
+        return Number.isFinite(stationNumber) && stationNumber <= 41000
+          ? [{
+              id: String(feature.properties?.station_ref ?? ""),
+              name: String(feature.properties?.station_name ?? "River gauge"),
+              latitude,
+              longitude,
+              level: feature.properties?.value,
+              observedAt: feature.properties?.datetime
+            }]
+          : [];
       })
-      .filter((reading): reading is RiverReading => reading !== null && reading.fresh);
-
-    const cells = new Map<string, RiverReading>();
-    for (const reading of readings) {
-      const key = `${Math.round(reading.longitude * 4)}:${Math.round(reading.latitude * 5)}`;
-      const current = cells.get(key);
-      if (!current || new Date(reading.observedAt) > new Date(current.observedAt)) cells.set(key, reading);
-    }
-    return [...cells.values()].slice(0, 90);
+    );
   } catch {
     return [];
   }
@@ -544,7 +513,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
   const [
     stationResults,
     fallbackStations,
-    warnings,
+    warningResult,
     marine,
     trains,
     rivers,
@@ -566,11 +535,12 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
   ]);
   const results = stationResults.filter((value): value is StationResult => value !== null);
   const resultIds = new Set(results.map((result) => result.reading.id));
-  const stations = [
+  const stationCandidates = [
     ...results.map((result) => result.reading),
     ...fallbackStations.filter((station) => !resultIds.has(station.id))
   ];
-  const fresh = stations.filter((station) => station.fresh);
+  const stations = stationCandidates.filter((station) => station.fresh);
+  const fresh = stations;
   const by = (field: "temperature" | "rainfall" | "windSpeed") =>
     [...fresh]
       .filter((station) => station[field] !== null)
@@ -587,11 +557,12 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     }
   }
 
+  const generatedAt = new Date().toISOString();
   return {
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
     stations,
-    warnings,
+    warnings: warningResult.warnings,
     marine,
     trains,
     rivers,
@@ -607,13 +578,30 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     earthquakes: [],
     transit: [],
     transitStatus: "credential-required",
+    sourceProvenance: {
+      trains: {
+        provider: "Irish Rail",
+        endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+        status: trains.length ? "live" : "unavailable",
+        fetchedAt: generatedAt,
+        latestObservedAt: latestObservedAt(trains),
+        fallback: null
+      },
+      rivers: makeRiverProvenance({
+        status: rivers.length ? "live" : "unavailable",
+        fetchedAt: generatedAt,
+        readings: rivers
+      })
+    },
     contextStatus: {
+      marine: marine.length ? "live" : "unavailable",
       measuredAir: "unavailable",
       tides: "unavailable",
       bathing: "unavailable",
       satellite: "unavailable",
       earthquakes: "unavailable",
-      iss: "unavailable"
+      iss: "unavailable",
+      warnings: warningResult.status
     },
     summary: {
       warmest: by("temperature"),

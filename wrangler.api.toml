@@ -9,6 +9,7 @@ routes = [
 
 [vars]
 EDGE_RUNTIME = "cloudflare"
+PAGES_ORIGIN = "https://a-day-in-ireland.pages.dev"
 
 [[durable_objects.bindings]]
 name = "NTA_FEED"

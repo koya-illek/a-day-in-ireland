@@ -1,5 +1,10 @@
-import type { LiveSnapshot, StationReading } from "./types";
-import { parseLatestObservations } from "./latest-observations";
+import type { LiveSnapshot, StationReading, WeatherWarning } from "./types";
+import {
+  parseEirGridLocalTimestamp,
+  parseIrelandLocalTimestamp,
+  parseLatestObservations
+} from "./latest-observations";
+import { normalizeRiverReadings } from "../platform/river-source.js";
 import {
   degreesLat,
   degreesLong,
@@ -81,254 +86,503 @@ export function addCalculatedSpeeds<
   });
 }
 
-const fetchWithRetry = async (url: string, timeoutMs: number) => {
+type ProviderName = "weather" | "living" | "contexts" | "transit";
+
+type ProviderRequest = {
+  provider: ProviderName;
+  previous: LiveSnapshot;
+  controller: AbortController;
+  signal: AbortSignal;
+  generation: number;
+  done: Promise<LiveSnapshot | undefined>;
+  isCurrent: () => boolean;
+  complete: (result: LiveSnapshot | undefined) => void;
+};
+
+const activeProviderRequests = new Map<ProviderName, ProviderRequest>();
+const lastProviderResults = new Map<ProviderName, LiveSnapshot>();
+
+const beginProviderRequest = (provider: ProviderName, previous: LiveSnapshot): ProviderRequest => {
+  const prior = activeProviderRequests.get(provider);
+  prior?.controller.abort();
+  let resolveDone: (result: LiveSnapshot | undefined) => void = () => undefined;
+  const done = new Promise<LiveSnapshot | undefined>((resolve) => {
+    resolveDone = resolve;
+  });
+  const controller = new AbortController();
+  const request: ProviderRequest = {
+    provider,
+    previous,
+    controller,
+    signal: controller.signal,
+    generation: (prior?.generation ?? 0) + 1,
+    done,
+    isCurrent: () => activeProviderRequests.get(provider)?.generation === request.generation,
+    complete: (result: LiveSnapshot | undefined) => {
+      if (result) lastProviderResults.set(provider, result);
+      resolveDone(result);
+      if (activeProviderRequests.get(provider)?.generation === request.generation) {
+        activeProviderRequests.delete(provider);
+      }
+    }
+  };
+  activeProviderRequests.set(provider, request);
+  return request;
+};
+
+const latestProviderResult = async (request: ProviderRequest): Promise<LiveSnapshot> => {
+  let current = activeProviderRequests.get(request.provider);
+  while (current && current.generation !== request.generation) {
+    const result = await current.done;
+    const newer = activeProviderRequests.get(request.provider);
+    if (!newer || newer.generation === request.generation) {
+      return result ?? lastProviderResults.get(request.provider) ?? request.previous;
+    }
+    current = newer;
+  }
+  return lastProviderResults.get(request.provider) ?? request.previous;
+};
+
+const runProviderRefresh = async (
+  provider: ProviderName,
+  previous: LiveSnapshot,
+  operation: (request: ProviderRequest) => Promise<LiveSnapshot>,
+  fallback: () => LiveSnapshot
+): Promise<LiveSnapshot> => {
+  const request = beginProviderRequest(provider, previous);
+  let result: LiveSnapshot | undefined;
+  try {
+    const next = await operation(request);
+    if (!request.isCurrent()) return await latestProviderResult(request);
+    result = next;
+    return next;
+  } catch {
+    if (!request.isCurrent()) return await latestProviderResult(request);
+    result = fallback();
+    return result;
+  } finally {
+    request.complete(result);
+  }
+};
+
+const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  parentSignal: AbortSignal
+) => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timeout = window.setTimeout(abort, timeoutMs);
+  parentSignal.addEventListener("abort", abort, { once: true });
+  if (parentSignal.aborted) controller.abort();
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abort);
+  }
+};
+
+const pause = (milliseconds: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  const abort = () => {
+    window.clearTimeout(timeout);
+    signal.removeEventListener("abort", abort);
+    reject(new DOMException("Refresh superseded", "AbortError"));
+  };
+  const timeout = window.setTimeout(() => {
+    signal.removeEventListener("abort", abort);
+    resolve();
+  }, milliseconds);
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+});
+
+const fetchWithRetry = async (url: string, timeoutMs: number, signal: AbortSignal) => {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         cache: "no-store",
-        signal: AbortSignal.timeout(timeoutMs + attempt * 5_000)
-      });
+      }, timeoutMs + attempt * 5_000, signal);
       if (response.ok || response.status < 500) return response;
       lastError = new Error(`${url} returned ${response.status}`);
     } catch (error) {
       lastError = error;
     }
-    if (attempt === 0) await new Promise((resolve) => window.setTimeout(resolve, 600));
+    if (attempt === 0) await pause(600, signal);
   }
   throw lastError instanceof Error ? lastError : new Error(`${url} could not be refreshed`);
 };
 
-function timestamp(date: string, time: string) {
-  const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(date);
-  if (!match) return null;
-  const value = new Date(`${match[3]}-${match[2]}-${match[1]}T${time}:00`);
-  return Number.isNaN(value.getTime()) ? null : value.toISOString();
-}
+const timestamp = parseIrelandLocalTimestamp;
+const normalizeGridTimestamp = (value: unknown): string | null => {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const local = parseEirGridLocalTimestamp(text);
+  if (local) return local;
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+};
+
+const normalizeBrowserWarnings = (rows: unknown[], now = Date.now()): WeatherWarning[] => rows.flatMap((item) => {
+  if (!item || typeof item !== "object") return [];
+  const warning = item as Record<string, unknown>;
+  const onset = Date.parse(String(warning.onset ?? ""));
+  const expiry = Date.parse(String(warning.expiry ?? ""));
+  if (!Number.isFinite(expiry) || expiry <= now || (Number.isFinite(onset) && onset > now)) return [];
+  return [{
+    level: String(warning.level ?? "Advisory"),
+    headline: String(warning.headline ?? "Weather advisory"),
+    description: String(warning.description ?? ""),
+    onset: String(warning.onset ?? ""),
+    expiry: String(warning.expiry ?? "")
+  }];
+});
+
+const normalizeBrowserBathingAlerts = (rows: unknown[], now = Date.now()): LiveSnapshot["bathingAlerts"] => rows.flatMap((item) => {
+  if (!item || typeof item !== "object") return [];
+  const alert = item as Record<string, unknown>;
+  const startedAt = Date.parse(String(alert.startedAt ?? ""));
+  const endsAt = Date.parse(String(alert.endsAt ?? ""));
+  return Number.isFinite(startedAt) && startedAt <= now && (!Number.isFinite(endsAt) || endsAt > now)
+    ? [item as LiveSnapshot["bathingAlerts"][number]]
+    : [];
+});
+
+const emptyWeatherSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
+  ...previous,
+  generatedAt: new Date().toISOString(),
+  sourceStatus: "fallback",
+  stations: [],
+  warnings: [],
+  summary: {
+    ...previous.summary,
+    warmest: null,
+    wettest: null,
+    windiest: null,
+    reporting: 0
+  },
+  timeline: []
+});
+
+const fetchBrowserWarnings = async (signal: AbortSignal): Promise<{ warnings: WeatherWarning[]; status: "live" | "unavailable" }> => {
+  try {
+    const response = await fetchWithRetry("/api/contexts", 15_000, signal);
+    if (!response.ok) return { warnings: [], status: "unavailable" };
+    const body = await response.json() as { warnings?: unknown; warningsStatus?: "live" | "unavailable" };
+    if (body.warningsStatus === "unavailable" || !Array.isArray(body.warnings)) {
+      return { warnings: [], status: "unavailable" };
+    }
+    return { warnings: normalizeBrowserWarnings(body.warnings), status: "live" };
+  } catch {
+    return { warnings: [], status: "unavailable" };
+  }
+};
 
 export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapshot> {
-  const results = await Promise.all(
-    STATIONS.map(async ([endpoint, name, , latitude, longitude]) => {
+  return runProviderRefresh("weather", previous, async (request) => {
+    const results = await Promise.all(
+      STATIONS.map(async ([endpoint, name, , latitude, longitude]) => {
+        try {
+          const response = await fetchWithTimeout(
+            `https://prodapi.metweb.ie/observations/${endpoint}/today`,
+            { cache: "no-store" },
+            7_000,
+            request.signal
+          );
+          if (!response.ok) return null;
+          const rows = (await response.json()) as Array<Record<string, unknown>>;
+          const latest = rows.at(-1);
+          if (!latest) return null;
+          const observedAt = timestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
+          const reading: StationReading = {
+            id: endpoint,
+            name,
+            latitude,
+            longitude,
+            temperature: numeric(latest.temperature),
+            rainfall: numeric(latest.rainfall),
+            windSpeed: numeric(latest.windSpeed),
+            windDirection: String(latest.cardinalWindDirection ?? "").trim(),
+            description: String(latest.weatherDescription ?? "Observation available"),
+            observedAt,
+            fresh: observedAt ? Date.now() - new Date(observedAt).getTime() >= 0 && Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000 : false
+          };
+          return {
+            reading,
+            history: rows.map((row) => ({
+              time: String(row.reportTime ?? ""),
+              temperature: numeric(row.temperature),
+              rainfall: numeric(row.rainfall) ?? 0,
+              windSpeed: numeric(row.windSpeed)
+            }))
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    const valid = results.filter((result): result is NonNullable<typeof result> => result !== null);
+    let fallbackStations: StationReading[] = [];
+    if (valid.length < STATIONS.length) {
       try {
-        const response = await fetch(`https://prodapi.metweb.ie/observations/${endpoint}/today`, {
-          cache: "no-store",
-          signal: AbortSignal.timeout(7000)
-        });
-        if (!response.ok) return null;
-        const rows = (await response.json()) as Array<Record<string, unknown>>;
-        const latest = rows.at(-1);
-        if (!latest) return null;
-        const observedAt = timestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
-        const reading: StationReading = {
-          id: endpoint,
-          name,
-          latitude,
-          longitude,
-          temperature: numeric(latest.temperature),
-          rainfall: numeric(latest.rainfall),
-          windSpeed: numeric(latest.windSpeed),
-          windDirection: String(latest.cardinalWindDirection ?? "").trim(),
-          description: String(latest.weatherDescription ?? "Observation available"),
-          observedAt,
-          fresh: observedAt ? Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000 : false
-        };
-        return {
-          reading,
-          history: rows.map((row) => ({
-            time: String(row.reportTime ?? ""),
-            temperature: numeric(row.temperature),
-            rainfall: numeric(row.rainfall) ?? 0,
-            windSpeed: numeric(row.windSpeed)
-          }))
-        };
-      } catch {
-        return null;
-      }
-    })
-  );
-  const valid = results.filter((result): result is NonNullable<typeof result> => result !== null);
-  let fallbackStations: StationReading[] = [];
-  if (valid.length < STATIONS.length) {
-    try {
-      const response = await fetch("https://www.met.ie/latest-reports/observations/download", {
-        cache: "no-store",
-        signal: AbortSignal.timeout(7000)
-      });
-      if (response.ok) {
-        fallbackStations = parseLatestObservations(
-          await response.text(),
-          STATIONS.map(([id, name, csvName, latitude, longitude]) => ({
-            id, name, csvName, latitude, longitude
-          }))
+        const response = await fetchWithTimeout(
+          "https://www.met.ie/latest-reports/observations/download",
+          { cache: "no-store" },
+          7_000,
+          request.signal
         );
+        if (response.ok) {
+          fallbackStations = parseLatestObservations(
+            await response.text(),
+            STATIONS.map(([id, name, csvName, latitude, longitude]) => ({
+              id, name, csvName, latitude, longitude
+            }))
+          );
+        }
+      } catch {
+        // The fallback has no source timestamp, so it cannot keep old data live.
       }
-    } catch {
-      // Keep the previous snapshot if both official observation feeds are unavailable.
     }
-  }
-  if (!valid.length && !fallbackStations.length) return { ...previous, sourceStatus: "fallback" };
-  const validIds = new Set(valid.map((result) => result.reading.id));
-  const stations = [
-    ...valid.map((result) => result.reading),
-    ...fallbackStations.filter((station) => !validIds.has(station.id))
-  ];
-  const fresh = stations.filter((station) => station.fresh);
-  const top = (field: "temperature" | "rainfall" | "windSpeed") =>
-    [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
-  const buckets = new Map<string, { temp: number[]; rain: number; wind: number[] }>();
-  valid.forEach(({ history }) => history.forEach((point) => {
-    const bucket = buckets.get(point.time) ?? { temp: [], rain: 0, wind: [] };
-    if (point.temperature !== null) bucket.temp.push(point.temperature);
-    if (point.windSpeed !== null) bucket.wind.push(point.windSpeed);
-    bucket.rain += point.rainfall;
-    buckets.set(point.time, bucket);
-  }));
-  const now = Date.now();
-  return {
-    ...previous,
-    generatedAt: new Date().toISOString(),
-    sourceStatus: fresh.length >= 6 ? "live" : "partial",
-    stations,
-    warnings: previous.warnings.filter((warning) => new Date(warning.expiry).getTime() > now),
-    marine: previous.marine.filter((buoy) => now - new Date(buoy.observedAt).getTime() < 6 * 60 * 60 * 1000),
-    summary: {
-      ...previous.summary,
-      warmest: top("temperature"),
-      wettest: top("rainfall"),
-      windiest: top("windSpeed"),
-      reporting: fresh.length
-    },
-    timeline: [...buckets].map(([time, values]) => ({
-      time,
-      temperature: values.temp.length ? values.temp.reduce((a, b) => a + b, 0) / values.temp.length : null,
-      rainfall: values.rain,
-      windSpeed: values.wind.length ? values.wind.reduce((a, b) => a + b, 0) / values.wind.length : null
-    }))
-  };
+    if (!valid.length && !fallbackStations.length) return emptyWeatherSnapshot(previous);
+    const validIds = new Set(valid.map((result) => result.reading.id));
+    const stationCandidates = [
+      ...valid.map((result) => result.reading),
+      ...fallbackStations.filter((station) => !validIds.has(station.id))
+    ];
+    const stations = stationCandidates.filter((station) => station.fresh);
+    const fresh = stations;
+    const top = (field: "temperature" | "rainfall" | "windSpeed") =>
+      [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
+    const buckets = new Map<string, { temp: number[]; rain: number; wind: number[] }>();
+    valid.forEach(({ history }) => history.forEach((point) => {
+      const bucket = buckets.get(point.time) ?? { temp: [], rain: 0, wind: [] };
+      if (point.temperature !== null) bucket.temp.push(point.temperature);
+      if (point.windSpeed !== null) bucket.wind.push(point.windSpeed);
+      bucket.rain += point.rainfall;
+      buckets.set(point.time, bucket);
+    }));
+    const warningResult = await fetchBrowserWarnings(request.signal);
+    const now = Date.now();
+    return {
+      ...previous,
+      generatedAt: new Date().toISOString(),
+      sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
+      stations,
+      warnings: warningResult.status === "live" ? warningResult.warnings : previous.warnings,
+      contextStatus: { ...previous.contextStatus, warnings: warningResult.status },
+      marine: previous.marine.filter((buoy) => {
+        const timestamp = new Date(buoy.observedAt).getTime();
+        return Number.isFinite(timestamp) && now - timestamp >= 0 && now - timestamp < 6 * 60 * 60 * 1000;
+      }),
+      summary: {
+        ...previous.summary,
+        warmest: top("temperature"),
+        wettest: top("rainfall"),
+        windiest: top("windSpeed"),
+        reporting: fresh.length
+      },
+      timeline: [...buckets].map(([time, values]) => ({
+        time,
+        temperature: values.temp.length ? values.temp.reduce((a, b) => a + b, 0) / values.temp.length : null,
+        rainfall: values.rain,
+        windSpeed: values.wind.length ? values.wind.reduce((a, b) => a + b, 0) / values.wind.length : null
+      }))
+    };
+  }, () => emptyWeatherSnapshot(previous));
 }
 
+const unavailableProvenance = (previous: LiveSnapshot, provider: "trains" | "rivers") => ({
+  ...(previous.sourceProvenance?.[provider] ?? {
+    provider: provider === "trains" ? "Irish Rail" : "OPW waterlevel.ie",
+    endpoint: provider === "trains"
+      ? "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML"
+      : "https://waterlevel.ie/geojson/latest/",
+    fetchedAt: new Date().toISOString(),
+    latestObservedAt: null,
+    fallback: null
+  }),
+  status: "unavailable" as const,
+  fetchedAt: new Date().toISOString(),
+  latestObservedAt: null,
+  fallback: null
+});
+
+const emptyLivingSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
+  ...previous,
+  trains: [],
+  rivers: [],
+  sourceProvenance: {
+    trains: unavailableProvenance(previous, "trains"),
+    rivers: unavailableProvenance(previous, "rivers")
+  },
+  summary: {
+    ...previous.summary,
+    runningTrains: 0,
+    riverStations: 0
+  }
+});
+
+const emptyContextStatus = (): LiveSnapshot["contextStatus"] => ({
+  marine: "unavailable",
+  measuredAir: "unavailable",
+  tides: "unavailable",
+  bathing: "unavailable",
+  satellite: "unavailable",
+  earthquakes: "unavailable",
+  iss: "unavailable",
+  warnings: "unavailable"
+});
+
+const emptyContextsSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
+  ...previous,
+  warnings: [],
+  marine: [],
+  radar: [],
+  grid: null,
+  airQuality: [],
+  aurora: null,
+  tides: [],
+  bathingAlerts: [],
+  iss: null,
+  issTle: null,
+  satellite: null,
+  earthquakes: [],
+  contextStatus: emptyContextStatus()
+});
+
 export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveSnapshot> {
-  try {
-    const response = await fetchWithRetry("/api/living", 10_000);
-    if (!response.ok) return previous;
-    const next = (await response.json()) as Pick<LiveSnapshot, "trains" | "rivers"> & {
-      generatedAt: string;
+  return runProviderRefresh("living", previous, async (request) => {
+    const response = await fetchWithRetry("/api/living", 10_000, request.signal);
+    if (!response.ok) throw new Error(`Live layers returned ${response.status}`);
+    const next = await response.json() as Partial<Pick<LiveSnapshot, "trains" | "rivers" | "sourceProvenance">> & {
       sourceStatus?: {
-        trains: "live" | "unavailable";
-        rivers: "live" | "unavailable";
+        trains?: "live" | "unavailable";
+        rivers?: "live" | "stale" | "fallback" | "unavailable";
       };
     };
-    if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) {
-      return previous;
-    }
-    const now = Date.now();
-    const trains = next.sourceStatus?.trains === "unavailable"
-      ? previous.trains
-      : addCalculatedSpeeds(next.trains, previous.trains, {
+    if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) throw new Error("Live layers response is incomplete");
+    const trainsLive = next.sourceStatus?.trains !== "unavailable" && next.trains.length > 0;
+    const trains = trainsLive
+      ? addCalculatedSpeeds(next.trains, previous.trains, {
           maximumKmh: 200,
           maximumIntervalMinutes: 15
-        });
-    const rivers = (next.sourceStatus?.rivers === "unavailable" ? previous.rivers : next.rivers)
-      .filter((river) => now - new Date(river.observedAt).getTime() < 3 * 60 * 60 * 1000);
+        })
+      : [];
+    const riversStatus = next.sourceStatus?.rivers;
+    const rivers = riversStatus === "unavailable"
+      ? []
+      : normalizeRiverReadings(next.rivers, Date.now());
+    const sourceProvenance = next.sourceProvenance
+      ? {
+          ...next.sourceProvenance,
+          trains: trains.length ? next.sourceProvenance.trains ?? unavailableProvenance(previous, "trains") : unavailableProvenance(previous, "trains"),
+          rivers: rivers.length ? next.sourceProvenance.rivers ?? unavailableProvenance(previous, "rivers") : unavailableProvenance(previous, "rivers")
+        }
+      : {
+          trains: trains.length ? previous.sourceProvenance?.trains ?? unavailableProvenance(previous, "trains") : unavailableProvenance(previous, "trains"),
+          rivers: rivers.length ? previous.sourceProvenance?.rivers ?? unavailableProvenance(previous, "rivers") : unavailableProvenance(previous, "rivers")
+        };
     return {
       ...previous,
       trains,
       rivers,
+      sourceProvenance,
       summary: {
         ...previous.summary,
         runningTrains: trains.filter((train) => train.status === "running").length,
         riverStations: rivers.length
       }
     };
-  } catch {
-    return previous;
-  }
+  }, () => emptyLivingSnapshot(previous));
 }
 
 export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
-  try {
-    const response = await fetchWithRetry("/api/contexts", 15_000);
-    const next = (response.ok ? await response.json() : {}) as Partial<
-      Pick<
-        LiveSnapshot,
-        "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
-        "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
-      >
-    >;
-    const iss = next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : previous.iss;
-    let airQuality = Array.isArray(next.airQuality) ? next.airQuality : previous.airQuality;
-    let contextStatus = next.contextStatus && typeof next.contextStatus === "object"
-      ? next.contextStatus
-      : previous.contextStatus;
+  return runProviderRefresh("contexts", previous, async (request) => {
+    const response = await fetchWithRetry("/api/contexts", 15_000, request.signal);
+    if (!response.ok) throw new Error(`Current contexts returned ${response.status}`);
+    const next = await response.json() as Partial<Pick<
+      LiveSnapshot,
+      "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
+      "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
+    >> & {
+      warnings?: unknown;
+      warningsStatus?: "live" | "unavailable";
+    };
+    const contextStatus: LiveSnapshot["contextStatus"] = {
+      ...previous.contextStatus,
+      ...(next.contextStatus && typeof next.contextStatus === "object" ? next.contextStatus : {})
+    };
+    const contextUnavailable = (name: keyof LiveSnapshot["contextStatus"]) => contextStatus[name] === "unavailable";
+    const now = Date.now();
+    let airQuality = contextUnavailable("measuredAir")
+      ? (Array.isArray(next.airQuality) ? next.airQuality.filter((reading) => reading.source !== "measured") : [])
+      : (Array.isArray(next.airQuality) ? next.airQuality : []);
     if (
       window.location.hostname !== "127.0.0.1" &&
       window.location.hostname !== "localhost" &&
       !airQuality.some((reading) => reading.source === "measured")
     ) {
-      const measured = await fetchMeasuredAirFallback();
+      const measured = await fetchMeasuredAirFallback(request.signal);
       if (measured.length) {
         airQuality = [...measured, ...airQuality.filter((reading) => reading.source !== "measured")];
-        contextStatus = { ...contextStatus, measuredAir: "live" };
-      } else {
-        const retainedMeasured = previous.airQuality.filter((reading) =>
-          reading.source === "measured" &&
-          Date.now() - new Date(reading.observedAt).getTime() < 6 * 60 * 60_000
-        );
-        airQuality = [...retainedMeasured, ...airQuality.filter((reading) => reading.source !== "measured")];
+        contextStatus.measuredAir = "fallback";
       }
     }
-    const contextUnavailable = (name: keyof LiveSnapshot["contextStatus"]) =>
-      contextStatus[name] === "unavailable";
+    const warningStatus = next.warningsStatus === "unavailable" || !Array.isArray(next.warnings) ? "unavailable" : "live";
+    const warnings = warningStatus === "live"
+      ? normalizeBrowserWarnings(next.warnings as unknown[], now)
+      : previous.warnings;
+    contextStatus.warnings = warningStatus;
+    const bathingAlerts = contextUnavailable("bathing") || !Array.isArray(next.bathingAlerts)
+      ? []
+      : normalizeBrowserBathingAlerts(next.bathingAlerts, now);
+    const grid = next.grid && typeof next.grid === "object"
+      ? { ...next.grid, observedAt: normalizeGridTimestamp(next.grid.observedAt) }
+      : null;
     return {
       ...previous,
-      marine: Array.isArray(next.marine) && next.marine.length ? next.marine : previous.marine,
-      radar: Array.isArray(next.radar) && next.radar.length ? next.radar : previous.radar,
-      grid: next.grid && typeof next.grid === "object" ? next.grid : previous.grid,
+      warnings,
+      marine: Array.isArray(next.marine) ? next.marine : [],
+      radar: Array.isArray(next.radar) ? next.radar : [],
+      grid,
       airQuality,
-      aurora: next.aurora && typeof next.aurora === "object" ? next.aurora : previous.aurora,
-      tides: !contextUnavailable("tides") && Array.isArray(next.tides) ? next.tides : previous.tides,
-      bathingAlerts: !contextUnavailable("bathing") && Array.isArray(next.bathingAlerts)
-        ? next.bathingAlerts
-        : previous.bathingAlerts,
-      iss: contextUnavailable("iss") ? previous.iss : iss,
-      issTle: !contextUnavailable("iss") && (next.issTle === null || typeof next.issTle === "object")
-        ? next.issTle
-        : previous.issTle,
-      satellite: !contextUnavailable("satellite") && next.satellite && typeof next.satellite === "object"
-        ? next.satellite
-        : previous.satellite,
-      earthquakes: !contextUnavailable("earthquakes") && Array.isArray(next.earthquakes)
-        ? next.earthquakes
-        : previous.earthquakes,
+      aurora: next.aurora && typeof next.aurora === "object" ? next.aurora : null,
+      tides: contextUnavailable("tides") || !Array.isArray(next.tides) ? [] : next.tides,
+      bathingAlerts,
+      iss: contextUnavailable("iss") || !next.issTle ? null : predictIss(next.issTle.line1, next.issTle.line2),
+      issTle: contextUnavailable("iss") || !(next.issTle === null || typeof next.issTle === "object") ? null : next.issTle,
+      satellite: contextUnavailable("satellite") || !next.satellite || typeof next.satellite !== "object" ? null : next.satellite,
+      earthquakes: contextUnavailable("earthquakes") || !Array.isArray(next.earthquakes) ? [] : next.earthquakes,
       contextStatus
     };
-  } catch {
-    return previous;
-  }
+  }, () => emptyContextsSnapshot(previous));
 }
 
 export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapshot> {
-  try {
-    const response = await fetchWithRetry("/api/transit", 15_000);
-    if (!response.ok) return previous;
-    const next = (await response.json()) as Partial<
-      Pick<LiveSnapshot, "transit" | "transitStatus">
-    >;
-    const transitStatus = next.transitStatus ?? previous.transitStatus;
-    if (transitStatus !== "live" || !Array.isArray(next.transit)) {
-      return { ...previous, transitStatus };
+  return runProviderRefresh("transit", previous, async (request) => {
+    const response = await fetchWithRetry("/api/transit", 15_000, request.signal);
+    if (!response.ok) throw new Error(`Transit returned ${response.status}`);
+    const next = await response.json() as Partial<Pick<LiveSnapshot, "transit" | "transitStatus">>;
+    if (next.transitStatus !== "live" || !Array.isArray(next.transit) || !next.transit.length) {
+      return { ...previous, transit: [], transitStatus: next.transitStatus === "credential-required" ? "credential-required" : "unavailable" };
     }
+    const transit = next.transit.filter((vehicle) => {
+      const observedAt = Date.parse(vehicle.observedAt);
+      const age = Date.now() - observedAt;
+      return Number.isFinite(observedAt) && age >= 0 && age < 30 * 60_000;
+    });
+    if (!transit.length) return { ...previous, transit: [], transitStatus: "unavailable" };
     return {
       ...previous,
-      transit: addCalculatedSpeeds(next.transit, previous.transit, {
+      transit: addCalculatedSpeeds(transit, previous.transit, {
         maximumKmh: 130,
         maximumIntervalMinutes: 10
       }),
-      transitStatus
+      transitStatus: "live"
     };
-  } catch {
-    return previous;
-  }
+  }, () => ({ ...previous, transit: [], transitStatus: "unavailable" }));
 }
 
 const eeaTimestamp = (value: string) => {
@@ -356,17 +610,20 @@ const measuredAqi = (reading: Pick<LiveSnapshot["airQuality"][number], "pm25" | 
   return scores.length ? Math.max(...scores) : null;
 };
 
-async function fetchMeasuredAirFallback(): Promise<LiveSnapshot["airQuality"]> {
+async function fetchMeasuredAirFallback(parentSignal?: AbortSignal): Promise<LiveSnapshot["airQuality"]> {
   try {
+    const signal = parentSignal ?? new AbortController().signal;
     const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
     const stamp = observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
     const pollutants = [
       ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
     ] as const;
     const results = await Promise.allSettled(pollutants.map(async ([pollutant, field]) => {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
-        { signal: AbortSignal.timeout(9000) }
+        {},
+        9_000,
+        signal
       );
       if (!response.ok) throw new Error(String(response.status));
       return [field, await response.text()] as const;

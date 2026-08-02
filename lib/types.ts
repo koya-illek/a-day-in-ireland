@@ -173,6 +173,15 @@ export type TransitVehicle = {
   observedAt: string;
 };
 
+export type ProviderProvenance = {
+  provider: string;
+  endpoint: string;
+  status: "live" | "partial" | "stale" | "fallback" | "unavailable";
+  fetchedAt: string;
+  latestObservedAt: string | null;
+  fallback: string | null;
+};
+
 export type LiveSnapshot = {
   generatedAt: string;
   sourceStatus: "live" | "partial" | "fallback";
@@ -193,13 +202,19 @@ export type LiveSnapshot = {
   earthquakes: EarthquakeReading[];
   transit: TransitVehicle[];
   transitStatus: "live" | "credential-required" | "unavailable";
+  sourceProvenance?: {
+    trains: ProviderProvenance;
+    rivers: ProviderProvenance;
+  };
   contextStatus: {
-    measuredAir: "live" | "unavailable";
-    tides: "live" | "unavailable";
-    bathing: "live" | "unavailable";
-    satellite: "live" | "unavailable";
-    earthquakes: "live" | "unavailable";
-    iss: "live" | "unavailable";
+    marine: "live" | "unavailable";
+    measuredAir: "live" | "fallback" | "unavailable";
+    tides: "live" | "fallback" | "unavailable";
+    bathing: "live" | "fallback" | "unavailable";
+    satellite: "live" | "fallback" | "unavailable";
+    earthquakes: "live" | "fallback" | "unavailable";
+    iss: "live" | "fallback" | "unavailable";
+    warnings?: "live" | "unavailable";
   };
   summary: {
     warmest: StationReading | null;
