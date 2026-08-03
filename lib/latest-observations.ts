@@ -1,4 +1,5 @@
 import type { StationReading } from "./types";
+import { isWeatherObservationFresh } from "./weather-stations";
 
 type StationDefinition = {
   id: string;
@@ -172,7 +173,6 @@ export function parseLatestObservations(
     if (!row) return [];
     const windKnots = nullableNumber(row[3]);
     const normalizedObservedAt = normalizeObservedTimestamp(observedAt);
-    const timestamp = normalizedObservedAt ? Date.parse(normalizedObservedAt) : Number.NaN;
     return [{
       id: station.id,
       name: station.name,
@@ -184,7 +184,7 @@ export function parseLatestObservations(
       windDirection: row[5].trim(),
       description: row[2].trim() || "Latest observation",
       observedAt: normalizedObservedAt,
-      fresh: Number.isFinite(timestamp) && timestamp <= now && now - timestamp < 3 * 60 * 60 * 1000
+      fresh: isWeatherObservationFresh(normalizedObservedAt, now)
     }];
   });
 }

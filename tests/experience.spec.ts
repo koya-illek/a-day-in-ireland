@@ -7,6 +7,85 @@ async function enableExploreLayer(page: Page, name: RegExp) {
   await page.getByRole("button", { name: "Close explore panel" }).click();
 }
 
+function metObservationTime(minutesAgo: number) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-IE", {
+      timeZone: "Europe/Dublin",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(new Date(Date.now() - minutesAgo * 60_000)).map((part) => [part.type, part.value])
+  );
+  return { date: `${parts.day}-${parts.month}-${parts.year}`, reportTime: `${parts.hour}:${parts.minute}` };
+}
+
+test("boot refresh uses canonical weather stations and one contexts request", async ({ page }) => {
+  const stationNames = new Map([
+    ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
+    ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
+    ["valentia", "Valentia"], ["cork", "Cork"], ["johnstown-castle", "Johnstown Castle"]
+  ]);
+  const requestedStations: string[] = [];
+  let contextsRequests = 0;
+  const observation = metObservationTime(50);
+
+  await page.route("https://prodapi.metweb.ie/observations/*/today", async (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/")[2];
+    requestedStations.push(endpoint);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{
+        name: stationNames.get(endpoint) ?? "Wrong station",
+        ...observation,
+        temperature: "16",
+        rainfall: "0.0",
+        windSpeed: "8",
+        cardinalWindDirection: "E",
+        weatherDescription: "Test observation"
+      }])
+    });
+  });
+  await page.route("**/api/contexts", async (route) => {
+    contextsRequests += 1;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+        warnings: [], warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
+        contextStatus: {
+          marine: "unavailable", measuredAir: "unavailable", tides: "unavailable", bathing: "unavailable",
+          satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "live"
+        }
+      })
+    });
+  });
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+
+  await page.goto("/");
+  await expect(page.locator(".rail-status")).toContainText("Refreshing services…");
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  const weatherChip = page.locator(".freshness-chip").filter({ hasText: "Weather provider" });
+  await expect(weatherChip).toContainText("Provider: live");
+  await expect(weatherChip).not.toContainText("stale");
+  expect(contextsRequests).toBe(1);
+  expect(requestedStations).toContain("dublin");
+  expect(requestedStations).toContain("cork");
+  expect(requestedStations).not.toContain("dublin-airport");
+  expect(requestedStations).not.toContain("cork-airport");
+});
+
 test("renders the living map and live observations", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

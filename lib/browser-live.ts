@@ -5,6 +5,7 @@ import {
   parseLatestObservations
 } from "./latest-observations";
 import { normalizeRiverReadings } from "../platform/river-source.js";
+import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
 import {
   degreesLat,
   degreesLong,
@@ -15,18 +16,6 @@ import {
   propagate,
   twoline2satrec
 } from "satellite.js";
-
-const STATIONS = [
-  ["malin-head", "Malin Head", "Malin Head", 55.371, -7.339],
-  ["finner", "Finner", "Finner Camp", 54.494, -8.243],
-  ["belmullet", "Belmullet", "Belmullet", 54.228, -10.007],
-  ["athenry", "Athenry", "Athenry", 53.289, -8.786],
-  ["dublin-airport", "Dublin", "Dublin Airport", 53.428, -6.241],
-  ["gurteen", "Gurteen", "Gurteen", 53.034, -8.005],
-  ["valentia", "Valentia", "Valentia Observatory", 51.938, -10.241],
-  ["cork-airport", "Cork", "Cork Airport", 51.847, -8.486],
-  ["johnstown-castle", "Wexford", "Johnstown Castle", 52.298, -6.497]
-] as const;
 
 const numeric = (value: unknown) => {
   const parsed = Number.parseFloat(String(value ?? "").trim());
@@ -255,7 +244,6 @@ const emptyWeatherSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
   generatedAt: new Date().toISOString(),
   sourceStatus: "fallback",
   stations: [],
-  warnings: [],
   summary: {
     ...previous.summary,
     warmest: null,
@@ -266,52 +254,39 @@ const emptyWeatherSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
   timeline: []
 });
 
-const fetchBrowserWarnings = async (signal: AbortSignal): Promise<{ warnings: WeatherWarning[]; status: "live" | "unavailable" }> => {
-  try {
-    const response = await fetchWithRetry("/api/contexts", 15_000, signal);
-    if (!response.ok) return { warnings: [], status: "unavailable" };
-    const body = await response.json() as { warnings?: unknown; warningsStatus?: "live" | "unavailable" };
-    if (body.warningsStatus === "unavailable" || !Array.isArray(body.warnings)) {
-      return { warnings: [], status: "unavailable" };
-    }
-    return { warnings: normalizeBrowserWarnings(body.warnings), status: "live" };
-  } catch {
-    return { warnings: [], status: "unavailable" };
-  }
-};
-
 export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapshot> {
   return runProviderRefresh("weather", previous, async (request) => {
     const results = await Promise.all(
-      STATIONS.map(async ([endpoint, name, , latitude, longitude]) => {
+      WEATHER_STATIONS.map(async (station) => {
         try {
           const response = await fetchWithTimeout(
-            `https://prodapi.metweb.ie/observations/${endpoint}/today`,
+            `https://prodapi.metweb.ie/observations/${station.endpoint}/today`,
             { cache: "no-store" },
             7_000,
             request.signal
           );
           if (!response.ok) return null;
           const rows = (await response.json()) as Array<Record<string, unknown>>;
-          const latest = rows.at(-1);
+          const stationRows = rows.filter((row) => matchesWeatherStationIdentity(station, row.name));
+          const latest = stationRows.at(-1);
           if (!latest) return null;
           const observedAt = timestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
           const reading: StationReading = {
-            id: endpoint,
-            name,
-            latitude,
-            longitude,
+            id: station.id,
+            name: station.name,
+            latitude: station.latitude,
+            longitude: station.longitude,
             temperature: numeric(latest.temperature),
             rainfall: numeric(latest.rainfall),
             windSpeed: numeric(latest.windSpeed),
             windDirection: String(latest.cardinalWindDirection ?? "").trim(),
             description: String(latest.weatherDescription ?? "Observation available"),
             observedAt,
-            fresh: observedAt ? Date.now() - new Date(observedAt).getTime() >= 0 && Date.now() - new Date(observedAt).getTime() < 3 * 60 * 60 * 1000 : false
+            fresh: isWeatherObservationFresh(observedAt)
           };
           return {
             reading,
-            history: rows.map((row) => ({
+            history: stationRows.map((row) => ({
               time: String(row.reportTime ?? ""),
               temperature: numeric(row.temperature),
               rainfall: numeric(row.rainfall) ?? 0,
@@ -325,7 +300,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     );
     const valid = results.filter((result): result is NonNullable<typeof result> => result !== null);
     let fallbackStations: StationReading[] = [];
-    if (valid.length < STATIONS.length) {
+    if (valid.length < WEATHER_STATIONS.length) {
       try {
         const response = await fetchWithTimeout(
           "https://www.met.ie/latest-reports/observations/download",
@@ -336,9 +311,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
         if (response.ok) {
           fallbackStations = parseLatestObservations(
             await response.text(),
-            STATIONS.map(([id, name, csvName, latitude, longitude]) => ({
-              id, name, csvName, latitude, longitude
-            }))
+            WEATHER_STATIONS
           );
         }
       } catch {
@@ -363,15 +336,12 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
       bucket.rain += point.rainfall;
       buckets.set(point.time, bucket);
     }));
-    const warningResult = await fetchBrowserWarnings(request.signal);
     const now = Date.now();
     return {
       ...previous,
       generatedAt: new Date().toISOString(),
       sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
       stations,
-      warnings: warningResult.status === "live" ? warningResult.warnings : previous.warnings,
-      contextStatus: { ...previous.contextStatus, warnings: warningResult.status },
       marine: previous.marine.filter((buoy) => {
         const timestamp = new Date(buoy.observedAt).getTime();
         return Number.isFinite(timestamp) && now - timestamp >= 0 && now - timestamp < 6 * 60 * 60 * 1000;

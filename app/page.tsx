@@ -1,9 +1,6 @@
-import { getLiveSnapshot } from "../lib/live-data";
 import IrelandExperience from "../components/IrelandExperience";
+import { createInitialSnapshot } from "../lib/initial-snapshot";
 
-export const revalidate = 300;
-
-export default async function Home() {
-  const snapshot = await getLiveSnapshot();
-  return <IrelandExperience initialSnapshot={snapshot} />;
+export default function Home() {
+  return <IrelandExperience initialSnapshot={createInitialSnapshot()} />;
 }

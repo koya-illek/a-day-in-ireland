@@ -33,6 +33,7 @@ import {
   parseViewState,
   serializeViewState
 } from "../lib/view-state";
+import { WEATHER_OBSERVATION_MAX_AGE_MS } from "../lib/weather-stations";
 
 type Layer =
   | "weather"
@@ -328,7 +329,7 @@ function statusText(status: "live" | "partial" | "stale" | "fallback" | "unavail
 }
 
 const STALE_THRESHOLDS = {
-  weather: 5 * 60_000,
+  weather: WEATHER_OBSERVATION_MAX_AGE_MS,
   transit: 60_000,
   rivers: 15 * 60_000,
   marine: 6 * 60 * 60_000,
@@ -822,7 +823,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [selected, setSelected] = useState<MapSelection | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<Preset>("weather");
-  const [servicesRefreshing, setServicesRefreshing] = useState(false);
+  const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
   const [showAllNotables, setShowAllNotables] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => new Date(initialSnapshot.generatedAt));
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
@@ -888,8 +889,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         generatedAt: next.generatedAt,
         sourceStatus: next.sourceStatus,
         stations: next.stations,
-        warnings: next.warnings,
-        contextStatus: { ...current.contextStatus, warnings: next.contextStatus.warnings },
         timeline: next.timeline,
         summary: {
           ...current.summary,
@@ -1878,9 +1877,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </span>
             <span
               className={`freshness-chip ${snapshot.sourceStatus}`}
-              aria-label={`Weather provider ${statusText(snapshot.sourceStatus)}; latest local observation ${formatAge(localStation?.item.observedAt, now)}${weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}
+              aria-label={`Weather provider ${statusText(snapshot.sourceStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}
             >
-              <i aria-hidden="true" /><b>Weather provider</b><small>Provider: {statusText(snapshot.sourceStatus)} · Observation: {formatAge(localStation?.item.observedAt, now)}{weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}</small>
+              <i aria-hidden="true" /><b>Weather provider</b><small>Provider: {statusText(snapshot.sourceStatus)} · Observation: {formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}{weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}</small>
             </span>
             <span
               className={`freshness-chip ${snapshot.sourceProvenance?.trains.status ?? "unavailable"}`}

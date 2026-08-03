@@ -13,6 +13,64 @@ import {
   parseIrelandLocalTimestamp
 } from "../platform/river-source.js";
 
+const importStandaloneTypeScript = async (relativePath) => {
+  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  return import(`data:text/javascript,${encodeURIComponent(output)}`);
+};
+
+test("the static page starts with a truthful empty shell", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const snapshot = createInitialSnapshot("2026-08-03T09:00:00.000Z");
+
+  assert.equal(snapshot.generatedAt, "2026-08-03T09:00:00.000Z");
+  assert.equal(snapshot.sourceStatus, "fallback");
+  assert.deepEqual(snapshot.stations, []);
+  assert.deepEqual(snapshot.radar, []);
+  assert.equal(snapshot.grid, null);
+  assert.equal(snapshot.summary.reporting, 0);
+  assert.ok(Object.values(snapshot.contextStatus).every((status) => status === "unavailable"));
+});
+
+test("Met Éireann station definitions use canonical endpoints and reject mismatched identities", async () => {
+  const weather = await importStandaloneTypeScript("../lib/weather-stations.ts");
+  const dublin = weather.WEATHER_STATIONS.find((station) => station.name === "Dublin");
+  const cork = weather.WEATHER_STATIONS.find((station) => station.name === "Cork");
+
+  assert.equal(dublin.endpoint, "dublin");
+  assert.equal(dublin.csvName, "Dublin");
+  assert.equal(cork.endpoint, "cork");
+  assert.equal(cork.csvName, "Cork");
+  assert.equal(weather.matchesWeatherStationIdentity(dublin, "Dublin Airport"), true);
+  assert.equal(weather.matchesWeatherStationIdentity(cork, "Dublin Airport"), false);
+  assert.equal(weather.matchesWeatherStationIdentity(cork, "Cork"), true);
+});
+
+test("weather freshness follows the provider's hourly cadence", async () => {
+  const weather = await importStandaloneTypeScript("../lib/weather-stations.ts");
+  const now = Date.parse("2026-08-03T09:50:00.000Z");
+
+  assert.equal(weather.isWeatherObservationFresh("2026-08-03T09:00:00.000Z", now), true);
+  assert.equal(weather.isWeatherObservationFresh("2026-08-03T06:50:00.000Z", now), false);
+  assert.equal(weather.isWeatherObservationFresh("2026-08-03T10:00:00.000Z", now), false);
+});
+
+test("tide query windows remain stable inside a cache bucket", async () => {
+  const { tideQueryWindow } = await import("../platform/server-entry.js");
+  const first = Date.parse("2026-08-03T09:01:01.000Z");
+  const second = Date.parse("2026-08-03T09:14:59.000Z");
+  const nextBucket = Date.parse("2026-08-03T09:15:00.000Z");
+
+  assert.deepEqual(tideQueryWindow(first), tideQueryWindow(second));
+  assert.notDeepEqual(tideQueryWindow(first), tideQueryWindow(nextBucket));
+  assert.deepEqual(tideQueryWindow(first), {
+    since: "2026-08-02T09:00:00Z",
+    until: "2026-08-04T21:00:00Z"
+  });
+});
+
 test("official notice normalization excludes future and expired windows at an injected time", () => {
   const now = Date.parse("2026-08-02T12:00:00.000Z");
   const notices = normalizeOfficialNotices([
@@ -63,9 +121,15 @@ test("EirGrid selection keeps only the newest current value", () => {
 
 test("Met Éireann CSV fallback does not invent fetch-time freshness", async () => {
   const source = await readFile(new URL("../lib/latest-observations.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
+  let output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText;
+  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
+  const weatherOutput = ts.transpileModule(weatherSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  output = output.replace('"./weather-stations"', JSON.stringify(weatherUrl));
   const observations = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   const [reading] = observations.parseLatestObservations(
     "Name,Temperature,Description,Wind,Unused,Direction,Unused,Rain,Unused\nStation,12,Clear,10,,N,,1,",

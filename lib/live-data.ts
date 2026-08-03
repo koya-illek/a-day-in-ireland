@@ -11,6 +11,7 @@ import type {
   WeatherWarning
 } from "./types";
 import { parseIrelandLocalTimestamp, parseLatestObservations } from "./latest-observations";
+import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
 import {
   RIVER_ENDPOINT,
   latestEirGridValue,
@@ -18,18 +19,6 @@ import {
   makeRiverProvenance,
   normalizeRiverReadings
 } from "../platform/river-source.js";
-
-const STATIONS = [
-  { id: "malin-head", endpoint: "malin-head", csvName: "Malin Head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
-  { id: "finner", endpoint: "finner", csvName: "Finner Camp", name: "Finner", latitude: 54.494, longitude: -8.243 },
-  { id: "belmullet", endpoint: "belmullet", csvName: "Belmullet", name: "Belmullet", latitude: 54.228, longitude: -10.007 },
-  { id: "athenry", endpoint: "athenry", csvName: "Athenry", name: "Athenry", latitude: 53.289, longitude: -8.786 },
-  { id: "dublin-airport", endpoint: "dublin-airport", csvName: "Dublin Airport", name: "Dublin", latitude: 53.428, longitude: -6.241 },
-  { id: "gurteen", endpoint: "gurteen", csvName: "Gurteen", name: "Gurteen", latitude: 53.034, longitude: -8.005 },
-  { id: "valentia", endpoint: "valentia", csvName: "Valentia Observatory", name: "Valentia", latitude: 51.938, longitude: -10.241 },
-  { id: "cork-airport", endpoint: "cork-airport", csvName: "Cork Airport", name: "Cork", latitude: 51.847, longitude: -8.486 },
-  { id: "johnstown-castle", endpoint: "johnstown-castle", csvName: "Johnstown Castle", name: "Wexford", latitude: 52.298, longitude: -6.497 }
-] as const;
 
 const numberOrNull = (value: unknown): number | null => {
   const parsed = Number.parseFloat(String(value ?? "").trim());
@@ -59,7 +48,7 @@ type StationResult = {
   history: Array<{ time: string; temperature: number | null; rainfall: number; windSpeed: number | null }>;
 };
 
-async function fetchStation(station: (typeof STATIONS)[number]): Promise<StationResult | null> {
+async function fetchStation(station: (typeof WEATHER_STATIONS)[number]): Promise<StationResult | null> {
   try {
     const response = await fetch(
       `https://prodapi.metweb.ie/observations/${station.endpoint}/today`,
@@ -67,10 +56,10 @@ async function fetchStation(station: (typeof STATIONS)[number]): Promise<Station
     );
     if (!response.ok) return null;
     const rows = (await response.json()) as Array<Record<string, unknown>>;
-    const latest = rows.at(-1);
+    const stationRows = rows.filter((row) => matchesWeatherStationIdentity(station, row.name));
+    const latest = stationRows.at(-1);
     if (!latest) return null;
     const observedAt = irelandTimestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
-    const age = observedAt ? Date.now() - new Date(observedAt).getTime() : Number.POSITIVE_INFINITY;
     return {
       reading: {
         id: station.id,
@@ -83,9 +72,9 @@ async function fetchStation(station: (typeof STATIONS)[number]): Promise<Station
         windDirection: String(latest.cardinalWindDirection ?? "").trim(),
         description: String(latest.weatherDescription ?? "Observation available"),
         observedAt,
-        fresh: age >= 0 && age < 3 * 60 * 60 * 1000
+        fresh: isWeatherObservationFresh(observedAt)
       },
-      history: rows.map((row) => ({
+      history: stationRows.map((row) => ({
         time: String(row.reportTime ?? ""),
         temperature: numberOrNull(row.temperature),
         rainfall: numberOrNull(row.rainfall) ?? 0,
@@ -118,7 +107,7 @@ async function fetchLatestStationFallback(): Promise<StationReading[]> {
       signal: AbortSignal.timeout(7000)
     });
     if (!response.ok) return [];
-    return parseLatestObservations(await response.text(), STATIONS);
+    return parseLatestObservations(await response.text(), WEATHER_STATIONS);
   } catch {
     return [];
   }
@@ -522,7 +511,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     airQuality,
     aurora
   ] = await Promise.all([
-    Promise.all(STATIONS.map(fetchStation)),
+    Promise.all(WEATHER_STATIONS.map(fetchStation)),
     fetchLatestStationFallback(),
     fetchWarnings(),
     fetchMarine(),

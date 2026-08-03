@@ -455,9 +455,17 @@ const fetchMeasuredAirQuality = async () => {
   );
 };
 
+export const tideQueryWindow = (now = Date.now()) => {
+  const bucketMilliseconds = 15 * 60 * 1000;
+  const bucket = Math.floor(now / bucketMilliseconds) * bucketMilliseconds;
+  return {
+    since: new Date(bucket - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    until: new Date(bucket + 36 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z")
+  };
+};
+
 const fetchTides = async () => {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const until = new Date(Date.now() + 36 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const { since, until } = tideQueryWindow();
   const base = "https://erddap.marine.ie/erddap/tabledap/";
   const [levelsResponse, surgeResponse, predictionResponse] = await Promise.all([
     fetch(`${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
