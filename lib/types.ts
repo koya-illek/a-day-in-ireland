@@ -13,6 +13,15 @@ export type StationReading = {
 };
 
 export type WeatherWarning = {
+  id: string;
+  capId: string;
+  type: string;
+  severity: string;
+  certainty: string;
+  regions: string[];
+  status: string;
+  issued: string;
+  updated: string;
   level: string;
   headline: string;
   description: string;

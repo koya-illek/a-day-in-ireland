@@ -17,7 +17,8 @@ import {
   latestEirGridValue,
   latestObservedAt,
   makeRiverProvenance,
-  normalizeRiverReadings
+  normalizeRiverReadings,
+  normalizeOfficialWeatherWarnings
 } from "../platform/river-source.js";
 
 const numberOrNull = (value: unknown): number | null => {
@@ -30,18 +31,7 @@ const irelandTimestamp = parseIrelandLocalTimestamp;
 export const normalizeWeatherWarnings = (
   rows: Array<Record<string, unknown>>,
   now = Date.now()
-): WeatherWarning[] => rows.flatMap((row) => {
-  const onset = Date.parse(String(row.onset ?? ""));
-  const expiry = Date.parse(String(row.expiry ?? ""));
-  if (!Number.isFinite(expiry) || expiry <= now || (Number.isFinite(onset) && onset > now)) return [];
-  return [{
-    level: String(row.level ?? "Advisory"),
-    headline: String(row.headline ?? "Weather advisory"),
-    description: String(row.description ?? ""),
-    onset: String(row.onset ?? ""),
-    expiry: String(row.expiry ?? "")
-  }];
-});
+): WeatherWarning[] => normalizeOfficialWeatherWarnings(rows, now);
 
 type StationResult = {
   reading: StationReading;

@@ -143,6 +143,44 @@ export const normalizeProviderTimestamp = (value) => {
   return timestamp === null ? null : new Date(timestamp).toISOString();
 };
 
+// Met Éireann's public feeds contain HTML entities in otherwise plain-text
+// fields (for example "&amp;" in a regional headline). Keep decoding in the
+// shared adapter so the server, edge worker and browser cannot disagree about
+// what an official notice says.
+const HTML_ENTITIES = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"'
+};
+
+export const decodeHtmlEntities = (input) => {
+  let decoded = String(input ?? "");
+  for (let pass = 0; pass < 2; pass += 1) {
+    const next = decoded.replace(/&(#x[\da-f]+|#\d+|[a-z][\da-z]+);/gi, (match, token) => {
+      const lower = token.toLowerCase();
+      if (lower.startsWith("#x")) {
+        const codePoint = Number.parseInt(lower.slice(2), 16);
+        return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      if (lower.startsWith("#")) {
+        const codePoint = Number.parseInt(lower.slice(1), 10);
+        return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : match;
+      }
+      return Object.prototype.hasOwnProperty.call(HTML_ENTITIES, lower) ? HTML_ENTITIES[lower] : match;
+    });
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return decoded;
+};
+
 const bathingStart = (item) => item?.startedAt ?? item?.incident_start_date ?? item?.onset;
 const bathingEnd = (item, startTimestamp) => {
   const explicitEnd = parsedTimestamp(item?.endsAt ?? item?.incident_end_date ?? item?.expiry);
@@ -161,19 +199,107 @@ export const normalizeOfficialNotices = (rows, now = Date.now()) => (Array.isArr
   return expiry !== null && expiry > now && (!hasOnset ? true : onset !== null && onset <= now);
 });
 
-export const normalizeOfficialWeatherWarnings = (rows, now = Date.now()) =>
-  normalizeOfficialNotices(rows, now).flatMap((item) => {
-    const expiry = normalizeProviderTimestamp(item.expiry);
-    const onset = normalizeProviderTimestamp(item.onset);
-    if (!expiry) return [];
-    return [{
-      level: String(item.level ?? "Advisory"),
-      headline: String(item.headline ?? "Weather advisory"),
-      description: String(item.description ?? ""),
+const WARNING_HORIZON_MS = 48 * 60 * 60 * 1000;
+
+const warningText = (value, fallback = "") => decodeHtmlEntities(String(value ?? fallback)).trim();
+
+const warningRegions = (value) => {
+  if (Array.isArray(value)) return value.map((region) => warningText(region)).filter(Boolean);
+  const region = warningText(value);
+  return region ? [region] : [];
+};
+
+const warningTimestamp = (value) => normalizeProviderTimestamp(value) ?? warningText(value);
+
+const warningIdentity = (item, values) => {
+  const id = warningText(item.id);
+  const capId = warningText(item.capId ?? item.capID ?? item.cap_id);
+  return id || capId || [values.type, values.headline, values.onset, values.expiry, values.regions.join(",")].join("|");
+};
+
+// Keep active notices and useful near-term notices. Expired notices are
+// dropped, while future notices remain available for the UI to label as
+// upcoming instead of silently turning them into current conditions.
+export const normalizeOfficialWeatherWarnings = (rows, now = Date.now(), horizonMs = WARNING_HORIZON_MS) =>
+  (Array.isArray(rows) ? rows : []).flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw;
+    const onsetTimestamp = parsedTimestamp(item.onset);
+    const expiryTimestamp = parsedTimestamp(item.expiry);
+    const hasOnset = warningText(item.onset) !== "";
+    if (
+      expiryTimestamp === null ||
+      expiryTimestamp <= now ||
+      (hasOnset && onsetTimestamp === null) ||
+      (onsetTimestamp !== null && onsetTimestamp > now + horizonMs)
+    ) return [];
+    const onset = warningTimestamp(item.onset);
+    const expiry = warningTimestamp(item.expiry);
+    const issued = warningTimestamp(item.issued ?? item.issuedAt);
+    const updated = warningTimestamp(item.updated ?? item.updatedAt ?? item.lastUpdated);
+    const regions = warningRegions(item.regions ?? item.region);
+    const values = {
+      type: warningText(item.type ?? item.event ?? item.eventName),
+      headline: warningText(item.headline, "Weather advisory"),
       onset: onset ?? "",
-      expiry
+      expiry: expiry ?? "",
+      regions
+    };
+    return [{
+      id: warningIdentity(item, values),
+      capId: warningText(item.capId ?? item.capID ?? item.cap_id) || warningIdentity(item, values),
+      type: values.type,
+      severity: warningText(item.severity, "Unknown"),
+      certainty: warningText(item.certainty, "Unknown"),
+      regions,
+      status: warningText(item.status, "Unknown"),
+      issued: issued ?? "",
+      updated: updated ?? "",
+      level: warningText(item.level, "Advisory"),
+      headline: values.headline,
+      description: warningText(item.description),
+      onset: values.onset,
+      expiry: values.expiry
     }];
   });
+
+export const warningTiming = (warning, now = Date.now(), horizonMs = WARNING_HORIZON_MS) => {
+  const onset = parsedTimestamp(warning?.onset);
+  const expiry = parsedTimestamp(warning?.expiry);
+  if (expiry === null || expiry <= now) return "expired";
+  if (onset !== null && onset > now) return onset <= now + horizonMs ? "upcoming" : "future";
+  return "active";
+};
+
+const warningSeverityRank = (warning) => {
+  const value = `${warning?.level ?? ""} ${warning?.severity ?? ""} ${warning?.type ?? ""}`.toLowerCase();
+  if (/\bred\b/.test(value)) return 4;
+  if (/\borange\b/.test(value)) return 3;
+  if (/\byellow\b/.test(value)) return 2;
+  return 1;
+};
+
+const compareText = (first, second) => first < second ? -1 : first > second ? 1 : 0;
+
+export const sortOfficialWeatherWarnings = (warnings, now = Date.now()) => [...(Array.isArray(warnings) ? warnings : [])]
+  .filter((warning) => warningTiming(warning, now) !== "expired")
+  .sort((first, second) => {
+    const timingOrder = { active: 0, upcoming: 1, future: 2 };
+    const timingDifference = timingOrder[warningTiming(first, now)] - timingOrder[warningTiming(second, now)];
+    if (timingDifference) return timingDifference;
+    const severityDifference = warningSeverityRank(second) - warningSeverityRank(first);
+    if (severityDifference) return severityDifference;
+    const firstOnset = parsedTimestamp(first.onset) ?? Number.POSITIVE_INFINITY;
+    const secondOnset = parsedTimestamp(second.onset) ?? Number.POSITIVE_INFINITY;
+    if (firstOnset !== secondOnset) return firstOnset - secondOnset;
+    return compareText(String(first.id ?? first.capId ?? ""), String(second.id ?? second.capId ?? ""));
+  });
+
+export const isActivityRelevantWeatherWarning = (warning) => {
+  const value = `${warning?.type ?? ""} ${warning?.headline ?? ""} ${warning?.description ?? ""}`.toLowerCase();
+  if (/blight|agricultur|farming|potato|crop|pollen/.test(value)) return false;
+  return /\b(?:wind(?:s)?|rain(?:fall|s)?|snow(?:fall|s)?|ice|thunder(?:storm)?s?|storm(?:s)?|fog(?:gy)?|flood(?:ing|s)?|sleet|hail(?:s)?|visibility)\b/.test(value);
+};
 
 export const normalizeBathingAlerts = (rows, now = Date.now()) => (Array.isArray(rows) ? rows : []).filter((item) => {
   if (!item || typeof item !== "object") return false;

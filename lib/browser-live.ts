@@ -4,7 +4,10 @@ import {
   parseIrelandLocalTimestamp,
   parseLatestObservations
 } from "./latest-observations";
-import { normalizeRiverReadings } from "../platform/river-source.js";
+import {
+  normalizeOfficialWeatherWarnings,
+  normalizeRiverReadings
+} from "../platform/river-source.js";
 import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
 import {
   degreesLat,
@@ -214,20 +217,8 @@ const normalizeGridTimestamp = (value: unknown): string | null => {
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
 
-const normalizeBrowserWarnings = (rows: unknown[], now = Date.now()): WeatherWarning[] => rows.flatMap((item) => {
-  if (!item || typeof item !== "object") return [];
-  const warning = item as Record<string, unknown>;
-  const onset = Date.parse(String(warning.onset ?? ""));
-  const expiry = Date.parse(String(warning.expiry ?? ""));
-  if (!Number.isFinite(expiry) || expiry <= now || (Number.isFinite(onset) && onset > now)) return [];
-  return [{
-    level: String(warning.level ?? "Advisory"),
-    headline: String(warning.headline ?? "Weather advisory"),
-    description: String(warning.description ?? ""),
-    onset: String(warning.onset ?? ""),
-    expiry: String(warning.expiry ?? "")
-  }];
-});
+export const normalizeBrowserWarnings = (rows: unknown[], now = Date.now()): WeatherWarning[] =>
+  normalizeOfficialWeatherWarnings(rows, now);
 
 const normalizeBrowserBathingAlerts = (rows: unknown[], now = Date.now()): LiveSnapshot["bathingAlerts"] => rows.flatMap((item) => {
   if (!item || typeof item !== "object") return [];
@@ -503,7 +494,7 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const warningStatus = next.warningsStatus === "unavailable" || !Array.isArray(next.warnings) ? "unavailable" : "live";
     const warnings = warningStatus === "live"
       ? normalizeBrowserWarnings(next.warnings as unknown[], now)
-      : previous.warnings;
+      : [];
     contextStatus.warnings = warningStatus;
     const bathingAlerts = contextUnavailable("bathing") || !Array.isArray(next.bathingAlerts)
       ? []

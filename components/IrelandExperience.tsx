@@ -23,11 +23,11 @@ import type {
   RiverReading,
   StationReading,
   TideReading,
-  TrainPosition,
-  WeatherWarning
+  TrainPosition
 } from "../lib/types";
 import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
-import { getActivityGuidance, type ActivityId } from "../lib/activity-guidance";
+import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
+import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
 import {
   DEFAULT_PLACE_ID,
   parseViewState,
@@ -301,16 +301,13 @@ function nearestReadingWithinRadius<T extends { latitude: number; longitude: num
 const formatDistance = (value: number) => value < 10 ? `${value.toFixed(1)} km away` : `${Math.round(value)} km away`;
 
 const ACTIVITY_STATUS_LABELS: Record<ReturnType<typeof getActivityGuidance>[number]["status"], string> = {
-  favourable: "Favourable",
-  mixed: "Mixed signals",
-  caution: "Caution",
+  "live-observations": "Live observations",
+  "relevant-notice": "Relevant notice",
+  "localized-notice": "Localized notice",
+  "limited-context": "Limited context",
+  "live-coverage": "Live coverage",
+  "no-current-signal": "No current signal",
   unavailable: "Unavailable"
-};
-
-const isCurrentWarning = (warning: WeatherWarning, now: number) => {
-  const onset = Date.parse(warning.onset);
-  const expiry = Date.parse(warning.expiry);
-  return Number.isFinite(expiry) && expiry > now && (!Number.isFinite(onset) || onset <= now);
 };
 
 function formatAge(value: string | null | undefined, now: Date) {
@@ -323,6 +320,24 @@ function formatAge(value: string | null | undefined, now: Date) {
   const ageHours = Math.round(ageMinutes / 60);
   return `${ageHours}h ago`;
 }
+
+const warningScopeText = (warning: LiveSnapshot["warnings"][number]) => (warning.regions ?? []).length
+  ? `named regions ${(warning.regions ?? []).join(", ")}`
+  : "scope not specified";
+
+const formatWarningDate = (value: string) => {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString("en-IE", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "Europe/Dublin"
+    })
+    : "time unavailable";
+};
 
 function statusText(status: "live" | "partial" | "stale" | "fallback" | "unavailable") {
   return status === "stale" ? "cached" : status;
@@ -1195,13 +1210,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         NEARBY_RADIUS_KM.air
       );
   const warningsUnavailable = snapshot.contextStatus.warnings === "unavailable";
-  const activityGuidance = getActivityGuidance(
-    warningsUnavailable ? { ...snapshot, warnings: [] } : snapshot,
-    now
-  );
+  const guidancePlace: GuidancePlace = {
+    id: selectedPlace.id,
+    name: selectedPlace.name,
+    latitude: selectedPlace.lat,
+    longitude: selectedPlace.lon
+  };
+  const activityGuidance = getActivityGuidance(snapshot, now, guidancePlace);
   const selectedTimelinePoint = snapshot.timeline.find((point) => point.time === timelineSelection) ?? null;
-  const currentWarnings = snapshot.warnings.filter((warning) => isCurrentWarning(warning, now.getTime()));
-  const activeWarning = warningsUnavailable ? null : currentWarnings[0] ?? null;
+  const visibleWarnings = warningsUnavailable ? [] : sortOfficialWeatherWarnings(snapshot.warnings, now.getTime());
+  const currentWarnings = visibleWarnings.filter((warning) => warningTiming(warning, now.getTime()) === "active");
+  const activeWarning = currentWarnings[0] ?? null;
   const unusualTide = snapshot.tides
     .filter((tide) => tide.surge !== null)
     .sort((a, b) => Math.abs(b.surge ?? 0) - Math.abs(a.surge ?? 0))[0] ?? null;
@@ -1901,23 +1920,39 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <p className="eyebrow">Official notices</p>
                 <h2 id="official-notices-heading">Official notices across Ireland</h2>
               </div>
-              <p>Met Éireann warnings and advisories stay ahead of the map when this view includes notices.</p>
+              <p>Met Éireann notices are shown with their named scope and timing. Regional notices do not describe the whole island.</p>
             </div>
-            {layers.has("warnings") ? activeWarning ? (
-              <aside id="active-warning" className={`warning-strip official-notice ${activeWarning.level.toLowerCase()}`} aria-label="Official Met Éireann notice across Ireland" role="status">
-                <span>Official notice</span>
-                <div><b>{activeWarning.headline}</b><small>Met Éireann · across Ireland · {activeWarning.description}</small></div>
-                <time>Until {new Date(activeWarning.expiry).toLocaleString("en-IE", {
-                  weekday: "short",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  timeZone: "Europe/Dublin"
-                })}</time>
-              </aside>
+            {layers.has("warnings") ? visibleWarnings.length ? (
+              visibleWarnings.map((warning, warningIndex) => {
+                const timing = warningTiming(warning, now.getTime());
+                const isActive = timing === "active";
+                const warningIdentity = warning.id || warning.capId || `${warning.headline}-${warningIndex}`;
+                return (
+                  <aside
+                    id={isActive && warning === activeWarning ? "active-warning" : undefined}
+                    key={warningIdentity}
+                    className={`warning-strip official-notice ${(warning.level || "advisory").toLowerCase()} ${timing}`}
+                    aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice for ${warningScopeText(warning)}`}
+                    role="status"
+                  >
+                    <span>{isActive ? "Official notice" : "Upcoming notice"}</span>
+                    <div>
+                      <b>{warning.headline}</b>
+                      <small>
+                        Met Éireann · {warningScopeText(warning)} · {warning.description || "Description unavailable."}
+                      </small>
+                      <small>
+                        {warning.level} level · severity {warning.severity || "unknown"} · issued {formatWarningDate(warning.issued)} · updated {formatWarningDate(warning.updated)}
+                      </small>
+                    </div>
+                    <time>{isActive ? "Until" : "From"} {formatWarningDate(isActive ? warning.expiry : warning.onset)}</time>
+                  </aside>
+                );
+              })
             ) : warningsUnavailable ? (
               <p className="official-notices-empty">The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed.</p>
             ) : (
-              <p className="official-notices-empty">No current Met Éireann notices across Ireland.</p>
+              <p className="official-notices-empty">No current or upcoming Met Éireann notices are represented in the current horizon.</p>
             ) : (
               <p className="official-notices-empty">Met Éireann notices are hidden in this map view. Enable them in Explore to review official notices across Ireland.</p>
             )}
@@ -1926,10 +1961,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <section className="now-guidance" aria-labelledby="guidance-heading">
             <div className="guidance-heading">
               <div>
-                <p className="eyebrow">Worth considering now · across Ireland</p>
-                <h2 id="guidance-heading">What the island supports today.</h2>
+                <p className="eyebrow">Live signals · {selectedPlace.name}</p>
+                <h2 id="guidance-heading">What the live data shows.</h2>
               </div>
-              <p>Current signals grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>
+              <p>Observed conditions, official notices and feed coverage grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>
             </div>
             <div className="guidance-list">
               {activityGuidance.map((item) => (

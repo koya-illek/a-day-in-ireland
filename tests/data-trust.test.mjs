@@ -8,6 +8,7 @@ import {
   latestEirGridValue,
   normalizeBathingAlerts,
   normalizeOfficialNotices,
+  normalizeOfficialWeatherWarnings,
   normalizeRiverReadings,
   parseEirGridLocalTimestamp,
   parseIrelandLocalTimestamp
@@ -18,6 +19,30 @@ const importStandaloneTypeScript = async (relativePath) => {
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText;
+  return import(`data:text/javascript,${encodeURIComponent(output)}`);
+};
+
+const importWarningAdapter = async (relativePath) => {
+  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
+  const latestSource = await readFile(new URL("../lib/latest-observations.ts", import.meta.url), "utf8");
+  const latestOutput = ts.transpileModule(latestSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
+  const weatherOutput = ts.transpileModule(weatherSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  const latestUrl = `data:text/javascript,${encodeURIComponent(latestOutput.replace('"./weather-stations"', JSON.stringify(weatherUrl)))}`;
+  const platformUrl = new URL("../platform/river-source.js", import.meta.url).href;
+  const satelliteUrl = new URL("../node_modules/satellite.js/lib/index.js", import.meta.url).href;
+  const output = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText
+    .replace('"./latest-observations"', JSON.stringify(latestUrl))
+    .replace('"./weather-stations"', JSON.stringify(weatherUrl))
+    .replace('"../platform/river-source.js"', JSON.stringify(platformUrl))
+    .replace('"satellite.js"', JSON.stringify(satelliteUrl));
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 
@@ -80,6 +105,46 @@ test("official notice normalization excludes future and expired windows at an in
   ], now);
 
   assert.deepEqual(notices.map((notice) => notice.id), ["current"]);
+});
+
+test("all warning adapters preserve Met Éireann metadata and decode entities", async () => {
+  const now = Date.parse("2026-08-03T09:00:00.000Z");
+  const raw = [{
+    id: 7,
+    capId: "cap-rain-1",
+    type: "yellow; Moderate",
+    severity: "Moderate",
+    certainty: "Likely",
+    regions: ["EI27", "EI30"],
+    status: "Warning",
+    issued: "2026-08-03T08:00:00+01:00",
+    updated: "2026-08-03T08:30:00+01:00",
+    level: "Yellow",
+    headline: "Rain warning for Waterford, Wexford &amp; Wicklow",
+    description: "Heavy rain &amp; difficult travel",
+    onset: "2026-08-03T10:00:00+01:00",
+    expiry: "2026-08-03T18:00:00+01:00"
+  }];
+  const shared = normalizeOfficialWeatherWarnings(raw, now);
+  const server = (await import("../platform/server-entry.js")).normalizeWeatherWarnings(raw, now);
+  const build = (await importWarningAdapter("../lib/live-data.ts")).normalizeWeatherWarnings(raw, now);
+  const browser = (await importWarningAdapter("../lib/browser-live.ts")).normalizeBrowserWarnings(raw, now);
+  for (const adapter of [shared, server, build, browser]) {
+    assert.equal(adapter.length, 1);
+    assert.equal(adapter[0].id, "7");
+    assert.equal(adapter[0].capId, "cap-rain-1");
+    assert.equal(adapter[0].type, "yellow; Moderate");
+    assert.equal(adapter[0].severity, "Moderate");
+    assert.equal(adapter[0].certainty, "Likely");
+    assert.deepEqual(adapter[0].regions, ["EI27", "EI30"]);
+    assert.equal(adapter[0].status, "Warning");
+    assert.equal(adapter[0].headline, "Rain warning for Waterford, Wexford & Wicklow");
+    assert.equal(adapter[0].description, "Heavy rain & difficult travel");
+    assert.equal(adapter[0].issued, "2026-08-03T07:00:00.000Z");
+    assert.equal(adapter[0].updated, "2026-08-03T07:30:00.000Z");
+    assert.equal(adapter[0].onset, "2026-08-03T09:00:00.000Z");
+    assert.equal(adapter[0].expiry, "2026-08-03T17:00:00.000Z");
+  }
 });
 
 test("bathing-alert normalization excludes future and ended incidents", () => {

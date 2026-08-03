@@ -5,7 +5,7 @@ import {
   makeRiverProvenance,
   normalizeRiverReadings,
   normalizeBathingAlerts,
-  normalizeOfficialNotices,
+  normalizeOfficialWeatherWarnings,
   normalizeProviderTimestamp,
   parseRiverGeoJson
 } from "./river-source.js";
@@ -66,13 +66,7 @@ export const fetchTrains = async () => {
     .filter(Boolean);
 };
 
-export const normalizeWeatherWarnings = (rows, now = Date.now()) => normalizeOfficialNotices(rows, now).map((row) => ({
-  level: String(row.level ?? "Advisory"),
-  headline: String(row.headline ?? "Weather advisory"),
-  description: String(row.description ?? ""),
-  onset: normalizeProviderTimestamp(row.onset) ?? String(row.onset ?? ""),
-  expiry: normalizeProviderTimestamp(row.expiry) ?? String(row.expiry ?? "")
-}));
+export const normalizeWeatherWarnings = (rows, now = Date.now()) => normalizeOfficialWeatherWarnings(rows, now);
 
 const fetchWarnings = async () => {
   const response = await fetch("https://www.met.ie/Open_Data/json/warning_IRELAND.json", {

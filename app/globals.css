@@ -1101,6 +1101,7 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
 .warning-strip small, .warning-strip time { color: var(--muted); }
 .warning-strip.orange { background: #111d31; border-color: rgba(232, 142, 73, .45); border-left-color: #e88e49; }
 .warning-strip.red { background: #171826; border-color: rgba(255, 145, 148, .42); border-left-color: #ff9194; color: var(--ink); }
+.warning-strip.upcoming { border-style: dashed; opacity: .92; }
 .notable-now {
   align-items: start;
   background: linear-gradient(135deg, rgba(0, 219, 233, .06), rgba(78, 222, 163, .02));
@@ -1649,9 +1650,12 @@ footer {
   width: 100%;
 }
 .guidance-card:hover, .guidance-card:focus-visible { background: #112039; border-color: rgba(0, 219, 233, .5); }
-.guidance-card.favourable { border-left-color: #4edea3; }
-.guidance-card.mixed { border-left-color: #f1c76f; }
-.guidance-card.caution { border-left-color: #ff9194; }
+.guidance-card.live-observations { border-left-color: #4edea3; }
+.guidance-card.relevant-notice { border-left-color: #ff9194; border-left-style: double; }
+.guidance-card.localized-notice { border-left-color: #f1c76f; border-left-style: dashed; }
+.guidance-card.limited-context { border-left-color: #b4a9ff; border-left-style: dashed; }
+.guidance-card.live-coverage { border-left-color: #65cbff; }
+.guidance-card.no-current-signal { border-left-color: #9aa7b8; border-left-style: dotted; }
 .guidance-card strong { font-size: .82rem; min-width: 0; }
 .guidance-status {
   color: #4edea3;
@@ -1659,8 +1663,11 @@ footer {
   letter-spacing: .08em;
   text-transform: uppercase;
 }
-.guidance-card.mixed .guidance-status { color: #f1c76f; }
-.guidance-card.caution .guidance-status { color: #ff9194; }
+.guidance-card.relevant-notice .guidance-status { color: #ff9194; }
+.guidance-card.localized-notice .guidance-status { color: #f1c76f; }
+.guidance-card.limited-context .guidance-status,
+.guidance-card.no-current-signal .guidance-status { color: #c4b9ff; }
+.guidance-card.live-coverage .guidance-status { color: #65cbff; }
 .guidance-card.unavailable .guidance-status { color: var(--muted); }
 .guidance-card .guidance-reason, .guidance-card .guidance-caveat {
   color: var(--muted);

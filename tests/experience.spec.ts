@@ -133,7 +133,7 @@ test("selected place briefing leads into the across-Ireland evidence surface", a
   expect(hierarchy).toBe(true);
 });
 
-test("official notices are labelled across Ireland and precede the map", async ({ page }) => {
+test("official notices retain scope and precede the map", async ({ page }) => {
   await page.goto("/?view=weather");
   const notices = page.locator(".official-notices");
   await expect(notices).toHaveAttribute("data-scope", "across-ireland");
@@ -148,13 +148,84 @@ test("official notices are labelled across Ireland and precede the map", async (
 
   const warning = notices.locator(".warning-strip");
   if (await warning.count()) {
-    await expect(warning).toHaveAttribute("aria-label", "Official Met Éireann notice across Ireland");
-    await expect(warning.getByText("Official notice", { exact: true })).toBeVisible();
-    await expect(warning).toContainText("across Ireland");
+    await expect(warning.first()).toHaveAttribute("aria-label", /Official Met Éireann (active|upcoming) notice for/);
+    await expect(warning.first().getByText(/Official notice|Upcoming notice/, { exact: true })).toBeVisible();
+    await expect(warning.first()).toContainText("Met Éireann");
   } else {
-    await expect(notices).toContainText(/No current Met Éireann notices across Ireland|notice feed is unavailable/);
+    await expect(notices).toContainText(/No current or upcoming Met Éireann notices|notice feed is unavailable/);
   }
   await expect(page.locator(".notable-now .signal-item").filter({ hasText: "Met Éireann" })).toHaveCount(0);
+});
+
+test("multiple notices render as active/upcoming facts without turning Blight into a walk notice", async ({ page }) => {
+  const stationNames = new Map([
+    ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
+    ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
+    ["valentia", "Valentia"], ["cork", "Cork"], ["johnstown-castle", "Johnstown Castle"]
+  ]);
+  const observation = metObservationTime(20);
+  const issued = new Date(Date.now() - 45 * 60_000).toISOString();
+  const activeExpiry = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+  const upcomingOnset = new Date(Date.now() + 60 * 60_000).toISOString();
+  const upcomingExpiry = new Date(Date.now() + 4 * 60 * 60_000).toISOString();
+
+  await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/")[2];
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{
+        name: stationNames.get(endpoint) ?? "Athenry",
+        ...observation,
+        temperature: "16",
+        rainfall: "0.0",
+        windSpeed: "8",
+        cardinalWindDirection: "E",
+        weatherDescription: "Test observation"
+      }])
+    });
+  });
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+      warnings: [
+        {
+          id: "blight-1", capId: "cap-blight-1", type: "yellow; Moderate; Blight", severity: "Moderate", certainty: "Likely",
+          regions: ["EI27"], status: "Warning", issued, updated: issued, level: "Yellow", headline: "Blight Advisory",
+          description: "A potato blight advisory is in effect.", onset: issued, expiry: activeExpiry
+        },
+        {
+          id: "rain-1", capId: "cap-rain-1", type: "yellow; Moderate", severity: "Moderate", certainty: "Likely",
+          regions: ["EI27", "EI30", "EI31"], status: "Warning", issued, updated: issued, level: "Yellow",
+          headline: "Rain warning for Waterford, Wexford &amp; Wicklow", description: "Spells of heavy thundery rain.",
+          onset: upcomingOnset, expiry: upcomingExpiry
+        }
+      ],
+      warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
+      contextStatus: {
+        marine: "unavailable", measuredAir: "unavailable", tides: "unavailable", bathing: "unavailable",
+        satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "live"
+      }
+    })
+  }));
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+
+  await page.goto("/?place=waterford");
+  const notices = page.locator(".official-notices .warning-strip");
+  await expect(notices).toHaveCount(2);
+  await expect(notices.nth(0)).toContainText("Official notice");
+  await expect(notices.nth(1)).toContainText("Upcoming notice");
+  await expect(notices.nth(1)).toContainText("Rain warning for Waterford, Wexford & Wicklow");
+  await expect(page.locator('[data-activity-id="outdoor-walk"] .guidance-status')).toHaveText("Live observations");
+  await expect(page.locator(".guidance-card")).toHaveCount(4);
+  expect((await page.locator(".guidance-card").allTextContents()).join(" ")).not.toMatch(/Favourable|Mixed signals|Caution/);
 });
 
 test("explore layers and station details are interactive", async ({ page }) => {
@@ -734,7 +805,7 @@ test("map details behave as an accessible dialog", async ({ page }) => {
 
 test("current activity guidance and hourly timeline are actionable", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "What the island supports today." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What the live data shows." })).toBeVisible();
   await expect(page.locator(".guidance-card")).toHaveCount(4);
   await expect(page.locator(".guidance-card").first()).not.toContainText(/\/100|No score/);
   await page.locator(".guidance-card").first().click();
