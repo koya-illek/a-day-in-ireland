@@ -22,7 +22,7 @@ function metObservationTime(minutesAgo: number) {
   return { date: `${parts.day}-${parts.month}-${parts.year}`, reportTime: `${parts.hour}:${parts.minute}` };
 }
 
-async function installMapMarkerFixtures(page: Page) {
+async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { fiveSignals?: boolean } = {}) {
   const stationNames = new Map([
     ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
     ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
@@ -39,7 +39,7 @@ async function installMapMarkerFixtures(page: Page) {
         name: stationNames.get(endpoint) ?? "Unknown station",
         ...observation,
         temperature: "16",
-        rainfall: "0.4",
+        rainfall: fiveSignals ? "1.2" : "0.4",
         windSpeed: "12",
         cardinalWindDirection: "E",
         weatherDescription: "Bright intervals"
@@ -75,7 +75,11 @@ async function installMapMarkerFixtures(page: Page) {
         observedAt, windSpeedKnots: 8, waveHeight: 1.1, wavePeriod: 5, seaTemperature: 14
       }],
       radar: [],
-      grid: null,
+      grid: fiveSignals ? {
+        observedAt, demandMW: 1000, generationMW: 1000, windMW: 650,
+        windSharePercent: 65, carbonIntensity: 190, carbonEmissions: 95,
+        frequencyHz: 50, interconnectorMW: 0
+      } : null,
       airQuality: [{
         id: "fixture-air", name: "Fixture Air", latitude: 53.4, longitude: -6.5, observedAt,
         europeanAqi: 32, pm25: 8, pm10: 14, nitrogenDioxide: 11, ozone: 80, uvIndex: 2,
@@ -84,7 +88,7 @@ async function installMapMarkerFixtures(page: Page) {
       aurora: null,
       tides: [{
         id: "fixture-tide", name: "Fixture Tide", latitude: 53.3, longitude: -9.7, observedAt,
-        waterLevel: -1.48, predictedLevel: -1.58, surge: 0.1, trend: "falling",
+        waterLevel: -1.48, predictedLevel: -1.58, surge: fiveSignals ? 0.3 : 0.1, trend: "falling",
         nextHighAt: "2026-08-04T21:10:00.000Z", nextHighLevel: 1.8,
         nextLowAt: "2026-08-04T15:10:00.000Z", nextLowLevel: -1.72
       }],
@@ -177,6 +181,54 @@ async function installAccessibilityContentFixtures(page: Page) {
       transitStatus: "live"
     })
   }));
+}
+
+async function expectNotableMoreTarget(page: Page) {
+  const control = page.getByRole("button", { name: "View 2 more", exact: true });
+  await expect(control).toBeVisible();
+  await control.evaluate((element) => {
+    document.documentElement.style.scrollBehavior = "auto";
+    element.scrollIntoView({ block: "center", inline: "nearest" });
+  });
+  await expect.poll(() => control.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.top >= 0 && bounds.bottom <= innerHeight;
+  })).toBe(true);
+  const metrics = await control.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const visibleWidth = Math.max(0, Math.min(bounds.right, innerWidth) - Math.max(bounds.left, 0));
+    const visibleHeight = Math.max(0, Math.min(bounds.bottom, innerHeight) - Math.max(bounds.top, 0));
+    const centreElement = document.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2
+    );
+    return {
+      fontSize: Number.parseFloat(style.fontSize),
+      width: bounds.width,
+      height: bounds.height,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      right: bounds.right,
+      viewportWidth: innerWidth,
+      viewportHeight: innerHeight,
+      visibleWidth,
+      visibleHeight,
+      centreHit: centreElement === element || (centreElement !== null && element.contains(centreElement))
+    };
+  });
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(12);
+  expect(metrics.width).toBeGreaterThanOrEqual(44);
+  expect(metrics.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.visibleWidth).toBeGreaterThanOrEqual(44);
+  expect(metrics.visibleHeight).toBeGreaterThanOrEqual(44);
+  expect(metrics.top).toBeGreaterThanOrEqual(0);
+  expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight);
+  expect(metrics.left).toBeGreaterThanOrEqual(0);
+  expect(metrics.right).toBeLessThanOrEqual(metrics.viewportWidth + 1);
+  expect(metrics.centreHit).toBe(true);
+  return control;
 }
 
 test("boot refresh uses canonical weather stations and one contexts request", async ({ page }) => {
@@ -496,8 +548,76 @@ test("weather and wind share one accessible station entry while wind-only remain
   await page.goto("/");
   await expect(page.locator(".station-marker")).toHaveCount(9);
   await expect(page.locator("svg.ireland-map [role='button']")).toHaveCount(9);
+  await expect(page.locator(".wind-marker[aria-hidden='true']")).toHaveCount(9);
   expect(await page.locator(".wind-marker[aria-hidden='true']").first().getAttribute("aria-label")).toBeNull();
   await expect(page.locator(".station-marker").first()).toHaveAccessibleName(/Bright intervals.*wind 12 kilometres per hour/);
+
+  const combined = page.locator(".station-marker[data-marker-id='station:johnstown-castle']");
+  const glyph = page.locator(".wind-marker[aria-hidden='true'][data-wind-for='johnstown-castle']");
+  await expect(combined).toHaveCount(1);
+  await expect(glyph).toHaveCount(1);
+  await expect(glyph).not.toHaveAttribute("data-map-marker");
+  await expect(glyph).not.toHaveAttribute("data-marker-pointer-target");
+  await expect(page.getByRole("button", { name: /Wexford.*wind 12 kilometres per hour/ })).toHaveCount(1);
+  await expect(combined.locator(":scope > .map-marker-hit-target")).toHaveCount(2);
+  const glyphPointerEvents = await glyph.locator(":scope, :scope *").evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).pointerEvents)
+  );
+  expect(new Set(glyphPointerEvents)).toEqual(new Set(["none"]));
+  const combinedStops = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((markers) =>
+    markers.map((marker) => (marker as SVGElement).tabIndex)
+  );
+  expect(combinedStops.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(combinedStops.filter((tabIndex) => tabIndex === -1)).toHaveLength(8);
+
+  const combinedHitStyles = () => combined.locator(":scope > .map-marker-hit-target").evaluateAll((targets) =>
+    targets.map((target) => {
+      const style = getComputedStyle(target);
+      return {
+        pointerEvents: style.pointerEvents,
+        strokeWidth: Number.parseFloat(style.strokeWidth),
+        opacity: Number.parseFloat(style.opacity),
+        filter: style.filter
+      };
+    })
+  );
+  const stableHitStyle = { pointerEvents: "stroke", strokeWidth: 44, opacity: 1, filter: "none" };
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  await combined.hover({ force: true });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+
+  await page.locator("#live-map").scrollIntoViewIfNeeded();
+  const hitOffsets = [
+    { name: "left", x: -20, y: 0 },
+    { name: "right", x: 20, y: 0 },
+    { name: "up", x: 0, y: -20 },
+    { name: "down", x: 0, y: 20 }
+  ];
+  for (const offset of hitOffsets) {
+    const point = await glyph.evaluate((element, currentOffset) => {
+      const matrix = (element as SVGGElement).getScreenCTM();
+      if (!matrix) return null;
+      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
+      return { x: centre.x + currentOffset.x, y: centre.y + currentOffset.y };
+    }, offset);
+    expect(point, `${offset.name} wind hit point must be projected`).not.toBeNull();
+    if (!point) continue;
+    await page.mouse.click(point.x, point.y);
+    await expect(
+      page.locator("[role='dialog'].detail-station").getByRole("heading", { name: "Wexford" }),
+      `${offset.name} 20px wind offset must open the combined Wexford station marker`
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close map details" }).click();
+  }
+
+  await page.emulateMedia({ forcedColors: "active" });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  await combined.hover({ force: true });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  expect(new Set(await glyph.locator(":scope, :scope *").evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).pointerEvents)
+  ))).toEqual(new Set(["none"]));
+  await page.emulateMedia({ forcedColors: "none" });
 
   await page.goto("/?view=custom&layers=wind");
   await expect(page.locator(".station-marker")).toHaveCount(0);
@@ -1601,7 +1721,15 @@ test("wind context displays measured station speeds and directions", async ({ pa
   await page.goto("/");
   await expect(page.locator(".wind-marker").first()).toBeVisible();
   await expect(page.locator(".wind-marker text").first()).toContainText("km/h");
-  await page.locator(".wind-marker").first().click();
+  expect(await page.locator(".wind-marker").first().evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
+  await page.locator("#live-map").scrollIntoViewIfNeeded();
+  const windCentre = await page.locator(".wind-marker[data-wind-for='johnstown-castle']").evaluate((element) => {
+    const matrix = (element as SVGGElement).getScreenCTM();
+    if (!matrix) return null;
+    return new DOMPoint(0, 0).matrixTransform(matrix);
+  });
+  expect(windCentre).not.toBeNull();
+  if (windCentre) await page.mouse.click(windCentre.x, windCentre.y);
   await expect(page.locator(".detail-station")).toBeVisible();
   await expect(page.locator(".detail-station").getByText(/km\/h/)).toBeVisible();
 });
@@ -1683,6 +1811,33 @@ test("notable-now board is present without fabricating an event", async ({ page 
   const quiet = page.getByText(/No unusual signals match the selected layers|Some selected signal sources are temporarily unavailable/);
   await expect(signals.first().or(quiet)).toBeVisible();
   expect(await page.locator(".notable-signals .signal-item:visible").count()).toBeLessThanOrEqual(3);
+});
+
+test("controlled five-signal view exposes a legible 44px disclosure on desktop and mobile", async ({ page }) => {
+  await installMapMarkerFixtures(page, { fiveSignals: true });
+  await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
+
+  const signals = page.locator(".notable-signals .signal-item");
+  await expect(signals).toHaveCount(5);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(3);
+  const control = await expectNotableMoreTarget(page);
+  await control.click();
+  await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
+});
+
+test("controlled five-signal disclosure remains visible and usable at 320px and 200 percent text", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page, { fiveSignals: true });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+
+  await expect(page.locator(".notable-signals .signal-item")).toHaveCount(5);
+  const control = await expectNotableMoreTarget(page);
+  await control.click();
+  await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
 });
 
 test("my place and shared view state survive a deep link", async ({ page }) => {

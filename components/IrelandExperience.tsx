@@ -457,6 +457,7 @@ function MapMarker({
   interaction,
   focusRadius,
   onActivate,
+  additionalHitCentres,
   dataMovementMembers,
   children
 }: {
@@ -465,6 +466,7 @@ function MapMarker({
   interaction: MarkerInteraction;
   focusRadius: number;
   onActivate: () => void;
+  additionalHitCentres?: ReadonlyArray<{ x: number; y: number }>;
   dataMovementMembers?: string;
   children: ReactNode;
 }) {
@@ -493,42 +495,20 @@ function MapMarker({
         aria-hidden="true"
         vectorEffect="non-scaling-stroke"
       />
+      {additionalHitCentres?.map(({ x, y }) => (
+        <circle
+          className="map-marker-hit-target"
+          cx={x}
+          cy={y}
+          key={`${x}:${y}`}
+          r="1"
+          aria-hidden="true"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
       <circle className="map-marker-focus-ring" r={focusRadius} aria-hidden="true" />
       {children}
     </g>
-  );
-}
-
-function StationMarker({
-  station,
-  projection,
-  active,
-  onSelect,
-  interaction
-}: {
-  station: StationReading;
-  projection: ReturnType<typeof geoMercator>;
-  active: boolean;
-  onSelect: (station: StationReading) => void;
-  interaction: MarkerInteraction;
-}) {
-  const point = projection([station.longitude, station.latitude]);
-  if (!point) return null;
-  const [x, y] = point;
-  const wet = (station.rainfall ?? 0) > 0;
-  return (
-    <MapMarker
-      className={`station-marker ${active ? "is-active" : ""} ${wet ? "is-wet" : ""}`}
-      transform={`translate(${x} ${y})`}
-      interaction={interaction}
-      focusRadius={19}
-      onActivate={() => onSelect(station)}
-    >
-      {wet && <circle className="rain-ring" r="17" />}
-      <circle className="station-halo" r="11" />
-      <circle className="station-core" r="4" />
-      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "—"}°</text>
-    </MapMarker>
   );
 }
 
@@ -537,6 +517,43 @@ const windDirectionDegrees = (direction: string) => {
   const index = points.indexOf(direction.toUpperCase());
   return index < 0 ? 0 : index * 22.5;
 };
+
+function StationMarker({
+  station,
+  projection,
+  active,
+  showWind,
+  onSelect,
+  interaction
+}: {
+  station: StationReading;
+  projection: ReturnType<typeof geoMercator>;
+  active: boolean;
+  showWind: boolean;
+  onSelect: (station: StationReading) => void;
+  interaction: MarkerInteraction;
+}) {
+  const point = projection([station.longitude, station.latitude]);
+  if (!point) return null;
+  const [x, y] = point;
+  const wet = (station.rainfall ?? 0) > 0;
+  const hasWindGlyph = showWind && station.windSpeed !== null;
+  return (
+    <MapMarker
+      className={`station-marker ${active ? "is-active" : ""} ${wet ? "is-wet" : ""}`}
+      transform={`translate(${x} ${y})`}
+      interaction={interaction}
+      focusRadius={19}
+      onActivate={() => onSelect(station)}
+      additionalHitCentres={hasWindGlyph ? [{ x: 14, y: 12 }] : undefined}
+    >
+      {wet && <circle className="rain-ring" r="17" />}
+      <circle className="station-halo" r="11" />
+      <circle className="station-core" r="4" />
+      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "—"}°</text>
+    </MapMarker>
+  );
+}
 
 const aqiLabel = (value: number | null) => {
   if (value === null) return "Unavailable";
@@ -1778,10 +1795,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     if (event.defaultPrevented || (event.target as Element).closest("[data-map-marker]")) return;
     const markers = [...event.currentTarget.querySelectorAll<SVGGElement>("[data-map-marker]")];
     const nearest = markers.reduce<{ marker: SVGGElement; distance: number } | null>((best, marker) => {
-      const matrix = marker.getScreenCTM();
-      if (!matrix) return best;
-      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
-      const distance = Math.hypot(event.clientX - centre.x, event.clientY - centre.y);
+      const distances = [...marker.querySelectorAll<SVGCircleElement>(":scope > .map-marker-hit-target")]
+        .flatMap((target) => {
+          const matrix = target.getScreenCTM();
+          if (!matrix) return [];
+          const centre = new DOMPoint(target.cx.baseVal.value, target.cy.baseVal.value).matrixTransform(matrix);
+          return Math.hypot(event.clientX - centre.x, event.clientY - centre.y);
+        });
+      const distance = Math.min(...distances);
+      if (!Number.isFinite(distance)) return best;
       return !best || distance < best.distance ? { marker, distance } : best;
     }, null);
     if (!nearest || nearest.distance > 22) return;
@@ -2616,6 +2638,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 station={station}
                 projection={projection}
                 active={selected?.type === "station" && selected.item.id === station.id}
+                showWind={layers.has("wind")}
                 onSelect={(item) => setSelected({ type: "station", item })}
                 interaction={markerInteraction(
                   `station:${station.id}`,
@@ -2641,11 +2664,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>
                 </>
               );
-              const openHiddenWind = () => {
-                markerOpenerRef.current = [...(mapRef.current?.querySelectorAll<SVGElement>("[data-map-marker]") ?? [])]
-                  .find((candidate) => candidate.getAttribute("data-marker-id") === `station:${station.id}`) ?? null;
-                onActivate();
-              };
               return windInteraction ? (
                 <MapMarker
                   className="wind-marker"
@@ -2660,12 +2678,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               ) : (
                 <g
                   className="wind-marker"
+                  data-wind-for={station.id}
                   key={`wind-${station.id}`}
                   transform={`translate(${point[0] + 14} ${point[1] + 12})`}
-                  data-marker-pointer-target="true"
                   aria-hidden="true"
                   focusable="false"
-                  onClick={openHiddenWind}
                 >
                   {windContents}
                 </g>
