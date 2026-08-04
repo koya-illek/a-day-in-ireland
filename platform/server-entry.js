@@ -674,10 +674,15 @@ export const probeSatelliteDate = async (date, fetcher = fetch) => {
 };
 
 const latestDomainDate = (xml, notAfter) => {
-  const candidates = [...String(xml).matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)]
-    .map((match) => match[0])
-    .filter((date) => date <= notAfter)
-    .sort();
+  const candidates = [...String(xml).matchAll(
+    /\b(\d{4}-\d{2}-\d{2})(?:\/(\d{4}-\d{2}-\d{2})\/P1D)?\b/g
+  )].flatMap((match) => {
+    const startDate = match[1];
+    const endDate = match[2];
+    if (startDate > notAfter) return [];
+    if (!endDate) return [startDate];
+    return [endDate < notAfter ? endDate : notAfter];
+  }).sort();
   return candidates.at(-1) ?? null;
 };
 

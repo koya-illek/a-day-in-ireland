@@ -358,6 +358,22 @@ test("satellite discovery walks back from the advertised GIBS date until every I
   assert.ok(probes.some((probe) => probe.url.endsWith("/6/21/31.jpeg")));
 });
 
+test("satellite availability starts at today when the active GIBS range ends in the future", async () => {
+  const { resolveSatelliteAvailability } = await import("../platform/server-entry.js");
+  const availability = await resolveSatelliteAvailability({
+    now: Date.parse("2026-08-04T12:00:00Z"),
+    fetcher: async () => new Response(
+      "<Domain>2015-11-24/2022-07-27/P1D,2026-07-16/2026-08-05/P1D</Domain>"
+    )
+  });
+
+  assert.deepEqual(availability, {
+    advertisedDate: "2026-08-04",
+    startDate: "2026-08-04",
+    cacheKey: "2026-08-04|2026-08-04"
+  });
+});
+
 test("satellite discovery suppresses the layer when no recent Ireland tile is valid", async () => {
   const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
   const fetcher = async (url) => String(url).endsWith("/all/all.xml")
