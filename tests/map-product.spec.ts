@@ -99,8 +99,18 @@ test("map hierarchy and persistent view controls survive every target width and 
     await expect(map.getByRole("heading", { name: "Ireland on the map" })).toBeVisible();
     const mapTop = await map.evaluate((element) => element.getBoundingClientRect().top);
     expect(mapTop, `${size.width}px map fold`).toBeLessThanOrEqual(size.height * .55);
-    await expect(map.locator(".map-presets button")).toHaveCount(5);
-    for (const control of await map.locator(".map-presets button").all()) await expect(control).toBeVisible();
+    if (size.width > 600) {
+      await expect(map.locator(".map-presets button")).toHaveCount(5);
+      for (const control of await map.locator(".map-presets button").all()) await expect(control).toBeVisible();
+    } else {
+      await expect(map.locator(".map-presets")).toBeHidden();
+      const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
+      const persistentControls = shortcuts.locator("button:visible");
+      await expect(persistentControls).toHaveCount(5);
+      await shortcuts.getByRole("button", { name: /Custom/ }).click();
+      await expect(page.locator(".explore-panel")).toHaveClass(/is-open/);
+      await page.getByRole("button", { name: "Close explore panel" }).click();
+    }
     await expect(page.getByRole("link", { name: /View live map/ }).first()).toBeVisible();
     expect(await page.evaluate(() => {
       const map = document.querySelector("#live-map");
@@ -129,6 +139,24 @@ test("map hierarchy and persistent view controls survive every target width and 
   expect(largeText.document).toBeLessThanOrEqual(largeText.client + 1);
   expect(largeText.body).toBeLessThanOrEqual(largeText.client + 1);
   await expect(page.locator("#live-map .map-presets")).toBeVisible();
+
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+  await page.waitForTimeout(700);
+  const narrowLargeText = await page.evaluate(() => ({
+    mapTop: document.querySelector("#live-map")!.getBoundingClientRect().top,
+    canvasTop: document.querySelector(".map-canvas")!.getBoundingClientRect().top,
+    client: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth
+  }));
+  expect(narrowLargeText.mapTop).toBeLessThanOrEqual(720);
+  expect(narrowLargeText.canvasTop).toBeLessThanOrEqual(960);
+  expect(narrowLargeText.document).toBeLessThanOrEqual(narrowLargeText.client + 1);
+  expect(narrowLargeText.body).toBeLessThanOrEqual(narrowLargeText.client + 1);
+  await expect(page.getByRole("link", { name: /View live map/ }).first()).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Map view shortcuts" }).locator("button:visible")).toHaveCount(5);
 });
 
 test("mobile preset changes preserve the visible map anchor", async ({ page }, testInfo) => {
@@ -142,10 +170,16 @@ test("mobile preset changes preserve the visible map anchor", async ({ page }, t
       window.scrollTo(0, map.getBoundingClientRect().top + window.scrollY + 80);
     });
     const map = page.locator("#live-map");
+    const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
     await expect.poll(() => map.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(-80, 0);
     for (const preset of ["Movement", "Water", "All layers", "Weather"]) {
       const before = await map.evaluate((element) => element.getBoundingClientRect().top);
-      await map.getByRole("navigation", { name: "Map views" }).getByRole("button", { name: preset, exact: true }).click();
+      const control = await shortcuts.getByRole("button", { name: preset, exact: true }).boundingBox();
+      expect(control).not.toBeNull();
+      await page.touchscreen.tap(
+        (control?.x ?? 0) + (control?.width ?? 0) / 2,
+        (control?.y ?? 0) + (control?.height ?? 0) / 2
+      );
       await expect.poll(() => map.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(before, 0);
       const bounds = await map.boundingBox();
       expect(bounds).not.toBeNull();
@@ -198,6 +232,74 @@ test("large movement clusters zoom before exposing searchable paginated results"
   await expect(page.locator(".detail-transit").getByRole("heading", { name: "Route R17" })).toBeVisible();
 });
 
+test("1,200 movement positions stay responsive through repeated wheel interactions", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Performance budget runs once in the desktop rendering profile.");
+  test.skip(process.env.PLAYWRIGHT_PERFORMANCE !== "1", "Run the wall-clock budget in isolated PLAYWRIGHT_PERFORMANCE=1 mode.");
+  const observedAt = new Date().toISOString();
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      transitStatus: "live",
+      transit: Array.from({ length: 1_200 }, (_, index) => ({
+        id: `field-${String(index).padStart(4, "0")}`,
+        label: `Performance vehicle ${index}`,
+        route: `P${index % 80}`,
+        latitude: 51.55 + Math.floor(index / 40) * .125,
+        longitude: -10.45 + (index % 40) * .128,
+        bearing: index % 360,
+        speedKmh: 20,
+        speedSource: "reported",
+        observedAt
+      }))
+    })
+  }));
+
+  await page.goto("/?view=custom&layers=transit");
+  const map = page.locator("svg.ireland-map");
+  await expect.poll(() => map.evaluate((element) => Number(element.getAttribute("data-point-observations")))).toBe(1_200);
+  const durations = await map.evaluate(async (element) => {
+    const viewport = document.querySelector(".map-viewport")!;
+    const samples: number[] = [];
+    for (let index = 0; index < 10; index += 1) {
+      const previousScale = viewport.getAttribute("data-scale");
+      const changed = new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          observer.disconnect();
+          reject(new Error("Map scale did not update inside the interaction budget"));
+        }, 2_000);
+        const observer = new MutationObserver(() => {
+          if (viewport.getAttribute("data-scale") === previousScale) return;
+          window.clearTimeout(timeout);
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(viewport, { attributes: true, attributeFilter: ["data-scale"] });
+      });
+      const bounds = element.getBoundingClientRect();
+      const started = performance.now();
+      element.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+        deltaY: index % 2 === 0 ? -300 : 300
+      }));
+      await changed;
+      samples.push(performance.now() - started);
+    }
+    return samples;
+  });
+  const ordered = [...durations].sort((first, second) => first - second);
+  const median = ordered[Math.floor(ordered.length / 2)]!;
+  const p95 = ordered[Math.floor(ordered.length * .95)]!;
+  await testInfo.attach("movement-interaction-budget.json", {
+    body: JSON.stringify({ durations, median, p95 }, null, 2),
+    contentType: "application/json"
+  });
+  expect(median, `median wheel-to-render time ${median.toFixed(2)} ms`).toBeLessThan(16);
+  expect(p95, `p95 wheel-to-render time ${p95.toFixed(2)} ms`).toBeLessThan(32);
+});
+
 test("dense point layers declutter by viewport and keep the focused marker while zoom reveals more", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Deterministic density assertion runs once.");
   await installDenseAirFixture(page);
@@ -235,6 +337,48 @@ test("dense point layers declutter by viewport and keep the focused marker while
     markers.filter((marker) => (marker as SVGElement).tabIndex === 0).length
   );
   expect(rovingStops).toBe(1);
+});
+
+test("co-located active bathing alerts all remain reachable", async ({ page }) => {
+  const now = Date.now();
+  const startedAt = new Date(now - 60 * 60_000).toISOString();
+  const updatedAt = new Date(now - 10 * 60_000).toISOString();
+  const endsAt = new Date(now + 24 * 60 * 60_000).toISOString();
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [],
+      bathingAlerts: [
+        { id: "alert-a", name: "First Beach", county: "Galway", latitude: 53.3, longitude: -8,
+          restriction: "Do not swim", description: "First active notice", startedAt, updatedAt, endsAt, noticeUrl: null },
+        { id: "alert-b", name: "Second Beach", county: "Galway", latitude: 53.3, longitude: -8,
+          restriction: "Avoid bathing", description: "Second active notice", startedAt, updatedAt, endsAt, noticeUrl: null }
+      ],
+      warnings: [], warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
+      contextStatus: { ...emptyContextStatus, bathing: "live" }
+    })
+  }));
+
+  await page.goto("/?view=custom&layers=bathing");
+  const alerts = page.locator(".bathing-marker");
+  await expect(alerts).toHaveCount(2);
+  const markerState = await alerts.evaluateAll((markers) => markers.map((marker) => ({
+    id: marker.getAttribute("data-marker-id"),
+    transform: marker.getAttribute("transform"),
+    tabIndex: (marker as SVGElement).tabIndex
+  })));
+  expect(markerState.map(({ id }) => id)).toEqual(["bathing:alert-a", "bathing:alert-b"]);
+  expect(new Set(markerState.map(({ transform }) => transform)).size).toBe(2);
+  expect(markerState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
+
+  await alerts.first().focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(alerts.nth(1)).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".detail-bathing").getByRole("heading", { name: "Second Beach" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await alerts.first().click();
+  await expect(page.locator(".detail-bathing").getByRole("heading", { name: "First Beach" })).toBeVisible();
 });
 
 test("radar and whole-island context controls stay outside the map canvas at constrained widths", async ({ page }, testInfo) => {

@@ -875,9 +875,9 @@ test("movement clustering is deterministic across provider permutations and pres
     observedAt
   });
   const chain = [
-    vehicle("chain-a", -8.35),
-    vehicle("chain-b", -8.125),
-    vehicle("chain-c", -7.9)
+    vehicle("chain-a", -8.42),
+    vehicle("chain-b", -8.10),
+    vehicle("chain-c", -7.78)
   ];
   let refreshes = 0;
   const requestedOrders: string[] = [];
@@ -904,12 +904,18 @@ test("movement clustering is deterministic across provider permutations and pres
     return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
   }));
 
-  await expect(movementMarkers).toHaveCount(1);
+  await expect(movementMarkers).toHaveCount(test.info().project.name === "desktop" ? 2 : 1);
   const firstState = await readMovementState();
   expect(requestedOrders[0]).toBe("chain-a,chain-b,chain-c");
-  expect(firstState.map(({ id, members }) => ({ id, members }))).toEqual([
-    { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b", "transit:chain-c"] }
-  ]);
+  expect(firstState.map(({ id, members }) => ({ id, members }))).toEqual(test.info().project.name === "desktop"
+    ? [
+        { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b"] },
+        { id: "movement:transit:chain-c", members: ["transit:chain-c"] }
+      ]
+    : [
+        { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b", "transit:chain-c"] }
+      ]
+  );
   expect(new Set(firstState.map(({ id }) => id)).size).toBe(firstState.length);
   expect(firstState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
   expect(firstState.filter(({ tabIndex }) => tabIndex === -1)).toHaveLength(firstState.length - 1);
@@ -954,12 +960,7 @@ test("movement clustering is deterministic across provider permutations and pres
   expect(splitState.flatMap(({ members }) => members).sort()).toEqual([
     "transit:chain-a", "transit:chain-b", "transit:chain-c"
   ]);
-  if (test.info().project.name === "desktop") {
-    expect(splitState.length).toBeGreaterThan(1);
-  } else {
-    expect(splitState).toHaveLength(1);
-    expect(splitState[0]?.members).toEqual(["transit:chain-a", "transit:chain-b", "transit:chain-c"]);
-  }
+  expect(splitState.length).toBeGreaterThan(1);
   expect(splitState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
   expect(splitState.filter(({ tabIndex }) => tabIndex === -1)).toHaveLength(splitState.length - 1);
 });
