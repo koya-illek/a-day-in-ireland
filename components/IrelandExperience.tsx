@@ -291,6 +291,19 @@ const formatTime = (date: Date) => Number.isFinite(date.getTime())
     }).format(date)
   : "Unavailable";
 
+const orderedTideEvents = (tide: TideReading) => [
+  { label: "Next high", at: tide.nextHighAt, level: tide.nextHighLevel, fallbackOrder: 0 },
+  { label: "Next low", at: tide.nextLowAt, level: tide.nextLowLevel, fallbackOrder: 1 }
+].sort((first, second) => {
+  const firstTime = first.at ? Date.parse(first.at) : Number.POSITIVE_INFINITY;
+  const secondTime = second.at ? Date.parse(second.at) : Number.POSITIVE_INFINITY;
+  const safeFirstTime = Number.isFinite(firstTime) ? firstTime : Number.POSITIVE_INFINITY;
+  const safeSecondTime = Number.isFinite(secondTime) ? secondTime : Number.POSITIVE_INFINITY;
+  return safeFirstTime !== safeSecondTime
+    ? safeFirstTime - safeSecondTime
+    : first.fallbackOrder - second.fallbackOrder;
+});
+
 const provenanceLabel = (status: "live" | "partial" | "stale" | "fallback" | "unavailable") =>
   ({ live: "live", partial: "partial", stale: "cached", fallback: "fallback", unavailable: "unavailable" })[status];
 
@@ -789,7 +802,10 @@ function DetailCard({
         <>
           <p className="eyebrow">Marine Institute · tide gauge</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "—"}<small> m OD Malin</small></div>
+          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "—"}<small> m relative to OD Malin</small></div>
+          <p>
+            Ordnance Datum Malin is Ireland&apos;s national height reference. A negative height means the sea is below that reference level—not that the water has negative depth.
+          </p>
           <p>
             {item.surge === null
               ? "Observed sea level. The modelled tide and surge comparison is temporarily unavailable."
@@ -798,8 +814,12 @@ function DetailCard({
           <dl>
             <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
             <div><dt>Movement</dt><dd>{item.trend}</dd></div>
-            <div><dt>Next high</dt><dd>{item.nextHighAt ? `${formatTime(new Date(item.nextHighAt))} · ${item.nextHighLevel?.toFixed(2) ?? "—"} m` : "—"}</dd></div>
-            <div><dt>Next low</dt><dd>{item.nextLowAt ? `${formatTime(new Date(item.nextLowAt))} · ${item.nextLowLevel?.toFixed(2) ?? "—"} m` : "—"}</dd></div>
+            {orderedTideEvents(item).map((event) => (
+              <div key={event.label}>
+                <dt>{event.label}</dt>
+                <dd>{event.at ? `${formatTime(new Date(event.at))} · ${event.level?.toFixed(2) ?? "—"} m` : "—"}</dd>
+              </div>
+            ))}
           </dl>
         </>
       )}

@@ -458,6 +458,43 @@ export const tideQueryWindow = (now = Date.now()) => {
   };
 };
 
+const TIDE_TREND_WINDOW_MS = 30 * 60 * 1000;
+const TIDE_TREND_CHANGE_THRESHOLD_METRES = .01;
+
+export const classifyTideTrend = (samples) => {
+  const valid = samples.flatMap((sample) => {
+    const observedAt = new Date(sample.observedAt).getTime();
+    const waterLevel = numeric(sample.waterLevel);
+    return Number.isFinite(observedAt) && waterLevel !== null
+      ? [{ observedAt, waterLevel }]
+      : [];
+  }).sort((first, second) => first.observedAt - second.observedAt);
+  if (valid.length < 3) return "unknown";
+
+  const latestAt = valid.at(-1).observedAt;
+  const recent = valid.filter((sample) => sample.observedAt >= latestAt - TIDE_TREND_WINDOW_MS);
+  if (recent.length < 3) return "unknown";
+
+  const origin = recent[0].observedAt;
+  const points = recent.map((sample) => ({
+    minutes: (sample.observedAt - origin) / 60_000,
+    waterLevel: sample.waterLevel
+  }));
+  const meanMinutes = points.reduce((sum, point) => sum + point.minutes, 0) / points.length;
+  const meanLevel = points.reduce((sum, point) => sum + point.waterLevel, 0) / points.length;
+  const variance = points.reduce((sum, point) => sum + (point.minutes - meanMinutes) ** 2, 0);
+  if (variance === 0) return "unknown";
+
+  const covariance = points.reduce(
+    (sum, point) => sum + (point.minutes - meanMinutes) * (point.waterLevel - meanLevel),
+    0
+  );
+  const estimatedChange = covariance / variance * points.at(-1).minutes;
+  if (estimatedChange > TIDE_TREND_CHANGE_THRESHOLD_METRES) return "rising";
+  if (estimatedChange < -TIDE_TREND_CHANGE_THRESHOLD_METRES) return "falling";
+  return "steady";
+};
+
 const fetchTides = async () => {
   const { since, until } = tideQueryWindow();
   const base = "https://erddap.marine.ie/erddap/tabledap/";
@@ -481,7 +518,6 @@ const fetchTides = async () => {
   return [...stationRows.values()].flatMap((rows) => {
     rows.sort((a, b) => new Date(a[3]) - new Date(b[3]));
     const row = rows.at(-1);
-    const previous = rows.at(-2);
     const observedAt = String(row[3]);
     if (!freshEnough(observedAt, 3)) return [];
     const surge = [...surges].sort((a, b) => distance(row, a) - distance(row, b))[0];
@@ -500,13 +536,10 @@ const fetchTides = async () => {
       waterLevel: numeric(row[4]),
       predictedLevel,
       surge: surgeLevel,
-      trend: previous && numeric(previous[4]) !== null && numeric(row[4]) !== null
-        ? numeric(row[4]) - numeric(previous[4]) > .005
-          ? "rising"
-          : numeric(row[4]) - numeric(previous[4]) < -.005
-            ? "falling"
-            : "steady"
-        : "unknown",
+      trend: classifyTideTrend(rows.map((sample) => ({
+        observedAt: sample[3],
+        waterLevel: sample[4]
+      }))),
       nextHighAt: nextHigh ? String(nextHigh[3]) : null,
       nextHighLevel: nextHigh ? numeric(nextHigh[5]) : null,
       nextLowAt: nextLow ? String(nextLow[3]) : null,

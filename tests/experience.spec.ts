@@ -81,8 +81,9 @@ async function installMapMarkerFixtures(page: Page) {
       aurora: null,
       tides: [{
         id: "fixture-tide", name: "Fixture Tide", latitude: 53.3, longitude: -9.7, observedAt,
-        waterLevel: 1.2, predictedLevel: 1.1, surge: 0.1, trend: "rising",
-        nextHighAt: observedAt, nextHighLevel: 1.8, nextLowAt: observedAt, nextLowLevel: 0.4
+        waterLevel: -1.48, predictedLevel: -1.58, surge: 0.1, trend: "falling",
+        nextHighAt: "2026-08-04T21:10:00.000Z", nextHighLevel: 1.8,
+        nextLowAt: "2026-08-04T15:10:00.000Z", nextLowLevel: -1.72
       }],
       bathingAlerts: [],
       warnings: [],
@@ -1677,6 +1678,18 @@ test("map details behave as an accessible dialog", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.locator('.station-card[role="dialog"]')).toHaveCount(0);
   await expect(page.locator(".experience")).not.toHaveAttribute("inert", "");
+});
+
+test("tide details explain negative datum heights and order upcoming events by time", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/?view=all");
+  await page.locator(".tide-marker").click();
+
+  const detail = page.locator('[role="dialog"].detail-tide');
+  await expect(detail).toBeVisible();
+  await expect(detail).toContainText("Ordnance Datum Malin is Ireland's national height reference");
+  await expect(detail).toContainText("not that the water has negative depth");
+  await expect(detail.locator("dt")).toHaveText(["Observed", "Movement", "Next low", "Next high"]);
 });
 
 test("current activity guidance and hourly timeline are actionable", async ({ page }) => {

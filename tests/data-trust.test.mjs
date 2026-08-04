@@ -96,6 +96,54 @@ test("tide query windows remain stable inside a cache bucket", async () => {
   });
 });
 
+test("tide trend uses the recent 30-minute movement instead of only the latest pair", async () => {
+  const { classifyTideTrend } = await import("../platform/server-entry.js");
+  const sample = (minutes, waterLevel) => ({
+    observedAt: new Date(Date.parse("2026-08-04T12:00:00.000Z") + minutes * 60_000).toISOString(),
+    waterLevel
+  });
+
+  assert.equal(classifyTideTrend([
+    sample(0, 1.52),
+    sample(10, 1.48),
+    sample(20, 1.45),
+    sample(30, 1.45)
+  ]), "falling");
+  assert.equal(classifyTideTrend([
+    sample(0, 1.20),
+    sample(10, 1.23),
+    sample(20, 1.26),
+    sample(30, 1.26)
+  ]), "rising");
+  assert.equal(classifyTideTrend([
+    sample(0, 1.200),
+    sample(10, 1.204),
+    sample(20, 1.198),
+    sample(30, 1.202)
+  ]), "steady");
+});
+
+test("tide trend ignores readings outside its recent window and requires three valid samples", async () => {
+  const { classifyTideTrend } = await import("../platform/server-entry.js");
+  const sample = (minutes, waterLevel) => ({
+    observedAt: new Date(Date.parse("2026-08-04T12:00:00.000Z") + minutes * 60_000).toISOString(),
+    waterLevel
+  });
+
+  assert.equal(classifyTideTrend([
+    sample(0, 1.60),
+    sample(30, 1.40),
+    sample(40, 1.40),
+    sample(50, 1.40),
+    sample(60, 1.40)
+  ]), "steady");
+  assert.equal(classifyTideTrend([
+    sample(0, 1.20),
+    { observedAt: "invalid", waterLevel: 1.30 },
+    sample(10, null)
+  ]), "unknown");
+});
+
 test("official notice normalization excludes future and expired windows at an injected time", () => {
   const now = Date.parse("2026-08-02T12:00:00.000Z");
   const notices = normalizeOfficialNotices([
