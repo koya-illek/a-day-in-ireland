@@ -1726,8 +1726,8 @@ test("Stitch map workspace uses an island-only coastline and visible roads", asy
   await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
   if (test.info().project.name === "desktop") {
     await expect(page.getByText("Provider feeds", { exact: true })).toBeVisible();
-    const feedsText = await page.locator(".live-signal-dock").textContent();
-    expect(feedsText).toMatch(/weather stations|observations unavailable/i);
+    await expect.poll(() => page.locator(".live-signal-dock").textContent())
+      .toMatch(/weather stations|observations unavailable/i);
   }
 
   const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
