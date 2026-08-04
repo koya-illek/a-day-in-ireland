@@ -245,7 +245,7 @@ export type LiveSnapshot = {
   timeline: Array<{
     time: string;
     temperature: number | null;
-    rainfall: number;
+    rainfall: number | null;
     windSpeed: number | null;
   }>;
 };

@@ -1,0 +1,13 @@
+{
+  "source": "Production /api/transit capture from NTA GTFS-Realtime TripDescriptor.route_id",
+  "capturedAt": "2026-08-03T08:40:10.580Z",
+  "routes": [
+    { "routeId": "03C 126 e a", "publicRoute": "126" },
+    { "routeId": "03C 120F e a", "publicRoute": "120F" },
+    { "routeId": "3 L27 a", "publicRoute": "L27" },
+    { "routeId": "3 S4 a", "publicRoute": "S4" },
+    { "routeId": "3 220 d a", "publicRoute": "220" },
+    { "routeId": "2 NX c a", "publicRoute": "NX" },
+    { "routeId": "WFRD W5 b c", "publicRoute": "W5" }
+  ]
+}

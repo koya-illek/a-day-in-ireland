@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function enableExploreLayer(page: Page, name: RegExp) {
   await page.getByRole("button", { name: "Explore", exact: true }).click();
@@ -82,14 +82,14 @@ async function installRadarTileAvailabilityFixture(
   });
 }
 
-async function installMapMarkerFixtures(page: Page) {
+async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { fiveSignals?: boolean } = {}) {
   const stationNames = new Map([
     ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
     ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
     ["valentia", "Valentia"], ["cork", "Cork"], ["johnstown-castle", "Johnstown Castle"]
   ]);
   const observation = metObservationTime(5);
-  const observedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const observedAt = new Date(Date.now() - 60_000).toISOString();
 
   await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => {
     const endpoint = new URL(route.request().url()).pathname.split("/")[2];
@@ -99,7 +99,7 @@ async function installMapMarkerFixtures(page: Page) {
         name: stationNames.get(endpoint) ?? "Unknown station",
         ...observation,
         temperature: "16",
-        rainfall: "0.4",
+        rainfall: fiveSignals ? "1.2" : "0.4",
         windSpeed: "12",
         cardinalWindDirection: "E",
         weatherDescription: "Bright intervals"
@@ -116,6 +116,9 @@ async function installMapMarkerFixtures(page: Page) {
       trains: [{
         id: "fixture-train", latitude: 52.15, longitude: -7.4, status: "running",
         direction: "South", message: "Fixture service", observedAt, speedKmh: null, speedSource: null
+      }, {
+        id: "fixture-stack-train", latitude: 54.1, longitude: -8, status: "running",
+        direction: "North", message: "Fixture stacked service", observedAt, speedKmh: null, speedSource: null
       }],
       rivers: [{
         id: "fixture-river", name: "Fixture River", latitude: 53.1, longitude: -8.1,
@@ -132,7 +135,11 @@ async function installMapMarkerFixtures(page: Page) {
         observedAt, windSpeedKnots: 8, waveHeight: 1.1, wavePeriod: 5, seaTemperature: 14
       }],
       radar: [],
-      grid: null,
+      grid: fiveSignals ? {
+        observedAt, demandMW: 1000, generationMW: 1000, windMW: 650,
+        windSharePercent: 65, carbonIntensity: 190, carbonEmissions: 95,
+        frequencyHz: 50, interconnectorMW: 0
+      } : null,
       airQuality: [{
         id: "fixture-air", name: "Fixture Air", latitude: 53.4, longitude: -6.5, observedAt,
         europeanAqi: 32, pm25: 8, pm10: 14, nitrogenDioxide: 11, ozone: 80, uvIndex: 2,
@@ -141,11 +148,15 @@ async function installMapMarkerFixtures(page: Page) {
       aurora: null,
       tides: [{
         id: "fixture-tide", name: "Fixture Tide", latitude: 53.3, longitude: -9.7, observedAt,
-        waterLevel: -1.48, predictedLevel: -1.58, surge: 0.1, trend: "falling",
+        waterLevel: -1.48, predictedLevel: -1.58, surge: fiveSignals ? 0.3 : 0.1, trend: "falling",
         nextHighAt: "2026-08-04T21:10:00.000Z", nextHighLevel: 1.8,
         nextLowAt: "2026-08-04T15:10:00.000Z", nextLowLevel: -1.72
       }],
-      bathingAlerts: [],
+      bathingAlerts: [{
+        id: "fixture-bathing", name: "Fixture Beach", county: "Clare", latitude: 52.7, longitude: -9.2,
+        restriction: "Temporary advice", description: "Fixture bathing-water notice", startedAt: new Date(Date.now() - 60_000).toISOString(),
+        updatedAt: observedAt, endsAt: new Date(Date.now() + 60 * 60_000).toISOString(), noticeUrl: null
+      }],
       warnings: [],
       warningsStatus: "live",
       issTle: null,
@@ -155,15 +166,189 @@ async function installMapMarkerFixtures(page: Page) {
         place: "Fixture event", observedAt, detailUrl: "https://example.test/quake"
       }],
       contextStatus: {
-        marine: "live", measuredAir: "live", tides: "live", bathing: "live",
+        marine: "live", grid: "live", measuredAir: "live", tides: "live", bathing: "live",
         satellite: "unavailable", earthquakes: "live", iss: "unavailable", warnings: "live"
       }
     })
   }));
   await page.route("**/api/transit", (route) => route.fulfill({
     contentType: "application/json",
-    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+    body: JSON.stringify({
+      transit: [{
+        id: "fixture-transit", label: "7100", route: "2 NX c a", latitude: 54.75, longitude: -7.1,
+        bearing: 225, speedKmh: 18, speedSource: "reported", observedAt
+      }, {
+        id: "fixture-stack-transit", label: "121", route: "3 73 a", latitude: 54.1, longitude: -8,
+        bearing: null, speedKmh: null, speedSource: null, observedAt
+      }],
+      transitStatus: "live"
+    })
   }));
+}
+
+async function installAccessibilityContentFixtures(page: Page) {
+  await installMapMarkerFixtures(page);
+  await page.unroute("**/api/contexts");
+  await page.unroute("**/api/transit");
+  const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+  const issued = new Date(Date.now() - 45 * 60_000).toISOString();
+  const expiry = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+      warnings: [{
+        id: "accessibility-warning",
+        capId: "accessibility-warning-cap",
+        type: "yellow; Moderate",
+        severity: "Moderate",
+        certainty: "Likely",
+        regions: ["EI29"],
+        status: "Warning",
+        issued,
+        updated: issued,
+        level: "Yellow",
+        headline: "Rain warning for Westmeath",
+        description: "Heavy showers may cause difficult travelling conditions.",
+        onset: issued,
+        expiry
+      }],
+      warningsStatus: "live",
+      issTle: null,
+      satellite: null,
+      earthquakes: [],
+      contextStatus: {
+        marine: "unavailable", measuredAir: "unavailable", tides: "unavailable", bathing: "unavailable",
+        satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "live"
+      }
+    })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      transit: [{
+        id: "provider-shaped-bus",
+        label: "100",
+        route: "3 73 a",
+        latitude: 53.35,
+        longitude: -6.26,
+        bearing: 90,
+        speedKmh: 22,
+        speedSource: "reported",
+        observedAt
+      }],
+      transitStatus: "live"
+    })
+  }));
+}
+
+async function notableTargetMetrics(control: Locator) {
+  return control.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const visibleWidth = Math.max(0, Math.min(bounds.right, innerWidth) - Math.max(bounds.left, 0));
+    const visibleHeight = Math.max(0, Math.min(bounds.bottom, innerHeight) - Math.max(bounds.top, 0));
+    const centreElement = document.elementFromPoint(
+      bounds.left + bounds.width / 2,
+      bounds.top + bounds.height / 2
+    );
+    return {
+      fontSize: Number.parseFloat(style.fontSize),
+      width: bounds.width,
+      height: bounds.height,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      right: bounds.right,
+      viewportWidth: innerWidth,
+      viewportHeight: innerHeight,
+      visibleWidth,
+      visibleHeight,
+      centreHit: centreElement === element || (centreElement !== null && element.contains(centreElement)),
+      centreOwner: centreElement
+        ? `${centreElement.tagName.toLowerCase()}.${String(centreElement.className).replace(/\s+/g, ".")}`
+        : "none"
+    };
+  });
+}
+
+async function waitForNotablePositionToSettle(control: Locator) {
+  return control.evaluate((element) => new Promise<boolean>((resolve) => {
+    let previousScroll = scrollY;
+    let previousBounds = element.getBoundingClientRect();
+    let stableFrames = 0;
+    let frameCount = 0;
+    const sample = () => {
+      const bounds = element.getBoundingClientRect();
+      const stable = Math.abs(scrollY - previousScroll) < 0.25 &&
+        Math.abs(bounds.top - previousBounds.top) < 0.25 &&
+        Math.abs(bounds.bottom - previousBounds.bottom) < 0.25;
+      stableFrames = stable ? stableFrames + 1 : 0;
+      previousScroll = scrollY;
+      previousBounds = bounds;
+      frameCount += 1;
+      if (stableFrames >= 6) {
+        resolve(true);
+      } else if (frameCount >= 240) {
+        resolve(false);
+      } else {
+        requestAnimationFrame(sample);
+      }
+    };
+    requestAnimationFrame(sample);
+  }));
+}
+
+async function revealNotableTargetWithKeyboard(page: Page, control: Locator) {
+  expect(await page.evaluate(() => ({
+    computed: getComputedStyle(document.documentElement).scrollBehavior,
+    inline: document.documentElement.style.scrollBehavior
+  }))).toEqual({ computed: "smooth", inline: "" });
+
+  await page.keyboard.press("Home");
+  expect(await waitForNotablePositionToSettle(control)).toBe(true);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const metrics = await notableTargetMetrics(control);
+    const fullyInsideViewport = metrics.top >= 0 &&
+      metrics.bottom <= metrics.viewportHeight &&
+      metrics.left >= 0 &&
+      metrics.right <= metrics.viewportWidth + 1;
+    if (fullyInsideViewport && metrics.centreHit) return metrics;
+
+    let key: "PageDown" | "PageUp" | "ArrowDown" | "ArrowUp";
+    if (metrics.top >= metrics.viewportHeight * 1.25) {
+      key = "PageDown";
+    } else if (metrics.bottom > metrics.viewportHeight) {
+      key = "ArrowDown";
+    } else if (metrics.bottom <= -metrics.viewportHeight * 0.25) {
+      key = "PageUp";
+    } else if (metrics.top < 0) {
+      key = "ArrowUp";
+    } else {
+      key = (metrics.top + metrics.bottom) / 2 < metrics.viewportHeight / 2 ? "ArrowUp" : "ArrowDown";
+    }
+    await page.keyboard.press(key);
+    expect(await waitForNotablePositionToSettle(control)).toBe(true);
+  }
+  throw new Error(`Natural keyboard scrolling did not reveal the notable control: ${JSON.stringify(await notableTargetMetrics(control))}`);
+}
+
+async function expectNotableMoreTarget(page: Page) {
+  const control = page.getByRole("button", { name: "View 2 more", exact: true });
+  await expect(control).toBeVisible();
+  const metrics = await revealNotableTargetWithKeyboard(page, control);
+  expect(metrics.fontSize).toBeGreaterThanOrEqual(12);
+  expect(metrics.width).toBeGreaterThanOrEqual(44);
+  expect(metrics.height).toBeGreaterThanOrEqual(44);
+  expect(metrics.visibleWidth).toBeGreaterThanOrEqual(44);
+  expect(metrics.visibleHeight).toBeGreaterThanOrEqual(44);
+  expect(metrics.top).toBeGreaterThanOrEqual(0);
+  expect(metrics.bottom).toBeLessThanOrEqual(metrics.viewportHeight);
+  expect(metrics.left).toBeGreaterThanOrEqual(0);
+  expect(metrics.right).toBeLessThanOrEqual(metrics.viewportWidth + 1);
+  expect(metrics.centreHit).toBe(true);
+  return control;
 }
 
 test("boot refresh uses canonical weather stations and one contexts request", async ({ page }) => {
@@ -222,7 +407,7 @@ test("boot refresh uses canonical weather stations and one contexts request", as
   await expect(page.locator(".rail-status")).toContainText("Connecting to live services");
   await expect(page.locator(".station-marker")).toHaveCount(9);
   const weatherChip = page.locator(".freshness-chip").filter({ hasText: "Weather provider" });
-  await expect(weatherChip).toContainText("Provider: live");
+  await expect(weatherChip).toContainText(/live · observed/);
   await expect(weatherChip).not.toContainText("stale");
   expect(contextsRequests).toBe(1);
   expect(requestedStations).toContain("dublin");
@@ -260,7 +445,7 @@ test("the live map leads into selected-place and across-Ireland evidence", async
   for (const label of localLabels) {
     expect(label).toMatch(/Connecting to|No nearby .* observation|(?:Met Éireann|OPW|EEA measured|CAMS modelled).*km away|unavailable.*cannot be assessed|cached readings are not used as current/i);
   }
-  await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).toContainText(/Provider: .*Observation:/);
+  await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).toContainText(/(?:live|partial|fallback) · observed/);
   await expect(page.locator(".workspace-facts")).toHaveAttribute("aria-label", "Current national highlights across Ireland");
 
   const hierarchy = await page.evaluate(() => {
@@ -485,8 +670,76 @@ test("weather and wind share one accessible station entry while wind-only remain
   await page.goto("/");
   await expect(page.locator(".station-marker")).toHaveCount(9);
   await expect(page.locator("svg.ireland-map [role='button']")).toHaveCount(9);
+  await expect(page.locator(".wind-marker[aria-hidden='true']")).toHaveCount(9);
   expect(await page.locator(".wind-marker[aria-hidden='true']").first().getAttribute("aria-label")).toBeNull();
   await expect(page.locator(".station-marker").first()).toHaveAccessibleName(/Bright intervals.*wind 12 kilometres per hour/);
+
+  const combined = page.locator(".station-marker[data-marker-id='station:johnstown-castle']");
+  const glyph = page.locator(".wind-marker[aria-hidden='true'][data-wind-for='johnstown-castle']");
+  await expect(combined).toHaveCount(1);
+  await expect(glyph).toHaveCount(1);
+  await expect(glyph).not.toHaveAttribute("data-map-marker");
+  await expect(glyph).not.toHaveAttribute("data-marker-pointer-target");
+  await expect(page.getByRole("button", { name: /Wexford.*wind 12 kilometres per hour/ })).toHaveCount(1);
+  await expect(combined.locator(":scope > .map-marker-hit-target")).toHaveCount(2);
+  const glyphPointerEvents = await glyph.locator(":scope, :scope *").evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).pointerEvents)
+  );
+  expect(new Set(glyphPointerEvents)).toEqual(new Set(["none"]));
+  const combinedStops = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((markers) =>
+    markers.map((marker) => (marker as SVGElement).tabIndex)
+  );
+  expect(combinedStops.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(combinedStops.filter((tabIndex) => tabIndex === -1)).toHaveLength(8);
+
+  const combinedHitStyles = () => combined.locator(":scope > .map-marker-hit-target").evaluateAll((targets) =>
+    targets.map((target) => {
+      const style = getComputedStyle(target);
+      return {
+        pointerEvents: style.pointerEvents,
+        strokeWidth: Number.parseFloat(style.strokeWidth),
+        opacity: Number.parseFloat(style.opacity),
+        filter: style.filter
+      };
+    })
+  );
+  const stableHitStyle = { pointerEvents: "stroke", strokeWidth: 44, opacity: 1, filter: "none" };
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  await combined.hover({ force: true });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+
+  await page.locator("#live-map").scrollIntoViewIfNeeded();
+  const hitOffsets = [
+    { name: "left", x: -20, y: 0 },
+    { name: "right", x: 20, y: 0 },
+    { name: "up", x: 0, y: -20 },
+    { name: "down", x: 0, y: 20 }
+  ];
+  for (const offset of hitOffsets) {
+    const point = await glyph.evaluate((element, currentOffset) => {
+      const matrix = (element as SVGGElement).getScreenCTM();
+      if (!matrix) return null;
+      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
+      return { x: centre.x + currentOffset.x, y: centre.y + currentOffset.y };
+    }, offset);
+    expect(point, `${offset.name} wind hit point must be projected`).not.toBeNull();
+    if (!point) continue;
+    await page.mouse.click(point.x, point.y);
+    await expect(
+      page.locator("[role='dialog'].detail-station").getByRole("heading", { name: "Wexford" }),
+      `${offset.name} 20px wind offset must open the combined Wexford station marker`
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Close map details" }).click();
+  }
+
+  await page.emulateMedia({ forcedColors: "active" });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  await combined.hover({ force: true });
+  expect(await combinedHitStyles()).toEqual([stableHitStyle, stableHitStyle]);
+  expect(new Set(await glyph.locator(":scope, :scope *").evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).pointerEvents)
+  ))).toEqual(new Set(["none"]));
+  await page.emulateMedia({ forcedColors: "none" });
 
   await page.goto("/?view=custom&layers=wind");
   await expect(page.locator(".station-marker")).toHaveCount(0);
@@ -554,7 +807,9 @@ test("focus rings are hidden until focus-visible without changing marker opacity
 
   const readRingStyle = (selector: string) => page.locator(selector).first().evaluate((marker) => {
     const ring = marker.querySelector<SVGCircleElement>(":scope > .map-marker-focus-ring");
-    const ordinaryCircle = marker.querySelector<SVGCircleElement>(":scope > circle:not(.map-marker-focus-ring)");
+    const ordinaryCircle = marker.querySelector<SVGCircleElement>(
+      ":scope > circle:not(.map-marker-focus-ring):not(.map-marker-hit-target)"
+    );
     return {
       ringOpacity: ring ? Number(getComputedStyle(ring).opacity) : -1,
       ordinaryOpacity: ordinaryCircle ? Number(getComputedStyle(ordinaryCircle).opacity) : -1,
@@ -738,12 +993,12 @@ test("a slower context refresh cannot erase a newer public transport refresh", a
   }));
 
   await page.goto("/?view=custom&layers=transit");
-  await expect(page.getByRole("button", { name: "Route 99, live public transport position" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Route 99, Heading east, live public transport position" })).toBeVisible();
 });
 
 test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
+  await expect(page.locator("#connection-summary")).toContainText(/Connected|Checking for newer data/);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
   await expect(page.getByText("Ireland, at a glance.")).toBeVisible();
   const freshnessChips = page.locator(".freshness-chip");
@@ -1041,10 +1296,10 @@ test("duplicate public transport IDs resolve newest data and stable equal-time p
     speedSource: "reported" as const,
     observedAt
   });
-  const older = vehicle("older-route", "Older position", 53.35, -9.2, olderAt);
-  const newer = vehicle("newest-route", "Newest position", 53.35, -6.26, newerAt);
-  const equalWest = vehicle("equal-west", "Equal west position", 53.35, -9.2, equalAt);
-  const equalEast = vehicle("equal-east", "Equal east position", 53.35, -7.4, equalAt);
+  const older = vehicle("3 220 d a", "Older position", 53.35, -9.2, olderAt);
+  const newer = vehicle("2 NX c a", "Newest position", 53.35, -6.26, newerAt);
+  const equalWest = vehicle("3 S4 a", "Equal west position", 53.35, -9.2, equalAt);
+  const equalEast = vehicle("3 L27 a", "Equal east position", 53.35, -7.4, equalAt);
   const responses = [
     [older, newer],
     [newer, older],
@@ -1086,7 +1341,7 @@ test("duplicate public transport IDs resolve newest data and stable equal-time p
   await expect(marker).toHaveCount(1);
   await marker.focus();
   const firstState = await readState();
-  expect(firstState.ariaLabel).toContain("Route newest-route");
+  expect(firstState.ariaLabel).toContain("Route NX");
   await assertOneRovingStop();
   await page.evaluate(() => {
     (window as unknown as { __duplicateTransitMarker?: Element }).__duplicateTransitMarker =
@@ -1133,19 +1388,19 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
   });
   const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
   const separator = "\u001f";
-  const vehicle = (route: string, label: string) => ({
+  const vehicle = (route: string, label: string, bearing: number) => ({
     id: "separator-transit",
     label,
     route,
     latitude: 53.35,
     longitude: -7.4,
-    bearing: 90,
+    bearing,
     speedKmh: 20,
     speedSource: "reported" as const,
     observedAt
   });
-  const first = vehicle(`x${separator}string:y`, "z");
-  const second = vehicle("x", `y${separator}string:z`);
+  const first = vehicle(`x${separator}string:y`, "z", 270);
+  const second = vehicle("x", `y${separator}string:z`, 90);
   const responses = [
     [first, second],
     [second, first],
@@ -1188,7 +1443,10 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     await page.keyboard.press("Enter");
     await expect(page.locator(".detail-transit")).toBeVisible();
     const detail = await page.locator(".detail-transit").innerText();
-    expect(detail).toContain(`y${separator}string:z`);
+    expect(detail).not.toContain(separator);
+    expect(detail).not.toContain("string:z");
+    expect(detail).toContain("Heading east");
+    expect(detail).not.toContain("Heading west");
     await page.getByRole("button", { name: "Close map details" }).click();
     await expect(marker).toBeFocused();
     return detail;
@@ -1200,13 +1458,16 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     id: "movement:transit:separator-transit",
     transform: firstState.transform,
     members: "transit:separator-transit",
-    ariaLabel: "Route x, live public transport position",
+    ariaLabel: "Route X, Heading east, live public transport position",
     tabIndex: 0
   });
   const firstDetail = await openWithEnter();
   await marker.click();
   await expect(page.locator(".detail-transit")).toBeVisible();
-  await expect(page.locator(".detail-transit")).toContainText(`y${separator}string:z`);
+  await expect(page.locator(".detail-transit")).not.toContainText(separator);
+  await expect(page.locator(".detail-transit")).not.toContainText("string:z");
+  await expect(page.locator(".detail-transit")).toContainText("Heading east");
+  await expect(page.locator(".detail-transit")).not.toContainText("Heading west");
   await page.getByRole("button", { name: "Close map details" }).click();
   await expect(marker).toBeFocused();
   await assertOneRovingStop();
@@ -1611,7 +1872,15 @@ test("wind context displays measured station speeds and directions", async ({ pa
   await page.goto("/");
   await expect(page.locator(".wind-marker").first()).toBeVisible();
   await expect(page.locator(".wind-marker text").first()).toContainText("km/h");
-  await page.locator(".wind-marker").first().click();
+  expect(await page.locator(".wind-marker").first().evaluate((element) => getComputedStyle(element).pointerEvents)).toBe("none");
+  await page.locator("#live-map").scrollIntoViewIfNeeded();
+  const windCentre = await page.locator(".wind-marker[data-wind-for='johnstown-castle']").evaluate((element) => {
+    const matrix = (element as SVGGElement).getScreenCTM();
+    if (!matrix) return null;
+    return new DOMPoint(0, 0).matrixTransform(matrix);
+  });
+  expect(windCentre).not.toBeNull();
+  if (windCentre) await page.mouse.click(windCentre.x, windCentre.y);
   await expect(page.locator(".detail-station")).toBeVisible();
   await expect(page.locator(".detail-station").getByText(/km\/h/)).toBeVisible();
 });
@@ -1697,6 +1966,33 @@ test("notable-now board is present without fabricating an event", async ({ page 
   const quiet = page.getByText(/Provider checks completed|Unable to assess every selected signal source|No automated highlight rule applies/);
   await expect(signals.first().or(quiet)).toBeVisible();
   expect(await page.locator(".notable-signals .signal-item:visible").count()).toBeLessThanOrEqual(3);
+});
+
+test("controlled five-signal view exposes a legible 44px disclosure on desktop and mobile", async ({ page }) => {
+  await installMapMarkerFixtures(page, { fiveSignals: true });
+  await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
+
+  const signals = page.locator(".notable-signals .signal-item");
+  await expect(signals).toHaveCount(5);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(3);
+  const control = await expectNotableMoreTarget(page);
+  await control.click();
+  await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
+});
+
+test("controlled five-signal disclosure remains visible and usable at 320px and 200 percent text", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page, { fiveSignals: true });
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+
+  await expect(page.locator(".notable-signals .signal-item")).toHaveCount(5);
+  const control = await expectNotableMoreTarget(page);
+  await control.click();
+  await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
 });
 
 test("my place and shared view state survive a deep link", async ({ page }) => {
@@ -2189,4 +2485,362 @@ test("mobile view keeps the layer rail clear of the signals board", async ({ pag
   expect(panel).not.toBeNull();
   expect((panel?.x ?? 0) + (panel?.width ?? 0)).toBeLessThanOrEqual(viewport.clientWidth + 1);
   await expect(page.locator(".layer-group").first()).toBeVisible();
+});
+
+test("visible presets expose pressed state, clean names, and an explicit custom view", async ({ page }) => {
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+
+  const presets = page.getByRole("navigation", { name: "Map view shortcuts" });
+  const weather = presets.getByRole("button", { name: "Weather", exact: true });
+  const movement = presets.getByRole("button", { name: "Movement", exact: true });
+  const water = presets.getByRole("button", { name: "Water", exact: true });
+  const all = presets.getByRole("button", { name: "All layers", exact: true });
+  await expect(weather).toHaveAttribute("aria-pressed", "true");
+  await expect(movement).toHaveAttribute("aria-pressed", "false");
+  await expect(water).toHaveAttribute("aria-pressed", "false");
+  await expect(all).toHaveAttribute("aria-pressed", "false");
+  expect(await presets.locator("button > span").evaluateAll((glyphs) =>
+    glyphs.every((glyph) => glyph.getAttribute("aria-hidden") === "true")
+  )).toBe(true);
+
+  await movement.click();
+  await expect(movement).toHaveAttribute("aria-pressed", "true");
+  await expect(weather).toHaveAttribute("aria-pressed", "false");
+  await enableExploreLayer(page, /Air & exposure/);
+  await expect(page.locator(".custom-view-state")).toHaveText(/Custom view · \d+ active layers?/);
+});
+
+test("mobile warnings prioritise human scope and expiry with an official source", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "mobile") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const warning = page.locator(".warning-strip.official-notice");
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("Westmeath");
+  await expect(warning).not.toContainText("EI29");
+  await expect(warning.locator(".warning-key-facts dt")).toHaveText(["Scope", "Expires"]);
+  const official = warning.getByRole("link", { name: /Check official Met Éireann notice/ });
+  await expect(official).toHaveAttribute("href", "https://www.met.ie/warnings-today.html");
+  const sourceDetails = warning.getByText("Source and issue details", { exact: true });
+  await expect(sourceDetails).toBeVisible();
+  await expect(warning.locator(".warning-actions details > p")).toBeHidden();
+
+  const layout = await warning.evaluate((element) => {
+    const badge = element.querySelector(".warning-badge")?.getBoundingClientRect();
+    const heading = element.querySelector("h3")?.getBoundingClientRect();
+    const link = element.querySelector("a")?.getBoundingClientRect();
+    return { badgeBottom: badge?.bottom ?? 0, headingTop: heading?.top ?? 0, linkHeight: link?.height ?? 0 };
+  });
+  expect(layout.badgeBottom).toBeLessThanOrEqual(layout.headingTop);
+  expect(layout.linkHeight).toBeGreaterThanOrEqual(44);
+});
+
+test("shape of the day has labelled dual scales, independent rain bars, and a data list", async ({ page }) => {
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+  await expect.poll(() => page.locator(".timeline-point").count()).toBeGreaterThan(0);
+
+  await expect(page.locator(".temperature-axis")).toContainText(/Temperature/);
+  await expect(page.locator(".rain-axis")).toContainText(/rain/i);
+  await expect(page.locator(".timeline-x-axis")).toContainText(/Hour of day · Irish time/);
+  const firstPoint = page.locator(".timeline-point").first();
+  await expect(firstPoint).toHaveAccessibleName(/average temperature.*degrees Celsius.*average observed rainfall.*millimetres per reporting station.*average wind.*kilometres per hour/);
+  const barHeights = await firstPoint.locator(".bar").evaluateAll((bars) => bars.map((bar) => getComputedStyle(bar).height));
+  expect(barHeights).toHaveLength(2);
+  expect(new Set(barHeights).size).toBe(2);
+
+  const list = page.locator(".timeline-data-list");
+  await list.locator("summary").click();
+  await expect(list.getByRole("table", { name: /Hourly averages across reporting Met Éireann stations; rain is the mean/ })).toBeVisible();
+  await expect(list.getByRole("columnheader")).toHaveText(["Time", "Average temperature", "Average rain", "Average wind"]);
+  await expect(list.locator("tbody tr").first().locator("td").nth(1)).toHaveText("0.4 mm");
+});
+
+test("390px primary controls, chart points, and map marker hit regions meet touch floors", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "mobile") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect.poll(() => page.locator(".timeline-point").count()).toBeGreaterThan(0);
+
+  const controls = page.locator([
+    ".header-actions button",
+    ".section-rail nav button",
+    ".place-controls select",
+    ".place-controls button",
+    ".freshness-strip > button",
+    ".map-navigation button",
+    ".timeline-point"
+  ].join(","));
+  const undersized = await controls.evaluateAll((elements) => elements
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden";
+    })
+    .map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { name: element.getAttribute("aria-label") || element.textContent?.trim(), width: bounds.width, height: bounds.height };
+    })
+    .filter((bounds) => bounds.width < 44 || bounds.height < 44));
+  expect(undersized).toEqual([]);
+
+  const hitTarget = await page.locator(".map-marker-hit-target").first().evaluate((element) => ({
+    pointerEvents: getComputedStyle(element).pointerEvents,
+    strokeWidth: Number.parseFloat(getComputedStyle(element).strokeWidth)
+  }));
+  expect(hitTarget.pointerEvents).toBe("stroke");
+  expect(hitTarget.strokeWidth).toBeGreaterThanOrEqual(44);
+  await page.getByLabel("Live map of Ireland").scrollIntoViewIfNeeded();
+  const markerCenter = await page.locator(".station-marker .map-marker-hit-target").first().evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  });
+  await page.mouse.click(markerCenter.x, markerCenter.y);
+  await expect(page.locator("[role='dialog'].detail-station")).toBeVisible();
+});
+
+test("every interactive marker retains its 44px hit stroke through hover and forced colours", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page);
+  const markerCases = [
+    { view: "/?view=custom&layers=weather", selector: ".station-marker", detail: ".detail-station" },
+    { view: "/?view=custom&layers=rivers", selector: ".river-marker", detail: ".detail-river" },
+    { view: "/?view=custom&layers=sea", selector: ".buoy", detail: ".detail-buoy" },
+    { view: "/?view=custom&layers=tides", selector: ".tide-marker", detail: ".detail-tide" },
+    { view: "/?view=custom&layers=bathing", selector: ".bathing-marker", detail: ".detail-bathing" },
+    { view: "/?view=custom&layers=air", selector: ".air-marker", detail: ".detail-air" },
+    { view: "/?view=custom&layers=trains", selector: ".train-marker", detail: ".detail-train" },
+    { view: "/?view=custom&layers=transit", selector: ".transit-marker", detail: ".detail-transit" },
+    { view: "/?view=custom&layers=trains,transit", selector: ".movement-stack-marker", detail: ".detail-train" },
+    { view: "/?view=custom&layers=earthquakes", selector: ".earthquake-marker", detail: ".detail-earthquake" },
+    { view: "/?view=custom&layers=wind", selector: ".wind-marker[data-map-marker]", detail: ".detail-station" }
+  ];
+
+  const hitStyle = async (selector: string) => page.locator(selector).first().locator(":scope > .map-marker-hit-target").evaluate((target) => {
+    const style = getComputedStyle(target);
+    return {
+      pointerEvents: style.pointerEvents,
+      strokeWidth: Number.parseFloat(style.strokeWidth),
+      opacity: Number.parseFloat(style.opacity),
+      filter: style.filter
+    };
+  });
+  const expectStableStyle = (style: Awaited<ReturnType<typeof hitStyle>>) => {
+    expect(style).toEqual({ pointerEvents: "stroke", strokeWidth: 44, opacity: 1, filter: "none" });
+  };
+  const assertRealHitArea = async (selector: string, expectedDetail: string) => {
+    const marker = page.locator(selector).first();
+    await expect(marker).toBeVisible();
+    expectStableStyle(await hitStyle(selector));
+    await marker.hover({ force: true });
+    expectStableStyle(await hitStyle(selector));
+    const hitTest = await marker.evaluate((group) => {
+      const target = group.querySelector(".map-marker-hit-target") as SVGCircleElement | null;
+      const matrix = target?.getScreenCTM();
+      if (!target || !matrix) return { points: [], click: null };
+      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
+      const offsets = [[-20, 0], [20, 0], [0, -20], [0, 20]];
+      return { points: offsets.map(([x, y]) => ({ x: centre.x + x, y: centre.y + y })) };
+    });
+    expect(hitTest.points).toHaveLength(4);
+    for (const [index, point] of hitTest.points.entries()) {
+      await page.mouse.click(point.x, point.y);
+      await expect(
+        page.locator(`[role='dialog']${expectedDetail}`),
+        `${selector} must activate at hit offset ${index} (${point.x}, ${point.y})`
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Close map details" }).click();
+    }
+  };
+
+  for (const marker of markerCases) {
+    await page.goto(marker.view);
+    await page.locator("#live-map").scrollIntoViewIfNeeded();
+    await assertRealHitArea(marker.selector, marker.detail);
+  }
+
+  await page.emulateMedia({ forcedColors: "active" });
+  for (const marker of markerCases) {
+    await page.goto(marker.view);
+    await page.locator("#live-map").scrollIntoViewIfNeeded();
+    expectStableStyle(await hitStyle(marker.selector));
+    await page.locator(marker.selector).first().hover({ force: true });
+    expectStableStyle(await hitStyle(marker.selector));
+  }
+});
+
+test("320px at 200 percent text keeps actions, preset overflow, map, and list usable", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+
+  const actions = page.locator(".header-actions button");
+  await expect(actions).toHaveCount(2);
+  for (const action of await actions.all()) await expect(action).toBeVisible();
+  const actionBounds = await actions.evaluateAll((buttons) => buttons.map((button) => {
+    const bounds = button.getBoundingClientRect();
+    return { top: bounds.top, width: bounds.width, height: bounds.height };
+  }));
+  expect(Math.abs(actionBounds[0]!.top - actionBounds[1]!.top)).toBeLessThanOrEqual(1);
+  expect(actionBounds.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+  await expect(page.locator(".preset-scroll-hint")).toBeVisible();
+  const presetStrip = page.getByRole("navigation", { name: "Map view shortcuts" });
+  await expect(presetStrip.getByRole("button")).toHaveCount(5);
+  const allLayers = presetStrip.getByRole("button", { name: "All layers", exact: true });
+  await allLayers.scrollIntoViewIfNeeded();
+  await expect(allLayers).toBeVisible();
+  const map = page.getByLabel("Live map of Ireland");
+  await expect(map).toBeVisible();
+  await map.scrollIntoViewIfNeeded();
+  const clippedControls = await page.evaluate(() => {
+    const stage = document.querySelector("#live-map")?.getBoundingClientRect();
+    if (!stage) return [{ name: "map", reason: "missing" }];
+    return [...document.querySelectorAll<HTMLElement>(".map-navigation button")].flatMap((control) => {
+      const bounds = control.getBoundingClientRect();
+      const visibleWidth = Math.max(0, Math.min(bounds.right, stage.right, innerWidth) - Math.max(bounds.left, stage.left, 0));
+      const visibleHeight = Math.max(0, Math.min(bounds.bottom, stage.bottom, innerHeight) - Math.max(bounds.top, stage.top, 0));
+      return bounds.left < stage.left - 1 || bounds.right > stage.right + 1 || visibleWidth < 44 || visibleHeight < 44
+        ? [{
+            name: control.getAttribute("aria-label") || control.textContent?.trim(),
+            left: bounds.left,
+            right: bounds.right,
+            stageLeft: stage.left,
+            stageRight: stage.right,
+            visibleWidth,
+            visibleHeight
+          }]
+        : [];
+    });
+  });
+  expect(clippedControls).toEqual([]);
+  await expect(page.locator(".timeline-data-list summary")).toBeVisible();
+  await page.locator(".timeline-data-list summary").click();
+  await expect(page.getByRole("region", { name: "Hourly weather data table" })).toBeVisible();
+
+  const overflow = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+    headerRight: Math.max(...[...document.querySelectorAll(".header-actions button")].map((element) => element.getBoundingClientRect().right)),
+    mapRight: document.querySelector("#live-map")?.getBoundingClientRect().right ?? Infinity
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.body).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.headerRight).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.mapRight).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
+test("every visible meaningful term and map label stays above the practical type floor", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page);
+  await page.goto("/?view=all");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+
+  const result = await page.evaluate(() => {
+    const root = document.querySelector(".experience");
+    if (!root) return { inspected: 0, undersized: [{ text: "experience missing", size: 0, selector: "body" }] };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const seen = new Set<Element>();
+    const undersized: Array<{ text: string; size: number; selector: string }> = [];
+    let inspected = 0;
+    while (walker.nextNode()) {
+      const text = walker.currentNode.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const element = walker.currentNode.parentElement;
+      if (!text || !element || seen.has(element)) continue;
+      if (element.closest(".sr-only, [hidden], script, style")) continue;
+      const hiddenAncestor = element.closest("[aria-hidden='true']");
+      if (hiddenAncestor && element.tagName.toLowerCase() !== "text") continue;
+      if (!/[\p{L}\p{N}]/u.test(text)) continue;
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.opacity) === 0 || !bounds.width || !bounds.height) continue;
+      seen.add(element);
+      inspected += 1;
+      const size = Number.parseFloat(style.fontSize);
+      if (size < 12) {
+        undersized.push({
+          text: text.slice(0, 80),
+          size,
+          selector: `${element.tagName.toLowerCase()}.${String(element.className).replace(/\s+/g, ".")}`
+        });
+      }
+    }
+    return { inspected, undersized };
+  });
+  expect(result.inspected).toBeGreaterThan(100);
+  expect(result.undersized).toEqual([]);
+
+  const mapLabelSizes = await page.locator("svg.ireland-map text").evaluateAll((labels) => labels.map((label) => ({
+    text: label.textContent?.trim(),
+    size: Number.parseFloat(getComputedStyle(label).fontSize)
+  })));
+  expect(mapLabelSizes.length).toBeGreaterThan(10);
+  expect(mapLabelSizes.filter((label) => label.size < 12)).toEqual([]);
+});
+
+test("forced colours and reduced motion retain visible focus and non-animated map semantics", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+
+  const weather = page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: "Weather", exact: true });
+  await weather.focus();
+  expect(await weather.evaluate((element) => Number.parseFloat(getComputedStyle(element).outlineWidth))).toBeGreaterThanOrEqual(3);
+  const marker = page.locator(".station-marker").first();
+  await marker.focus();
+  const ring = marker.locator(".map-marker-focus-ring");
+  expect(await ring.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity))).toBe(1);
+  const animationDuration = await page.locator(".live-dot").first().evaluate((element) => getComputedStyle(element).animationDuration);
+  expect(animationDuration).toMatch(/^(?:0\.001ms|1e-06s)$/);
+});
+
+test("TFI details expose a captured public route and honest live-feed limitations", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/?view=custom&layers=transit");
+  const marker = page.getByRole("button", { name: "Route 73, Heading east, live public transport position" });
+  await expect(marker).toBeVisible();
+  await marker.click();
+
+  const detail = page.locator(".detail-transit");
+  await expect(detail.getByRole("heading", { name: "Route 73" })).toBeVisible();
+  await expect(detail).toContainText("Heading east");
+  await expect(detail).toContainText("Destination unavailable from this TFI live vehicle feed");
+  await expect(detail).not.toContainText("3 73 a");
+  await expect(detail).not.toContainText(/\b100\b/);
+});
+
+test("success then 503 then offline never claims erased data was retained", async ({ page, context }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+  const connection = page.locator("#connection-summary");
+  const retry = page.locator(".refresh-data-button");
+  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  await expect(retry).toBeEnabled();
+  await expect(page.locator(".live-state[role='status'][aria-live='polite']")).toHaveCount(1);
+  await expect(connection).not.toHaveAttribute("role", "status");
+  await expect(connection).not.toHaveAttribute("aria-live", "polite");
+
+  await page.unroute("https://prodapi.metweb.ie/observations/*/today");
+  await page.unroute("https://www.met.ie/latest-reports/observations/download");
+  await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => route.fulfill({ status: 503 }));
+  await page.route("https://www.met.ie/latest-reports/observations/download", (route) => route.fulfill({ status: 503 }));
+  await retry.click();
+  await expect(page.locator(".station-marker")).toHaveCount(0);
+
+  await context.setOffline(true);
+  await expect(connection).toContainText("Offline · live refresh unavailable");
+  await expect(connection).not.toContainText(/showing|last received|retained/i);
+  await expect(retry).toBeDisabled();
+  await context.setOffline(false);
+  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(retry).toBeEnabled();
 });

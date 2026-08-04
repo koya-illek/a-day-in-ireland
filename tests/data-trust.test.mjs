@@ -36,11 +36,13 @@ const importWarningAdapter = async (relativePath) => {
   const latestUrl = `data:text/javascript,${encodeURIComponent(latestOutput.replace('"./weather-stations"', JSON.stringify(weatherUrl)))}`;
   const platformUrl = new URL("../platform/river-source.js", import.meta.url).href;
   const satelliteUrl = new URL("../node_modules/satellite.js/lib/index.js", import.meta.url).href;
+  const timelineUrl = new URL("../lib/weather-timeline.js", import.meta.url).href;
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText
     .replace('"./latest-observations"', JSON.stringify(latestUrl))
     .replace('"./weather-stations"', JSON.stringify(weatherUrl))
+    .replace('"./weather-timeline.js"', JSON.stringify(timelineUrl))
     .replace('"../platform/river-source.js"', JSON.stringify(platformUrl))
     .replace('"satellite.js"', JSON.stringify(satelliteUrl));
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
@@ -791,7 +793,7 @@ test("concurrent NTA coordinator requests share one upstream refresh", async () 
         id: "vehicle-1",
         vehicle: {
           vehicle: { id: "vehicle-1", label: "15" },
-          trip: { routeId: "15" },
+          trip: { routeId: "03C 126 e a" },
           position: { latitude: 53.3, longitude: -7.2 },
           timestamp: Math.floor(Date.now() / 1000)
         }
@@ -814,6 +816,8 @@ test("concurrent NTA coordinator requests share one upstream refresh", async () 
     const bodies = await Promise.all(responses.map((response) => response.json()));
     assert.equal(upstreamCalls, 1);
     assert.deepEqual(bodies.map((body) => body.transitStatus), ["live", "live"]);
+    assert.deepEqual(bodies.map((body) => body.transit[0].route), ["03C 126 e a", "03C 126 e a"]);
+    assert.equal("destination" in bodies[0].transit[0], false, "GTFS-RT TripDescriptor does not carry a headsign");
   } finally {
     globalThis.fetch = originalFetch;
   }
