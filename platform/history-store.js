@@ -272,6 +272,7 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
       resolutionMinutes,
       snapshot: null,
       movementSummary: { rail: null, transit: null },
+      periodSummary: null,
       gaps: [{
         source: "history",
         scope: "collector",
@@ -297,6 +298,7 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
     resolutionMinutes: Number(selected.resolution_minutes),
     snapshot: stored.snapshot ?? null,
     movementSummary: stored.movementSummary ?? { rail: null, transit: null },
+    periodSummary: stored.periodSummary ?? null,
     gaps: Array.isArray(stored.gaps) ? stored.gaps : JSON.parse(selected.gaps_json)
   };
 }
@@ -349,6 +351,66 @@ export const mergeSourceStatus = (rows, sourceKeys, expectedSamples) => {
   return merged;
 };
 
+const finiteValues = (values) => values.filter((value) => Number.isFinite(value));
+const minimum = (values) => {
+  const usable = finiteValues(values);
+  return usable.length ? Math.min(...usable) : null;
+};
+const maximum = (values) => {
+  const usable = finiteValues(values);
+  return usable.length ? Math.max(...usable) : null;
+};
+
+const distinctObservedCount = (payloads, collection, statusKey) => {
+  const identities = new Set();
+  let represented = false;
+  for (const payload of payloads) {
+    const snapshot = payload?.snapshot;
+    if (!snapshot || snapshot.contextStatus?.[statusKey] === "unavailable") continue;
+    if (!snapshot.contextStatus?.[statusKey]) continue;
+    represented = true;
+    for (const item of Array.isArray(snapshot[collection]) ? snapshot[collection] : []) {
+      const identity = String(item?.id ?? "").trim();
+      if (identity) identities.add(identity);
+    }
+  }
+  return represented ? identities.size : null;
+};
+
+export const summarizeDailyRepresentatives = (payloads) => {
+  const represented = payloads.filter((payload) => payload?.snapshot);
+  if (!represented.length) return null;
+  const stations = represented.flatMap((payload) =>
+    Array.isArray(payload.snapshot.stations) ? payload.snapshot.stations : []
+  );
+  const grids = represented.map((payload) => payload.snapshot.grid).filter(Boolean);
+  const transit = represented.map((payload) => payload.movementSummary?.transit).filter(Boolean);
+  return {
+    basis: "retained-hourly-representatives",
+    representedSamples: represented.length,
+    weather: {
+      highestTemperatureC: maximum(stations.map((item) => item?.temperature)),
+      highestWindSpeedKmh: maximum(stations.map((item) => item?.windSpeed)),
+      highestStationRainfallMm: maximum(stations.map((item) => item?.rainfall))
+    },
+    grid: {
+      minWindSharePercent: minimum(grids.map((item) => item?.windSharePercent)),
+      maxWindSharePercent: maximum(grids.map((item) => item?.windSharePercent)),
+      minDemandMW: minimum(grids.map((item) => item?.demandMW)),
+      maxDemandMW: maximum(grids.map((item) => item?.demandMW))
+    },
+    transit: {
+      maxVehicles: maximum(transit.map((item) => item?.vehicles)),
+      maxRoutes: maximum(transit.map((item) => item?.routes))
+    },
+    distinctCounts: {
+      officialWarnings: distinctObservedCount(represented, "warnings", "warnings"),
+      bathingAlerts: distinctObservedCount(represented, "bathingAlerts", "bathing"),
+      earthquakes: distinctObservedCount(represented, "earthquakes", "earthquakes")
+    }
+  };
+};
+
 const uniqueGaps = (gaps) => [...new Map(gaps.map((gap) => [
   `${gap.source}\u0000${gap.scope}\u0000${gap.reason}`,
   gap
@@ -372,7 +434,10 @@ export async function rollupPeriod(db, {
     WHERE resolution_minutes = ? AND bucket_start_ms >= ? AND bucket_start_ms < ?
     ORDER BY bucket_start_ms ASC
   `).bind(fromResolutionMinutes, startMs, endMs).all());
-  const representative = rows.length ? await gunzipJson(rows[0].payload) : emptyPayload(startMs);
+  const decoded = summaryOnly
+    ? await Promise.all(rows.map((row) => gunzipJson(row.payload)))
+    : rows.length ? [await gunzipJson(rows[0].payload)] : [];
+  const representative = decoded[0] ?? emptyPayload(startMs);
   const sourceStatus = mergeSourceStatus(rows, sourceKeys, expectedSamples);
   const gaps = uniqueGaps([
     ...rows.flatMap((row) => JSON.parse(row.gaps_json)),
@@ -396,6 +461,7 @@ export async function rollupPeriod(db, {
     resolutionMinutes,
     snapshot: summaryOnly ? null : representative.snapshot ?? null,
     movementSummary: summaryOnly ? { rail: null, transit: null } : representative.movementSummary ?? { rail: null, transit: null },
+    periodSummary: summaryOnly ? summarizeDailyRepresentatives(decoded) : null,
     gaps
   };
   const row = await encodeSnapshotRow({

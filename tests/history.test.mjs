@@ -11,7 +11,8 @@ import {
   mergeSourceStatus,
   previousDublinDayBounds,
   resolveHistory,
-  rollupPeriod
+  rollupPeriod,
+  summarizeDailyRepresentatives
 } from "../platform/history-store.js";
 import { buildHistoryCapture, handleHistoryRequest } from "../platform/history.js";
 import {
@@ -280,37 +281,61 @@ test("Europe/Dublin daily rollup boundaries preserve DST day lengths", () => {
 
 test("daily rollups are summary-only and never clone a point-in-time map", async () => {
   const start = Date.parse("2026-08-04T23:00:00.000Z");
-  const encoded = await gzipJson({
+  const makeInputRow = async (offset, payload) => {
+    const encoded = await gzipJson(payload);
+    return {
+      resolution_minutes: 60,
+      bucket_start_ms: start + offset,
+      period_end_ms: start + offset + 3_600_000,
+      collected_at_ms: start + offset,
+      schema_version: 1,
+      codec: "gzip-json-v1",
+      payload: encoded.compressed,
+      payload_bytes: encoded.compressed.byteLength,
+      uncompressed_bytes: encoded.uncompressedBytes,
+      content_sha256: `input-${offset}`,
+      expected_samples: 4,
+      collected_samples: 4,
+      source_status_json: JSON.stringify({ weather: { status: "live" } }),
+      gaps_json: "[]"
+    };
+  };
+  const payloads = [{
     schemaVersion: 1,
     capturedAt: new Date(start).toISOString(),
     resolutionMinutes: 60,
-    snapshot: { generatedAt: new Date(start).toISOString(), stations: [{ id: "must-not-survive" }] },
-    movementSummary: { rail: { total: 4 }, transit: { total: 20 } },
+    snapshot: {
+      generatedAt: new Date(start).toISOString(),
+      stations: [{ id: "must-not-survive", temperature: 12, windSpeed: 20, rainfall: 0.5 }],
+      grid: { windSharePercent: 40, demandMW: 4_200 },
+      warnings: [{ id: "warning-a" }], bathingAlerts: [{ id: "beach-a" }], earthquakes: [],
+      contextStatus: { warnings: "live", bathing: "live", earthquakes: "live" }
+    },
+    movementSummary: { rail: null, transit: { vehicles: 100, routes: 10 } },
     gaps: []
-  });
-  const inputRow = {
-    resolution_minutes: 60,
-    bucket_start_ms: start,
-    period_end_ms: start + 3_600_000,
-    collected_at_ms: start,
-    schema_version: 1,
-    codec: "gzip-json-v1",
-    payload: encoded.compressed,
-    payload_bytes: encoded.compressed.byteLength,
-    uncompressed_bytes: encoded.uncompressedBytes,
-    content_sha256: "input-hash",
-    expected_samples: 1,
-    collected_samples: 1,
-    source_status_json: JSON.stringify({ weather: { status: "live" } }),
-    gaps_json: "[]"
-  };
+  }, {
+    schemaVersion: 1,
+    capturedAt: new Date(start + 3_600_000).toISOString(),
+    resolutionMinutes: 60,
+    snapshot: {
+      generatedAt: new Date(start + 3_600_000).toISOString(),
+      stations: [{ id: "must-not-survive-either", temperature: 15, windSpeed: 25, rainfall: 1.2 }],
+      grid: { windSharePercent: 55, demandMW: 4_000 },
+      warnings: [{ id: "warning-a" }, { id: "warning-b" }],
+      bathingAlerts: [{ id: "beach-a" }], earthquakes: [{ id: "quake-a" }],
+      contextStatus: { warnings: "live", bathing: "live", earthquakes: "live" }
+    },
+    movementSummary: { rail: null, transit: { vehicles: 120, routes: 11 } },
+    gaps: []
+  }];
+  const inputRows = await Promise.all(payloads.map((payload, index) => makeInputRow(index * 3_600_000, payload)));
   const db = {
     prepare(sql) {
       return {
         bind() { return this; },
         async all() {
           assert.match(sql, /FROM history_snapshots/);
-          return { results: [inputRow] };
+          return { results: inputRows };
         },
         async run() {
           assert.match(sql, /INSERT INTO history_snapshots/);
@@ -332,8 +357,50 @@ test("daily rollups are summary-only and never clone a point-in-time map", async
   const payload = await gunzipJson(row.payload);
   assert.equal(payload.snapshot, null);
   assert.deepEqual(payload.movementSummary, { rail: null, transit: null });
+  assert.deepEqual(payload.periodSummary, {
+    basis: "retained-hourly-representatives",
+    representedSamples: 2,
+    weather: { highestTemperatureC: 15, highestWindSpeedKmh: 25, highestStationRainfallMm: 1.2 },
+    grid: { minWindSharePercent: 40, maxWindSharePercent: 55, minDemandMW: 4_000, maxDemandMW: 4_200 },
+    transit: { maxVehicles: 120, maxRoutes: 11 },
+    distinctCounts: { officialWarnings: 2, bathingAlerts: 1, earthquakes: 1 }
+  });
   assert.ok(payload.gaps.some((item) => item.reason === "summary-only"));
   assert.doesNotMatch(JSON.stringify(payload), /must-not-survive/);
+
+  const storedRow = {
+    resolution_minutes: 1440, bucket_start_ms: start, period_end_ms: start + 86_400_000,
+    collected_at_ms: row.collectedAtMs, schema_version: 1, codec: row.codec,
+    payload: row.payload, payload_bytes: row.payloadBytes, uncompressed_bytes: row.uncompressedBytes,
+    content_sha256: row.contentSha256, expected_samples: row.expectedSamples,
+    collected_samples: row.collectedSamples, source_status_json: row.sourceStatusJson,
+    gaps_json: row.gapsJson
+  };
+  const api = await resolveHistory(makeReadDb([storedRow]), start, start + 400 * 86_400_000);
+  assert.deepEqual(api.periodSummary, payload.periodSummary);
+});
+
+test("daily representative summaries keep every unobserved metric null", () => {
+  assert.equal(summarizeDailyRepresentatives([]), null);
+  assert.equal(summarizeDailyRepresentatives([{ snapshot: null }]), null);
+  const summary = summarizeDailyRepresentatives([{
+    snapshot: {
+      stations: [], grid: null, warnings: [], bathingAlerts: [], earthquakes: [],
+      contextStatus: { warnings: "unavailable", bathing: "unavailable", earthquakes: "unavailable" }
+    },
+    movementSummary: { rail: null, transit: null }
+  }]);
+  assert.equal(summary.representedSamples, 1);
+  assert.deepEqual(summary.weather, {
+    highestTemperatureC: null, highestWindSpeedKmh: null, highestStationRainfallMm: null
+  });
+  assert.deepEqual(summary.grid, {
+    minWindSharePercent: null, maxWindSharePercent: null, minDemandMW: null, maxDemandMW: null
+  });
+  assert.deepEqual(summary.transit, { maxVehicles: null, maxRoutes: null });
+  assert.deepEqual(summary.distinctCounts, {
+    officialWarnings: null, bathingAlerts: null, earthquakes: null
+  });
 });
 
 test("history API isolates a missing binding and rejects invalid or future timestamps", async () => {

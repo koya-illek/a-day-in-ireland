@@ -81,6 +81,7 @@ export const emptyHistoryPayload = (timestamp) => ({
   resolutionMinutes: RAW_RESOLUTION_MINUTES,
   snapshot: null,
   movementSummary: { rail: null, transit: null },
+  periodSummary: null,
   gaps: [{
     source: "history", scope: "collector", reason: "collector-gap",
     detail: "No lower-resolution snapshot was collected for this period."
