@@ -20,6 +20,8 @@ import {
   twoline2satrec
 } from "satellite.js";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 const numeric = (value: unknown) => {
   const parsed = Number.parseFloat(String(value ?? "").trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -230,20 +232,56 @@ const normalizeBrowserBathingAlerts = (rows: unknown[], now = Date.now()): LiveS
     : [];
 });
 
-const emptyWeatherSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
-  ...previous,
-  generatedAt: new Date().toISOString(),
-  sourceStatus: "fallback",
-  stations: [],
-  summary: {
-    ...previous.summary,
-    warmest: null,
-    wettest: null,
-    windiest: null,
-    reporting: 0
-  },
-  timeline: []
-});
+const isRecent = (value: string | null | undefined, maximumAgeMs: number, now = Date.now()) => {
+  const timestamp = Date.parse(value ?? "");
+  const age = now - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age < maximumAgeMs;
+};
+
+const latestSuccess = (previous: LiveSnapshot, candidate: string | null | undefined) => {
+  const previousTimestamp = Date.parse(previous.lastSuccessAt ?? "");
+  const candidateTimestamp = Date.parse(candidate ?? "");
+  if (!Number.isFinite(candidateTimestamp)) return previous.lastSuccessAt ?? null;
+  if (!Number.isFinite(previousTimestamp) || candidateTimestamp > previousTimestamp) {
+    return new Date(candidateTimestamp).toISOString();
+  }
+  return previous.lastSuccessAt ?? null;
+};
+
+export const retainLastGoodWeather = (previous: LiveSnapshot, now = Date.now()): LiveSnapshot => {
+  const stations = previous.stations.filter((station) => isRecent(station.observedAt, 6 * 60 * 60_000, now));
+  if (!stations.length) {
+    return {
+      ...previous,
+      generatedAt: new Date(now).toISOString(),
+      sourceStatus: "unavailable",
+      stations: [],
+      summary: {
+        ...previous.summary,
+        warmest: null,
+        wettest: null,
+        windiest: null,
+        reporting: 0
+      },
+      timeline: []
+    };
+  }
+  const stationIds = new Set(stations.map((station) => station.id));
+  const retained = (reading: StationReading | null) => reading && stationIds.has(reading.id) ? reading : null;
+  return {
+    ...previous,
+    generatedAt: new Date(now).toISOString(),
+    sourceStatus: "stale",
+    stations,
+    summary: {
+      ...previous.summary,
+      warmest: retained(previous.summary.warmest),
+      wettest: retained(previous.summary.wettest),
+      windiest: retained(previous.summary.windiest),
+      reporting: stations.length
+    }
+  };
+};
 
 export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapshot> {
   return runProviderRefresh("weather", previous, async (request) => {
@@ -309,7 +347,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
         // The fallback has no source timestamp, so it cannot keep old data live.
       }
     }
-    if (!valid.length && !fallbackStations.length) return emptyWeatherSnapshot(previous);
+    if (!valid.length && !fallbackStations.length) return retainLastGoodWeather(previous);
     const validIds = new Set(valid.map((result) => result.reading.id));
     const stationCandidates = [
       ...valid.map((result) => result.reading),
@@ -317,6 +355,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     ];
     const stations = stationCandidates.filter((station) => station.fresh);
     const fresh = stations;
+    if (!fresh.length) return retainLastGoodWeather(previous);
     const top = (field: "temperature" | "rainfall" | "windSpeed") =>
       [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
     const buckets = new Map<string, { temp: number[]; rain: number; wind: number[] }>();
@@ -328,9 +367,11 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
       buckets.set(point.time, bucket);
     }));
     const now = Date.now();
+    const generatedAt = new Date().toISOString();
     return {
       ...previous,
-      generatedAt: new Date().toISOString(),
+      generatedAt,
+      lastSuccessAt: latestSuccess(previous, generatedAt),
       sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
       stations,
       marine: previous.marine.filter((buoy) => {
@@ -351,7 +392,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
         windSpeed: values.wind.length ? values.wind.reduce((a, b) => a + b, 0) / values.wind.length : null
       }))
     };
-  }, () => emptyWeatherSnapshot(previous));
+  }, () => retainLastGoodWeather(previous));
 }
 
 const unavailableProvenance = (previous: LiveSnapshot, provider: "trains" | "rivers") => ({
@@ -370,93 +411,160 @@ const unavailableProvenance = (previous: LiveSnapshot, provider: "trains" | "riv
   fallback: null
 });
 
-const emptyLivingSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
-  ...previous,
-  trains: [],
-  rivers: [],
-  sourceProvenance: {
-    trains: unavailableProvenance(previous, "trains"),
-    rivers: unavailableProvenance(previous, "rivers")
-  },
-  summary: {
-    ...previous.summary,
-    runningTrains: 0,
-    riverStations: 0
-  }
+const cachedProvenance = (
+  previous: LiveSnapshot,
+  provider: "trains" | "rivers",
+  latestObservedAt: string | null,
+  now: number
+) => ({
+  ...(previous.sourceProvenance?.[provider] ?? unavailableProvenance(previous, provider)),
+  status: "stale" as const,
+  fetchedAt: new Date(now).toISOString(),
+  latestObservedAt,
+  fallback: "Last successful browser snapshot"
 });
 
-const emptyContextStatus = (): LiveSnapshot["contextStatus"] => ({
-  marine: "unavailable",
-  measuredAir: "unavailable",
-  tides: "unavailable",
-  bathing: "unavailable",
-  satellite: "unavailable",
-  earthquakes: "unavailable",
-  iss: "unavailable",
-  warnings: "unavailable"
-});
+export const retainLastGoodLiving = (previous: LiveSnapshot, now = Date.now()): LiveSnapshot => {
+  const trains = previous.trains.filter((train) => isRecent(train.observedAt, 30 * 60_000, now));
+  const rivers = normalizeRiverReadings(previous.rivers, now);
+  const latest = <T extends { observedAt: string }>(items: T[]) => items
+    .map((item) => item.observedAt)
+    .sort((first, second) => Date.parse(first) - Date.parse(second))
+    .at(-1) ?? null;
+  return {
+    ...previous,
+    trains,
+    rivers,
+    sourceProvenance: {
+      trains: trains.length
+        ? cachedProvenance(previous, "trains", latest(trains), now)
+        : unavailableProvenance(previous, "trains"),
+      rivers: rivers.length
+        ? cachedProvenance(previous, "rivers", latest(rivers), now)
+        : unavailableProvenance(previous, "rivers")
+    },
+    summary: {
+      ...previous.summary,
+      runningTrains: trains.filter((train) => train.status === "running").length,
+      riverStations: rivers.length
+    }
+  };
+};
 
-const emptyContextsSnapshot = (previous: LiveSnapshot): LiveSnapshot => ({
-  ...previous,
-  warnings: [],
-  marine: [],
-  radar: [],
-  grid: null,
-  airQuality: [],
-  aurora: null,
-  tides: [],
-  bathingAlerts: [],
-  iss: null,
-  issTle: null,
-  satellite: null,
-  earthquakes: [],
-  contextStatus: emptyContextStatus()
-});
+export const retainLastGoodContexts = (previous: LiveSnapshot, now = Date.now()): LiveSnapshot => {
+  const marine = previous.marine.filter((reading) => isRecent(reading.observedAt, 6 * 60 * 60_000, now));
+  const radar = previous.radar.filter((frame) => isRecent(frame.observedAt, 30 * 60_000, now));
+  const grid = previous.grid && isRecent(previous.grid.observedAt, 30 * 60_000, now) ? previous.grid : null;
+  const measuredAir = previous.airQuality.filter((reading) =>
+    reading.source === "measured" && isRecent(reading.observedAt, 12 * 60 * 60_000, now)
+  );
+  const modelledAir = previous.airQuality.filter((reading) =>
+    reading.source === "modelled" && isRecent(reading.observedAt, 12 * 60 * 60_000, now)
+  );
+  const aurora = previous.aurora && isRecent(previous.aurora.forecastAt, 2 * 60 * 60_000, now)
+    ? previous.aurora
+    : null;
+  const tides = previous.tides.filter((reading) => isRecent(reading.observedAt, 3 * 60 * 60_000, now));
+  const bathingAlerts = normalizeBrowserBathingAlerts(previous.bathingAlerts, now);
+  const satellite = previous.satellite && isRecent(previous.satellite.observedAt, 30 * DAY_MS, now)
+    ? previous.satellite
+    : null;
+  const earthquakes = previous.earthquakes.filter((reading) => isRecent(reading.observedAt, 7 * DAY_MS, now));
+  const issTle = previous.issTle && isRecent(previous.issTle.observedAt, 24 * 60 * 60_000, now)
+    ? previous.issTle
+    : null;
+  const warnings = normalizeBrowserWarnings(previous.warnings, now);
+  const staleOrUnavailable = (hasLastGood: boolean) => hasLastGood ? "stale" as const : "unavailable" as const;
+  return {
+    ...previous,
+    warnings,
+    marine,
+    radar,
+    grid,
+    airQuality: [...measuredAir, ...modelledAir],
+    aurora,
+    tides,
+    bathingAlerts,
+    iss: issTle ? previous.iss : null,
+    issTle,
+    satellite,
+    earthquakes,
+    contextStatus: {
+      marine: staleOrUnavailable(marine.length > 0),
+      radar: staleOrUnavailable(radar.length > 0),
+      grid: staleOrUnavailable(Boolean(grid)),
+      measuredAir: staleOrUnavailable(measuredAir.length > 0),
+      modelledAir: staleOrUnavailable(modelledAir.length > 0),
+      aurora: staleOrUnavailable(Boolean(aurora)),
+      tides: staleOrUnavailable(tides.length > 0),
+      bathing: staleOrUnavailable(bathingAlerts.length > 0),
+      satellite: staleOrUnavailable(Boolean(satellite)),
+      earthquakes: staleOrUnavailable(earthquakes.length > 0),
+      iss: staleOrUnavailable(Boolean(issTle && previous.iss)),
+      warnings: staleOrUnavailable(warnings.length > 0)
+    }
+  };
+};
 
 export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveSnapshot> {
   return runProviderRefresh("living", previous, async (request) => {
     const response = await fetchWithRetry("/api/living", 10_000, request.signal);
     if (!response.ok) throw new Error(`Live layers returned ${response.status}`);
-    const next = await response.json() as Partial<Pick<LiveSnapshot, "trains" | "rivers" | "sourceProvenance">> & {
+    const next = await response.json() as Partial<Pick<LiveSnapshot, "generatedAt" | "trains" | "rivers" | "sourceProvenance">> & {
       sourceStatus?: {
         trains?: "live" | "unavailable";
         rivers?: "live" | "stale" | "fallback" | "unavailable";
       };
     };
     if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) throw new Error("Live layers response is incomplete");
+    const retained = retainLastGoodLiving(previous);
     const trainsLive = next.sourceStatus?.trains !== "unavailable" && next.trains.length > 0;
-    const trains = trainsLive
+    const incomingTrains = trainsLive
       ? addCalculatedSpeeds(next.trains, previous.trains, {
           maximumKmh: 200,
           maximumIntervalMinutes: 15
         })
       : [];
+    const trains = incomingTrains.length ? incomingTrains : retained.trains;
     const riversStatus = next.sourceStatus?.rivers;
-    const rivers = riversStatus === "unavailable"
+    const incomingRivers = riversStatus === "unavailable"
       ? []
       : normalizeRiverReadings(next.rivers, Date.now());
-    const sourceProvenance = next.sourceProvenance
-      ? {
-          ...next.sourceProvenance,
-          trains: trains.length ? next.sourceProvenance.trains ?? unavailableProvenance(previous, "trains") : unavailableProvenance(previous, "trains"),
-          rivers: rivers.length ? next.sourceProvenance.rivers ?? unavailableProvenance(previous, "rivers") : unavailableProvenance(previous, "rivers")
-        }
-      : {
-          trains: trains.length ? previous.sourceProvenance?.trains ?? unavailableProvenance(previous, "trains") : unavailableProvenance(previous, "trains"),
-          rivers: rivers.length ? previous.sourceProvenance?.rivers ?? unavailableProvenance(previous, "rivers") : unavailableProvenance(previous, "rivers")
-        };
+    const rivers = incomingRivers.length ? incomingRivers : retained.rivers;
+    const refreshedAt = next.generatedAt ?? new Date().toISOString();
+    const sourceProvenance = {
+      trains: incomingTrains.length
+        ? next.sourceProvenance?.trains ?? {
+            ...unavailableProvenance(previous, "trains"),
+            status: "live" as const,
+            fetchedAt: refreshedAt,
+            latestObservedAt: incomingTrains.map((train) => train.observedAt).sort().at(-1) ?? null
+          }
+        : retained.sourceProvenance!.trains,
+      rivers: incomingRivers.length
+        ? next.sourceProvenance?.rivers ?? {
+            ...unavailableProvenance(previous, "rivers"),
+            status: riversStatus === "fallback" ? "fallback" as const : riversStatus === "stale" ? "stale" as const : "live" as const,
+            fetchedAt: refreshedAt,
+            latestObservedAt: incomingRivers.map((river) => river.observedAt).sort().at(-1) ?? null
+          }
+        : retained.sourceProvenance!.rivers
+    };
+    const hasProviderSuccess = incomingTrains.length > 0 ||
+      (incomingRivers.length > 0 && riversStatus !== "stale");
     return {
       ...previous,
       trains,
       rivers,
       sourceProvenance,
+      lastSuccessAt: hasProviderSuccess ? latestSuccess(previous, refreshedAt) : previous.lastSuccessAt,
       summary: {
         ...previous.summary,
         runningTrains: trains.filter((train) => train.status === "running").length,
         riverStations: rivers.length
       }
     };
-  }, () => emptyLivingSnapshot(previous));
+  }, () => retainLastGoodLiving(previous));
 }
 
 export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<LiveSnapshot> {
@@ -465,85 +573,155 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     if (!response.ok) throw new Error(`Current contexts returned ${response.status}`);
     const next = await response.json() as Partial<Pick<
       LiveSnapshot,
-      "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
+      "generatedAt" | "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
       "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
     >> & {
       warnings?: unknown;
       warningsStatus?: "live" | "unavailable";
     };
-    const contextStatus: LiveSnapshot["contextStatus"] = {
-      ...previous.contextStatus,
-      ...(next.contextStatus && typeof next.contextStatus === "object" ? next.contextStatus : {})
-    };
-    const contextUnavailable = (name: keyof LiveSnapshot["contextStatus"]) => contextStatus[name] === "unavailable";
     const now = Date.now();
-    let airQuality = contextUnavailable("measuredAir")
-      ? (Array.isArray(next.airQuality) ? next.airQuality.filter((reading) => reading.source !== "measured") : [])
-      : (Array.isArray(next.airQuality) ? next.airQuality : []);
+    const retained = retainLastGoodContexts(previous, now);
+    const statedStatus = next.contextStatus && typeof next.contextStatus === "object"
+      ? next.contextStatus
+      : {} as Partial<LiveSnapshot["contextStatus"]>;
+    const statusFor = (
+      name: keyof LiveSnapshot["contextStatus"],
+      validPayload: boolean,
+      inferWhenMissing = false
+    ): LiveSnapshot["contextStatus"][typeof name] => {
+      const status = statedStatus[name];
+      if (validPayload && (status === "live" || status === "fallback")) return status;
+      if (validPayload && status === undefined && inferWhenMissing) return "live";
+      return "unavailable";
+    };
+    const incomingAirQuality = Array.isArray(next.airQuality) ? next.airQuality : [];
+    let measuredAirStatus = statusFor(
+      "measuredAir",
+      incomingAirQuality.some((reading) => reading.source === "measured"),
+      true
+    );
+    const modelledAirStatus = statusFor(
+      "modelledAir",
+      incomingAirQuality.some((reading) => reading.source === "modelled"),
+      true
+    );
+    let incomingMeasuredAir = measuredAirStatus === "unavailable"
+      ? []
+      : incomingAirQuality.filter((reading) => reading.source === "measured");
+    const incomingModelledAir = modelledAirStatus === "unavailable"
+      ? []
+      : incomingAirQuality.filter((reading) => reading.source === "modelled");
     if (
       window.location.hostname !== "127.0.0.1" &&
       window.location.hostname !== "localhost" &&
-      !airQuality.some((reading) => reading.source === "measured")
+      !incomingMeasuredAir.length
     ) {
       const measured = await fetchMeasuredAirFallback(request.signal);
       if (measured.length) {
-        airQuality = [...measured, ...airQuality.filter((reading) => reading.source !== "measured")];
-        contextStatus.measuredAir = "fallback";
+        incomingMeasuredAir = measured;
+        measuredAirStatus = "fallback";
       }
     }
     const warningStatus = next.warningsStatus === "unavailable" || !Array.isArray(next.warnings) ? "unavailable" : "live";
-    const warnings = warningStatus === "live"
+    const incomingWarnings = warningStatus === "live"
       ? normalizeBrowserWarnings(next.warnings as unknown[], now)
       : [];
-    contextStatus.warnings = warningStatus;
-    const bathingAlerts = contextUnavailable("bathing") || !Array.isArray(next.bathingAlerts)
+    const bathingStatus = statusFor("bathing", Array.isArray(next.bathingAlerts));
+    const incomingBathingAlerts = bathingStatus === "unavailable" || !Array.isArray(next.bathingAlerts)
       ? []
       : normalizeBrowserBathingAlerts(next.bathingAlerts, now);
-    const grid = next.grid && typeof next.grid === "object"
+    const incomingGrid = next.grid && typeof next.grid === "object"
       ? { ...next.grid, observedAt: normalizeGridTimestamp(next.grid.observedAt) }
       : null;
+    const marineStatus = statusFor("marine", Array.isArray(next.marine));
+    const radarStatus = statusFor("radar", Array.isArray(next.radar) && next.radar.length > 0, true);
+    const gridStatus = statusFor("grid", Boolean(incomingGrid), true);
+    const auroraStatus = statusFor("aurora", Boolean(next.aurora && typeof next.aurora === "object"), true);
+    const tidesStatus = statusFor("tides", Array.isArray(next.tides));
+    const satelliteStatus = statusFor("satellite", Boolean(next.satellite && typeof next.satellite === "object"), true);
+    const earthquakeStatus = statusFor("earthquakes", Array.isArray(next.earthquakes));
+    const issStatus = statusFor("iss", Boolean(next.issTle && typeof next.issTle === "object"));
+    const useIncoming = (status: LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]) =>
+      status === "live" || status === "fallback";
+    const contextStatus: LiveSnapshot["contextStatus"] = {
+      marine: useIncoming(marineStatus) ? marineStatus : retained.contextStatus.marine,
+      radar: useIncoming(radarStatus) ? radarStatus : retained.contextStatus.radar,
+      grid: useIncoming(gridStatus) ? gridStatus : retained.contextStatus.grid,
+      measuredAir: useIncoming(measuredAirStatus) ? measuredAirStatus : retained.contextStatus.measuredAir,
+      modelledAir: useIncoming(modelledAirStatus) ? modelledAirStatus : retained.contextStatus.modelledAir,
+      aurora: useIncoming(auroraStatus) ? auroraStatus : retained.contextStatus.aurora,
+      tides: useIncoming(tidesStatus) ? tidesStatus : retained.contextStatus.tides,
+      bathing: useIncoming(bathingStatus) ? bathingStatus : retained.contextStatus.bathing,
+      satellite: useIncoming(satelliteStatus) ? satelliteStatus : retained.contextStatus.satellite,
+      earthquakes: useIncoming(earthquakeStatus) ? earthquakeStatus : retained.contextStatus.earthquakes,
+      iss: useIncoming(issStatus) ? issStatus : retained.contextStatus.iss,
+      warnings: warningStatus === "live" ? "live" : retained.contextStatus.warnings
+    };
+    const refreshedAt = next.generatedAt ?? new Date(now).toISOString();
+    const hasProviderSuccess = Object.values(contextStatus).some((status) => status === "live" || status === "fallback");
     return {
       ...previous,
-      warnings,
-      marine: Array.isArray(next.marine) ? next.marine : [],
-      radar: Array.isArray(next.radar) ? next.radar : [],
-      grid,
-      airQuality,
-      aurora: next.aurora && typeof next.aurora === "object" ? next.aurora : null,
-      tides: contextUnavailable("tides") || !Array.isArray(next.tides) ? [] : next.tides,
-      bathingAlerts,
-      iss: contextUnavailable("iss") || !next.issTle ? null : predictIss(next.issTle.line1, next.issTle.line2),
-      issTle: contextUnavailable("iss") || !(next.issTle === null || typeof next.issTle === "object") ? null : next.issTle,
-      satellite: contextUnavailable("satellite") || !next.satellite || typeof next.satellite !== "object" ? null : next.satellite,
-      earthquakes: contextUnavailable("earthquakes") || !Array.isArray(next.earthquakes) ? [] : next.earthquakes,
+      lastSuccessAt: hasProviderSuccess ? latestSuccess(previous, refreshedAt) : previous.lastSuccessAt,
+      warnings: warningStatus === "live" ? incomingWarnings : retained.warnings,
+      marine: useIncoming(marineStatus) ? next.marine! : retained.marine,
+      radar: useIncoming(radarStatus) ? next.radar! : retained.radar,
+      grid: useIncoming(gridStatus) ? incomingGrid : retained.grid,
+      airQuality: [
+        ...(useIncoming(measuredAirStatus) ? incomingMeasuredAir : retained.airQuality.filter((reading) => reading.source === "measured")),
+        ...(useIncoming(modelledAirStatus) ? incomingModelledAir : retained.airQuality.filter((reading) => reading.source === "modelled"))
+      ],
+      aurora: useIncoming(auroraStatus) ? next.aurora! : retained.aurora,
+      tides: useIncoming(tidesStatus) ? next.tides! : retained.tides,
+      bathingAlerts: useIncoming(bathingStatus) ? incomingBathingAlerts : retained.bathingAlerts,
+      iss: useIncoming(issStatus) && next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : retained.iss,
+      issTle: useIncoming(issStatus) && next.issTle ? next.issTle : retained.issTle,
+      satellite: useIncoming(satelliteStatus) ? next.satellite! : retained.satellite,
+      earthquakes: useIncoming(earthquakeStatus) ? next.earthquakes! : retained.earthquakes,
       contextStatus
     };
-  }, () => emptyContextsSnapshot(previous));
+  }, () => retainLastGoodContexts(previous));
 }
+
+export const retainLastGoodTransit = (previous: LiveSnapshot, now = Date.now()): LiveSnapshot => {
+  const transit = previous.transit.filter((vehicle) => isRecent(vehicle.observedAt, 30 * 60_000, now));
+  return {
+    ...previous,
+    transit,
+    transitStatus: transit.length ? "stale" : "unavailable"
+  };
+};
 
 export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapshot> {
   return runProviderRefresh("transit", previous, async (request) => {
     const response = await fetchWithRetry("/api/transit", 15_000, request.signal);
     if (!response.ok) throw new Error(`Transit returned ${response.status}`);
-    const next = await response.json() as Partial<Pick<LiveSnapshot, "transit" | "transitStatus">>;
+    const next = await response.json() as Partial<Pick<LiveSnapshot, "generatedAt" | "transit" | "transitStatus">>;
     if (next.transitStatus !== "live" || !Array.isArray(next.transit) || !next.transit.length) {
-      return { ...previous, transit: [], transitStatus: next.transitStatus === "credential-required" ? "credential-required" : "unavailable" };
+      const retained = retainLastGoodTransit(previous);
+      return retained.transit.length
+        ? retained
+        : {
+            ...retained,
+            transitStatus: next.transitStatus === "credential-required" ? "credential-required" : "unavailable"
+          };
     }
     const transit = next.transit.filter((vehicle) => {
       const observedAt = Date.parse(vehicle.observedAt);
       const age = Date.now() - observedAt;
       return Number.isFinite(observedAt) && age >= 0 && age < 30 * 60_000;
     });
-    if (!transit.length) return { ...previous, transit: [], transitStatus: "unavailable" };
+    if (!transit.length) return retainLastGoodTransit(previous);
+    const refreshedAt = next.generatedAt ?? new Date().toISOString();
     return {
       ...previous,
       transit: addCalculatedSpeeds(transit, previous.transit, {
         maximumKmh: 130,
         maximumIntervalMinutes: 10
       }),
-      transitStatus: "live"
+      transitStatus: "live",
+      lastSuccessAt: latestSuccess(previous, refreshedAt)
     };
-  }, () => ({ ...previous, transit: [], transitStatus: "unavailable" }));
+  }, () => retainLastGoodTransit(previous));
 }
 
 const eeaTimestamp = (value: string) => {

@@ -68,6 +68,7 @@ export type RadarFrame = {
   id: string;
   observedAt: string;
   modifiedTime: number;
+  provider?: string;
   tileTemplate: string;
 };
 
@@ -191,9 +192,13 @@ export type ProviderProvenance = {
   fallback: string | null;
 };
 
+export type ObservationSourceStatus = "live" | "partial" | "stale" | "fallback" | "unavailable";
+export type ContextSourceStatus = "live" | "fallback" | "stale" | "unavailable";
+
 export type LiveSnapshot = {
   generatedAt: string;
-  sourceStatus: "live" | "partial" | "fallback";
+  lastSuccessAt: string | null;
+  sourceStatus: ObservationSourceStatus;
   stations: StationReading[];
   warnings: WeatherWarning[];
   marine: MarineReading[];
@@ -210,20 +215,24 @@ export type LiveSnapshot = {
   satellite: SatelliteFrame | null;
   earthquakes: EarthquakeReading[];
   transit: TransitVehicle[];
-  transitStatus: "live" | "credential-required" | "unavailable";
+  transitStatus: "live" | "stale" | "credential-required" | "unavailable";
   sourceProvenance?: {
     trains: ProviderProvenance;
     rivers: ProviderProvenance;
   };
   contextStatus: {
-    marine: "live" | "unavailable";
-    measuredAir: "live" | "fallback" | "unavailable";
-    tides: "live" | "fallback" | "unavailable";
-    bathing: "live" | "fallback" | "unavailable";
-    satellite: "live" | "fallback" | "unavailable";
-    earthquakes: "live" | "fallback" | "unavailable";
-    iss: "live" | "fallback" | "unavailable";
-    warnings?: "live" | "unavailable";
+    marine: ContextSourceStatus;
+    radar: ContextSourceStatus;
+    grid: ContextSourceStatus;
+    measuredAir: ContextSourceStatus;
+    modelledAir: ContextSourceStatus;
+    aurora: ContextSourceStatus;
+    tides: ContextSourceStatus;
+    bathing: ContextSourceStatus;
+    satellite: ContextSourceStatus;
+    earthquakes: ContextSourceStatus;
+    iss: ContextSourceStatus;
+    warnings: ContextSourceStatus;
   };
   summary: {
     warmest: StationReading | null;

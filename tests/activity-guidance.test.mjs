@@ -45,6 +45,7 @@ const warning = (overrides = {}) => ({
 
 const baseSnapshot = (overrides = {}) => ({
   generatedAt: observedAt,
+  lastSuccessAt: observedAt,
   sourceStatus: "live",
   stations: [station()],
   warnings: [],
@@ -65,7 +66,11 @@ const baseSnapshot = (overrides = {}) => ({
   transitStatus: "credential-required",
   contextStatus: {
     marine: "unavailable",
+    radar: "unavailable",
+    grid: "unavailable",
     measuredAir: "unavailable",
+    modelledAir: "unavailable",
+    aurora: "unavailable",
     tides: "unavailable",
     bathing: "unavailable",
     satellite: "unavailable",
@@ -100,7 +105,7 @@ test("keeps the four intent cards in stable order and uses descriptive states", 
       id: "mace-head", name: "Mace Head", kind: "coastal-observatory", latitude: 53.33, longitude: -9.9,
       observedAt, windSpeedKnots: 8, waveHeight: 0.5, wavePeriod: 6, seaTemperature: 15
     }],
-    contextStatus: { ...baseSnapshot().contextStatus, marine: "live", tides: "live", bathing: "live", iss: "live" },
+    contextStatus: { ...baseSnapshot().contextStatus, marine: "live", aurora: "live", tides: "live", bathing: "live", iss: "live" },
     aurora: { observedAt, forecastAt: observedAt, probability: 80, kpIndex: 5 },
     iss: {
       observedAt, latitude: 53, longitude: -8, altitudeKm: 420,
@@ -256,7 +261,7 @@ test("future bathing alerts are ignored by current coast guidance", () => {
 test("zero aurora probability is no current signal, not Mixed signals", () => {
   const guidance = getActivityGuidance(baseSnapshot({
     aurora: { observedAt, forecastAt: observedAt, probability: 0, kpIndex: 1 },
-    contextStatus: { ...baseSnapshot().contextStatus, iss: "live" }
+    contextStatus: { ...baseSnapshot().contextStatus, aurora: "live", iss: "live" }
   }), now);
   const stargazing = byId(guidance, "stargazing");
   assert.equal(stargazing.status, "no-current-signal");

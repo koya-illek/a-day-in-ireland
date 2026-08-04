@@ -264,24 +264,36 @@ const parseRadarTime = (id) => {
     : new Date().toISOString();
 };
 
+export const normalizeRadarFrames = (rows) => (Array.isArray(rows) ? rows : []).slice(-7).flatMap((row) => {
+  const id = String(row?.src ?? "");
+  const modifiedTime = Number(row?.modifiedTime);
+  let server;
+  try {
+    server = new URL(String(row?.server ?? "https://gdal.met.ie"));
+  } catch {
+    return [];
+  }
+  if (
+    !/^\d{12}$/.test(id) ||
+    !Number.isFinite(modifiedTime) ||
+    server.protocol !== "https:" ||
+    server.hostname !== "gdal.met.ie"
+  ) return [];
+  return [{
+    id,
+    observedAt: parseRadarTime(id),
+    modifiedTime,
+    provider: "Met Éireann",
+    tileTemplate: `${server.origin}/api/maps/radar/${id}/{x}/{y}/{z}/${modifiedTime}`
+  }];
+});
+
 const fetchRadar = async () => {
   const response = await fetch("https://gdal.met.ie/api/maps/radar", {
     cf: { cacheEverything: true, cacheTtl: 300 }
   });
   if (!response.ok) throw new Error(`Met Éireann radar returned ${response.status}`);
-  const rows = await response.json();
-  return rows.slice(-7).flatMap((row) => {
-    const id = String(row.src ?? "");
-    const modifiedTime = Number(row.modifiedTime);
-    if (!/^\d{12}$/.test(id) || !Number.isFinite(modifiedTime)) return [];
-    const server = String(row.server ?? "https://gdal.met.ie").replace(/\/$/, "");
-    return [{
-      id,
-      observedAt: parseRadarTime(id),
-      modifiedTime,
-      tileTemplate: `${server}/api/maps/radar/${id}/{x}/{y}/{z}/${modifiedTime}`
-    }];
-  });
+  return normalizeRadarFrames(await response.json());
 };
 
 const fetchGridRows = async (chartType, areas) => {
@@ -622,14 +634,162 @@ const fetchBathingAlerts = async () => {
   });
 };
 
-const fetchSatellite = async () => {
-  const date = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  return {
-    observedAt: `${date}T13:30:00Z`,
-    label: "VIIRS true colour · previous-day archive frame",
-    tileTemplate: `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SATELLITE_LAYER = "VIIRS_SNPP_CorrectedReflectance_TrueColor";
+const SATELLITE_MATRIX_SET = "GoogleMapsCompatible_Level9";
+const SATELLITE_PROBE_TILES = [
+  [30, 20], [31, 20], [30, 21], [31, 21]
+];
+const SATELLITE_DOMAINS_URL =
+  `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/${SATELLITE_LAYER}/default/${SATELLITE_MATRIX_SET}/all/all.xml`;
+const SATELLITE_SUCCESS_CACHE_MS = 6 * 60 * 60 * 1000;
+const SATELLITE_FAILURE_CACHE_MS = 30 * 60 * 1000;
+
+export const satelliteTileTemplate = (date) =>
+  `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${SATELLITE_LAYER}/default/${date}/${SATELLITE_MATRIX_SET}/{z}/{y}/{x}.jpeg`;
+
+const dateOnly = (timestamp) => new Date(timestamp).toISOString().slice(0, 10);
+
+export const probeSatelliteDate = async (date, fetcher = fetch) => {
+  const template = satelliteTileTemplate(date);
+  const probes = await Promise.all(SATELLITE_PROBE_TILES.map(async ([x, y]) => {
+    const url = template
+      .replace("{z}", "6")
+      .replace("{y}", String(y))
+      .replace("{x}", String(x));
+    try {
+      const response = await fetcher(url, {
+        method: "HEAD",
+        cf: { cacheEverything: true, cacheTtl: 21600 }
+      });
+      const actualDate = response.headers.get("layer-time-actual");
+      return response.ok &&
+        response.headers.get("content-type")?.toLowerCase().startsWith("image/jpeg") === true &&
+        (!actualDate || actualDate.startsWith(date));
+    } catch {
+      return false;
+    }
+  }));
+  return probes.every(Boolean);
+};
+
+const latestDomainDate = (xml, notAfter) => {
+  const candidates = [...String(xml).matchAll(/\b\d{4}-\d{2}-\d{2}\b/g)]
+    .map((match) => match[0])
+    .filter((date) => date <= notAfter)
+    .sort();
+  return candidates.at(-1) ?? null;
+};
+
+export const resolveSatelliteAvailability = async ({
+  now = Date.now(),
+  fetcher = (...args) => fetch(...args)
+} = {}) => {
+  const today = dateOnly(now);
+  const fallbackDate = dateOnly(now - DAY_MS);
+  try {
+    const domains = await fetcher(SATELLITE_DOMAINS_URL, {
+      cf: { cacheEverything: true, cacheTtl: 300 }
+    });
+    if (!domains.ok) throw new Error(`NASA GIBS Domains returned ${domains.status}`);
+    const advertisedDate = latestDomainDate(await domains.text(), today);
+    return {
+      advertisedDate,
+      startDate: advertisedDate ?? fallbackDate,
+      cacheKey: `${today}|${advertisedDate ?? "metadata-unavailable"}`
+    };
+  } catch {
+    return {
+      advertisedDate: null,
+      startDate: fallbackDate,
+      cacheKey: `${today}|metadata-unavailable`
+    };
+  }
+};
+
+export const findLatestSatelliteFrame = async ({
+  now = Date.now(),
+  fetcher = fetch,
+  maximumLookbackDays = 14,
+  startDate
+} = {}) => {
+  const availability = typeof startDate === "string"
+    ? { startDate }
+    : await resolveSatelliteAvailability({ now, fetcher });
+  const firstDate = availability.startDate;
+
+  const firstTimestamp = Date.parse(`${firstDate}T00:00:00Z`);
+  for (let offset = 0; offset <= maximumLookbackDays; offset += 1) {
+    const date = dateOnly(firstTimestamp - offset * DAY_MS);
+    if (!await probeSatelliteDate(date, fetcher)) continue;
+    return {
+      observedAt: `${date}T00:00:00Z`,
+      label: "VIIRS true colour · verified NASA archive frame",
+      tileTemplate: satelliteTileTemplate(date)
+    };
+  }
+  throw new Error("NASA GIBS has no verified Ireland satellite frame in the recent archive");
+};
+
+export const createSatelliteAvailabilityResolver = ({
+  clock = () => Date.now(),
+  fetcher = (...args) => fetch(...args),
+  resolveAvailability = resolveSatelliteAvailability,
+  discoverFrame = findLatestSatelliteFrame,
+  maximumLookbackDays = 14,
+  successCacheMs = SATELLITE_SUCCESS_CACHE_MS,
+  failureCacheMs = SATELLITE_FAILURE_CACHE_MS
+} = {}) => {
+  let latestGeneration = 0;
+  const cache = {
+    key: null,
+    checkedAt: 0,
+    outcome: "empty",
+    frame: null
+  };
+
+  return async () => {
+    // Allocate before the first await so request start order, not upstream
+    // response order, decides which completion is allowed to publish.
+    const generation = ++latestGeneration;
+    const now = clock();
+    const availability = await resolveAvailability({ now, fetcher });
+    const cacheAge = now - cache.checkedAt;
+    const cacheIsCurrent = cache.key === availability.cacheKey && cacheAge >= 0;
+    if (cacheIsCurrent && cache.outcome === "success" && cacheAge < successCacheMs) {
+      return cache.frame;
+    }
+    if (cacheIsCurrent && cache.outcome === "failure" && cacheAge < failureCacheMs) {
+      throw new Error("NASA GIBS satellite availability is in a recent failed state");
+    }
+
+    try {
+      const frame = await discoverFrame({
+        now,
+        fetcher,
+        maximumLookbackDays,
+        startDate: availability.startDate
+      });
+      if (generation === latestGeneration) {
+        cache.key = availability.cacheKey;
+        cache.checkedAt = now;
+        cache.outcome = "success";
+        cache.frame = frame;
+      }
+      return frame;
+    } catch (error) {
+      if (generation === latestGeneration) {
+        cache.key = availability.cacheKey;
+        cache.checkedAt = now;
+        cache.outcome = "failure";
+        cache.frame = null;
+      }
+      throw error;
+    }
   };
 };
+
+const fetchSatellite = createSatelliteAvailabilityResolver();
 
 const fetchEarthquakes = async () => {
   const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -792,7 +952,11 @@ const currentContexts = async (env) => {
   const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
   const contextStatus = {
     marine: marine.status === "fulfilled" ? "live" : "unavailable",
+    radar: radar.status === "fulfilled" && radar.value.length ? "live" : "unavailable",
+    grid: grid.status === "fulfilled" && grid.value ? "live" : "unavailable",
     measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
+    modelledAir: modelledAir.status === "fulfilled" && modelled.length ? "live" : "unavailable",
+    aurora: aurora.status === "fulfilled" && aurora.value ? "live" : "unavailable",
     tides: tides.status === "fulfilled" ? "live" : "unavailable",
     bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
     satellite: satellite.status === "fulfilled" ? "fallback" : "unavailable",

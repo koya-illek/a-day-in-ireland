@@ -16,6 +16,7 @@ const unavailableProvenance = (
 export function createInitialSnapshot(generatedAt = new Date().toISOString()): LiveSnapshot {
   return {
     generatedAt,
+    lastSuccessAt: null,
     sourceStatus: "fallback",
     stations: [],
     warnings: [],
@@ -48,7 +49,11 @@ export function createInitialSnapshot(generatedAt = new Date().toISOString()): L
     },
     contextStatus: {
       marine: "unavailable",
+      radar: "unavailable",
+      grid: "unavailable",
       measuredAir: "unavailable",
+      modelledAir: "unavailable",
+      aurora: "unavailable",
       tides: "unavailable",
       bathing: "unavailable",
       satellite: "unavailable",

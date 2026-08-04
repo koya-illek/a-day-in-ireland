@@ -539,6 +539,8 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
   const generatedAt = new Date().toISOString();
   return {
     generatedAt,
+    lastSuccessAt: [fresh.length, trains.length, rivers.length, marine.length, radar.length, grid, airQuality.length, aurora, warningResult.status === "live"]
+      .some(Boolean) ? generatedAt : null,
     sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
     stations,
     warnings: warningResult.warnings,
@@ -574,7 +576,11 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     },
     contextStatus: {
       marine: marine.length ? "live" : "unavailable",
+      radar: radar.length ? "live" : "unavailable",
+      grid: grid ? "live" : "unavailable",
       measuredAir: "unavailable",
+      modelledAir: airQuality.length ? "live" : "unavailable",
+      aurora: aurora ? "live" : "unavailable",
       tides: "unavailable",
       bathing: "unavailable",
       satellite: "unavailable",

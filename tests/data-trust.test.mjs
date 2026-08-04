@@ -46,6 +46,92 @@ const importWarningAdapter = async (relativePath) => {
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 
+const importDataStateAdapter = async () => {
+  const source = await readFile(new URL("../lib/data-state.ts", import.meta.url), "utf8");
+  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
+  const weatherOutput = ts.transpileModule(weatherSource, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  const output = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText.replace('"./weather-stations"', JSON.stringify(weatherUrl));
+  return import(`data:text/javascript,${encodeURIComponent(output)}`);
+};
+
+const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
+  const moduleUrl = new URL("../platform/server-entry.js", import.meta.url);
+  moduleUrl.searchParams.set("satellite-race", newerSucceeds ? "newer-success" : "newer-failure");
+  const api = await import(moduleUrl.href);
+  const originalFetch = globalThis.fetch;
+  const advertisedDate = new Date(Date.now() - 24 * 60 * 60_000).toISOString().slice(0, 10);
+  const tileResolvers = [];
+  let tileRequests = 0;
+  globalThis.fetch = async (input) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+    if (url.endsWith("/all/all.xml")) {
+      return new Response(`<Domain>2026-01-01/${advertisedDate}/P1D</Domain>`);
+    }
+    if (url.includes("gibs.earthdata.nasa.gov") && url.endsWith(".jpeg")) {
+      tileRequests += 1;
+      if (tileRequests <= 8) {
+        return new Promise((resolve) => tileResolvers.push(resolve));
+      }
+      return new Response(null, { status: 503 });
+    }
+    return new Response("upstream unavailable", { status: 503 });
+  };
+
+  const waitForTileBatches = async (count) => {
+    for (let attempt = 0; attempt < 100 && tileResolvers.length < count; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(tileResolvers.length, count, `expected ${count} controlled satellite tile requests`);
+  };
+  const satelliteTile = () => new Response(null, {
+    status: 200,
+    headers: {
+      "content-type": "image/jpeg",
+      "layer-time-actual": `${advertisedDate}T00:00:00Z`
+    }
+  });
+  const failedTile = () => new Response(null, { status: 503 });
+
+  try {
+    const olderResponse = api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    await waitForTileBatches(4);
+    const newerResponse = api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    await waitForTileBatches(8);
+
+    const newerResolvers = tileResolvers.slice(4, 8);
+    newerResolvers.forEach((resolve) => resolve(newerSucceeds ? satelliteTile() : failedTile()));
+    const newerBody = await (await newerResponse).json();
+
+    const olderResolvers = tileResolvers.slice(0, 4);
+    olderResolvers.forEach((resolve) => resolve(newerSucceeds ? failedTile() : satelliteTile()));
+    const olderBody = await (await olderResponse).json();
+    const tileRequestsBeforeThirdContext = tileRequests;
+    const thirdBody = await (await api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    )).json();
+
+    return { advertisedDate, newerBody, olderBody, thirdBody, tileRequests, tileRequestsBeforeThirdContext };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+};
+
 test("the static page starts with a truthful empty shell", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
   const snapshot = createInitialSnapshot("2026-08-03T09:00:00.000Z");
@@ -57,6 +143,120 @@ test("the static page starts with a truthful empty shell", async () => {
   assert.equal(snapshot.grid, null);
   assert.equal(snapshot.summary.reporting, 0);
   assert.ok(Object.values(snapshot.contextStatus).every((status) => status === "unavailable"));
+});
+
+test("service display states keep connecting, refreshing, offline, cached, stale, and unavailable distinct", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { getServiceDisplayState } = await importDataStateAdapter();
+  const now = Date.parse("2026-08-04T12:00:00.000Z");
+  const empty = createInitialSnapshot(new Date(now).toISOString());
+
+  assert.equal(getServiceDisplayState(empty, { initialRefreshComplete: false, refreshing: true, online: true, now }), "connecting");
+  assert.equal(getServiceDisplayState(empty, { initialRefreshComplete: true, refreshing: false, online: true, now }), "unavailable");
+  assert.equal(getServiceDisplayState(empty, { initialRefreshComplete: true, refreshing: true, online: true, now }), "refreshing");
+  assert.equal(getServiceDisplayState(empty, { initialRefreshComplete: false, refreshing: true, online: false, now }), "offline");
+
+  const observation = {
+    id: "station", name: "Station", latitude: 53.3, longitude: -7.2,
+    temperature: 14, rainfall: 0, windSpeed: 8, windDirection: "W", description: "Dry",
+    observedAt: new Date(now - 4 * 60 * 60_000).toISOString(), fresh: true
+  };
+  const stale = { ...empty, sourceStatus: "live", stations: [observation], summary: { ...empty.summary, reporting: 1 } };
+  assert.equal(getServiceDisplayState(stale, { initialRefreshComplete: true, refreshing: false, online: true, now }), "stale");
+  assert.equal(getServiceDisplayState({ ...stale, sourceStatus: "stale" }, { initialRefreshComplete: true, refreshing: false, online: true, now }), "cached");
+});
+
+test("selected-source assessment never reassures when a chosen provider is unavailable or cached", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { getSelectedSourceAssessment } = await importDataStateAdapter();
+  const now = Date.parse("2026-08-04T12:00:00.000Z");
+  const empty = createInitialSnapshot(new Date(now).toISOString());
+  const unavailable = getSelectedSourceAssessment(empty, new Set(["weather", "warnings", "trains"]), now);
+
+  assert.equal(unavailable.assessedSourceCount, 3);
+  assert.equal(unavailable.fullyAssessed, false);
+  assert.deepEqual(unavailable.unavailableSources, ["weather observations", "official notices", "rail positions"]);
+
+  const authoritativeEmpty = {
+    ...empty,
+    contextStatus: { ...empty.contextStatus, warnings: "live", bathing: "live", earthquakes: "live" }
+  };
+  const assessed = getSelectedSourceAssessment(authoritativeEmpty, new Set(["warnings", "bathing", "earthquakes"]), now);
+  assert.equal(assessed.fullyAssessed, true);
+  assert.deepEqual(assessed.unavailableSources, []);
+
+  const cached = {
+    ...empty,
+    contextStatus: { ...empty.contextStatus, warnings: "stale" }
+  };
+  assert.equal(getSelectedSourceAssessment(cached, new Set(["warnings"]), now).fullyAssessed, false);
+});
+
+test("last-good retention is age bounded and is always relabelled cached rather than live", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const {
+    retainLastGoodContexts,
+    retainLastGoodLiving,
+    retainLastGoodTransit,
+    retainLastGoodWeather
+  } = await importWarningAdapter("../lib/browser-live.ts");
+  const now = Date.parse("2026-08-04T12:00:00.000Z");
+  const observedAt = new Date(now - 5 * 60_000).toISOString();
+  const empty = createInitialSnapshot(new Date(now).toISOString());
+  const station = {
+    id: "station", name: "Station", latitude: 53.3, longitude: -7.2,
+    temperature: 14, rainfall: 0, windSpeed: 8, windDirection: "W", description: "Dry",
+    observedAt, fresh: true
+  };
+  const train = {
+    id: "train", latitude: 53.3, longitude: -7.2, status: "running", direction: "South",
+    message: "", observedAt, speedKmh: null, speedSource: null
+  };
+  const river = { id: "river", name: "River", latitude: 53.3, longitude: -7.2, level: 1.2, observedAt, fresh: true };
+  const transit = {
+    id: "bus", latitude: 53.3, longitude: -7.2, route: "1", label: "Bus", bearing: null,
+    speedKmh: null, speedSource: null, observedAt
+  };
+  const previous = {
+    ...empty,
+    lastSuccessAt: observedAt,
+    sourceStatus: "live",
+    stations: [station],
+    trains: [train],
+    rivers: [river],
+    transit: [transit],
+    transitStatus: "live",
+    grid: {
+      observedAt, demandMW: 1000, generationMW: 1000, windMW: 300, windSharePercent: 30,
+      carbonIntensity: 200, carbonEmissions: 100, frequencyHz: 50, interconnectorMW: 0
+    },
+    sourceProvenance: {
+      trains: { provider: "Irish Rail", endpoint: "", status: "live", fetchedAt: observedAt, latestObservedAt: observedAt, fallback: null },
+      rivers: { provider: "OPW", endpoint: "", status: "live", fetchedAt: observedAt, latestObservedAt: observedAt, fallback: null }
+    },
+    contextStatus: { ...empty.contextStatus, grid: "live" },
+    summary: { ...empty.summary, warmest: station, wettest: station, windiest: station, reporting: 1, runningTrains: 1, riverStations: 1 }
+  };
+
+  const weather = retainLastGoodWeather(previous, now);
+  const living = retainLastGoodLiving(previous, now);
+  const contexts = retainLastGoodContexts(previous, now);
+  const retainedTransit = retainLastGoodTransit(previous, now);
+  assert.equal(weather.sourceStatus, "stale");
+  assert.equal(weather.summary.reporting, 1);
+  assert.equal(living.sourceProvenance.trains.status, "stale");
+  assert.equal(living.sourceProvenance.rivers.status, "stale");
+  assert.equal(living.summary.runningTrains, 1);
+  assert.equal(contexts.contextStatus.grid, "stale");
+  assert.equal(contexts.grid.windSharePercent, 30);
+  assert.equal(retainedTransit.transitStatus, "stale");
+  assert.equal(weather.lastSuccessAt, observedAt);
+
+  assert.equal(retainLastGoodWeather(previous, now + 7 * 60 * 60_000).sourceStatus, "unavailable");
+  assert.deepEqual(retainLastGoodLiving(previous, now + 4 * 60 * 60_000).trains, []);
+  assert.equal(retainLastGoodLiving(previous, now + 4 * 60 * 60_000).sourceProvenance.rivers.status, "unavailable");
+  assert.equal(retainLastGoodContexts(previous, now + 31 * 60 * 60_000).contextStatus.grid, "unavailable");
+  assert.equal(retainLastGoodTransit(previous, now + 31 * 60_000).transitStatus, "unavailable");
 });
 
 test("Met Éireann station definitions use canonical endpoints and reject mismatched identities", async () => {
@@ -80,6 +280,221 @@ test("weather freshness follows the provider's hourly cadence", async () => {
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T09:00:00.000Z", now), true);
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T06:50:00.000Z", now), false);
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T10:00:00.000Z", now), false);
+});
+
+test("radar no-data masking removes only the provider's grey sentinel pixels", async () => {
+  const { maskRadarNoDataPixels } = await importStandaloneTypeScript("../lib/radar-tiles.ts");
+  const pixels = new Uint8ClampedArray([
+    229, 229, 229, 255,
+    226, 228, 225, 180,
+    0, 128, 194, 255,
+    245, 245, 245, 255,
+    0, 0, 0, 31
+  ]);
+
+  assert.equal(maskRadarNoDataPixels(pixels), 2);
+  assert.deepEqual([...pixels], [
+    229, 229, 229, 0,
+    226, 228, 225, 0,
+    0, 128, 194, 255,
+    245, 245, 245, 255,
+    0, 0, 0, 31
+  ]);
+  assert.throws(() => maskRadarNoDataPixels(new Uint8ClampedArray(3)), /RGBA/);
+});
+
+test("radar frame normalization keeps Met Éireann provenance and rejects malformed provider URLs", async () => {
+  const { normalizeRadarFrames } = await import("../platform/server-entry.js");
+  const frames = normalizeRadarFrames([
+    { src: "202608041510", modifiedTime: 1785856549, server: "https://gdal.met.ie/" },
+    { src: "not-a-frame", modifiedTime: 1, server: "https://gdal.met.ie" },
+    { src: "202608041515", modifiedTime: 1785856804, server: "https://malicious.example" }
+  ]);
+
+  assert.deepEqual(frames, [{
+    id: "202608041510",
+    observedAt: "2026-08-04T15:10:00Z",
+    modifiedTime: 1785856549,
+    provider: "Met Éireann",
+    tileTemplate: "https://gdal.met.ie/api/maps/radar/202608041510/{x}/{y}/{z}/1785856549"
+  }]);
+});
+
+test("satellite discovery walks back from the advertised GIBS date until every Ireland tile is valid", async () => {
+  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const probes = [];
+  const fetcher = async (url, init = {}) => {
+    if (String(url).endsWith("/all/all.xml")) {
+      return new Response("<Domain>2026-07-16/2026-08-03/P1D</Domain>");
+    }
+    probes.push({ url: String(url), method: init.method });
+    const date = String(url).includes("/2026-08-02/") ? "2026-08-02" : null;
+    return new Response(null, {
+      status: date ? 200 : 404,
+      headers: date ? {
+        "content-type": "image/jpeg",
+        "layer-time-actual": `${date}T00:00:00Z`
+      } : { "content-type": "text/html" }
+    });
+  };
+
+  const frame = await findLatestSatelliteFrame({
+    now: Date.parse("2026-08-04T12:00:00Z"),
+    fetcher,
+    maximumLookbackDays: 3
+  });
+
+  assert.equal(frame.observedAt, "2026-08-02T00:00:00Z");
+  assert.match(frame.label, /verified NASA archive/);
+  assert.equal(
+    frame.tileTemplate,
+    "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-08-02/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpeg"
+  );
+  assert.equal(probes.length, 8);
+  assert.ok(probes.every((probe) => probe.method === "HEAD"));
+  assert.ok(probes.some((probe) => probe.url.endsWith("/6/20/30.jpeg")));
+  assert.ok(probes.some((probe) => probe.url.endsWith("/6/21/31.jpeg")));
+});
+
+test("satellite discovery suppresses the layer when no recent Ireland tile is valid", async () => {
+  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const fetcher = async (url) => String(url).endsWith("/all/all.xml")
+    ? new Response("<Domain>2026-08-03/2026-08-03/P1D</Domain>")
+    : new Response(null, { status: 404, headers: { "content-type": "text/html" } });
+
+  await assert.rejects(
+    findLatestSatelliteFrame({
+      now: Date.parse("2026-08-04T12:00:00Z"),
+      fetcher,
+      maximumLookbackDays: 2
+    }),
+    /no verified Ireland satellite frame/
+  );
+});
+
+test("an older failed satellite context cannot clear a newer successful cache publication", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const pending = [];
+  const frame = {
+    observedAt: "2026-08-03T00:00:00Z",
+    label: "verified",
+    tileTemplate: "https://example.test/{z}/{y}/{x}.jpeg"
+  };
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => Date.parse("2026-08-04T12:00:00Z"),
+    resolveAvailability: async () => ({
+      advertisedDate: "2026-08-03",
+      startDate: "2026-08-03",
+      cacheKey: "2026-08-04|2026-08-03"
+    }),
+    discoverFrame: () => new Promise((resolve, reject) => pending.push({ resolve, reject }))
+  });
+
+  const older = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  const newer = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+
+  pending[1].resolve(frame);
+  assert.deepEqual(await newer, frame);
+  pending[0].reject(new Error("older context failed"));
+  await assert.rejects(older, /older context failed/);
+
+  assert.deepEqual(await resolver(), frame);
+  assert.equal(pending.length, 2, "the third context must reuse the newer successful publication");
+});
+
+test("an older successful satellite context cannot overwrite a newer failed cache publication", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const pending = [];
+  const olderFrame = {
+    observedAt: "2026-08-02T00:00:00Z",
+    label: "older verified frame",
+    tileTemplate: "https://example.test/{z}/{y}/{x}.jpeg"
+  };
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => Date.parse("2026-08-04T12:00:00Z"),
+    resolveAvailability: async () => ({
+      advertisedDate: "2026-08-03",
+      startDate: "2026-08-03",
+      cacheKey: "2026-08-04|2026-08-03"
+    }),
+    discoverFrame: () => new Promise((resolve, reject) => pending.push({ resolve, reject }))
+  });
+
+  const older = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  const newer = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+
+  pending[1].reject(new Error("newer context failed"));
+  await assert.rejects(newer, /newer context failed/);
+  pending[0].resolve(olderFrame);
+  assert.deepEqual(await older, olderFrame);
+
+  await assert.rejects(resolver(), /recent failed state/);
+  assert.equal(pending.length, 2, "the third context must retain the newer failed publication");
+});
+
+test("concurrent context endpoints retain a newer satellite success after the older request fails", async () => {
+  const result = await exerciseSatelliteContextRace({ newerSucceeds: true });
+  assert.equal(result.newerBody.contextStatus.satellite, "fallback");
+  assert.equal(result.newerBody.satellite?.observedAt?.slice(0, 10), result.advertisedDate);
+  assert.equal(result.olderBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.olderBody.satellite, null);
+  assert.equal(result.thirdBody.contextStatus.satellite, "fallback");
+  assert.deepEqual(result.thirdBody.satellite, result.newerBody.satellite);
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must reuse the newer success without probing tiles");
+});
+
+test("concurrent context endpoints retain a newer satellite failure after the older request succeeds", async () => {
+  const result = await exerciseSatelliteContextRace({ newerSucceeds: false });
+  assert.equal(result.newerBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.newerBody.satellite, null);
+  assert.equal(result.olderBody.contextStatus.satellite, "fallback");
+  assert.ok(result.olderBody.satellite);
+  assert.equal(result.thirdBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.thirdBody.satellite, null);
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must retain the newer failure without probing tiles");
+});
+
+test("satellite cache revalidates at UTC rollover and when the provider-advertised date advances", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  let now = Date.parse("2026-08-04T23:59:00Z");
+  let advertisedDate = "2026-08-03";
+  let metadataCalls = 0;
+  let discoveries = 0;
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => now,
+    fetcher: async () => {
+      metadataCalls += 1;
+      return new Response(`<Domain>2026-07-16/${advertisedDate}/P1D</Domain>`);
+    },
+    discoverFrame: async ({ startDate }) => {
+      discoveries += 1;
+      return {
+        observedAt: `${startDate}T00:00:00Z`,
+        label: `verified ${startDate}`,
+        tileTemplate: `https://example.test/${startDate}/{z}/{y}/{x}.jpeg`
+      };
+    }
+  });
+
+  const first = await resolver();
+  assert.equal((await resolver()).observedAt, first.observedAt);
+  assert.equal(discoveries, 1, "same provider date and UTC day should reuse the verified frame");
+
+  now = Date.parse("2026-08-05T00:01:00Z");
+  await resolver();
+  assert.equal(discoveries, 2, "UTC rollover must force metadata-keyed tile revalidation");
+
+  advertisedDate = "2026-08-04";
+  const advanced = await resolver();
+  assert.equal(advanced.observedAt, "2026-08-04T00:00:00Z");
+  assert.equal(discoveries, 3, "a newer provider-advertised date must bypass the prior frame cache");
+  assert.equal(metadataCalls, 4, "provider metadata is checked before every cache reuse decision");
 });
 
 test("tide query windows remain stable inside a cache bucket", async () => {
