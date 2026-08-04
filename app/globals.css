@@ -2259,14 +2259,16 @@ footer {
     padding: .4rem .2rem;
   }
   .section-rail nav button span { display: none; }
-  .workspace-heading { align-items: start; }
-  .view-map-action { width: 100%; }
-  .map-stage { aspect-ratio: auto !important; padding: .55rem; }
-  .map-explorer-heading { align-items: flex-start; display: grid; gap: .6rem; }
-  .map-explorer-heading > button { width: 100%; }
-  .map-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .map-presets button { min-width: 0; }
-  .map-presets button.custom { grid-column: auto; }
+  .workspace-heading { align-items: flex-start; }
+  .workspace-heading > div > p:not(.eyebrow),
+  .workspace-heading .moment-time { display: none; }
+  .view-map-action { min-height: 44px; padding: .45rem .6rem; width: 100%; }
+  .map-stage { aspect-ratio: auto !important; height: auto !important; min-height: 0; padding: .55rem; }
+  .map-explorer-heading { align-items: stretch; display: grid; gap: .6rem; grid-template-columns: minmax(0, 1fr); }
+  .map-explorer-heading .eyebrow,
+  .map-explorer-heading p:last-child { display: none; }
+  .map-explorer-heading > button { display: none; }
+  #live-map .map-presets { display: none; }
   .map-canvas { aspect-ratio: 10 / 9; height: auto; min-height: 0; }
   .map-navigation { right: .45rem; top: .45rem; }
   .map-navigation button { height: 2.75rem; min-width: 2.75rem; }

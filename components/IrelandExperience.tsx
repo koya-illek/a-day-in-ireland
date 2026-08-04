@@ -1433,9 +1433,43 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const displayedBathingAlerts = useMemo(() => selectDeclutteredPoints(
     projectReadings(snapshot.bathingAlerts, projection, (alert) => `bathing:${alert.id}`, () => 100),
     mapViewport,
-    isDenseView ? 34 : 0,
+    0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.bathingAlerts]);
+  ).map(({ item }) => item), [activeMarkerId, mapViewport, projection, snapshot.bathingAlerts]);
+  const bathingMarkerPoints = useMemo(() => {
+    const groups = new Map<string, Array<{ id: string; x: number; y: number }>>();
+    for (const alert of displayedBathingAlerts) {
+      const point = projection([alert.longitude, alert.latitude]);
+      if (!point) continue;
+      const key = `${point[0].toFixed(4)}:${point[1].toFixed(4)}`;
+      const group = groups.get(key) ?? [];
+      group.push({ id: alert.id, x: point[0], y: point[1] });
+      groups.set(key, group);
+    }
+
+    const positions = new Map<string, { x: number; y: number }>();
+    const xUnitsPerPixel = 1000 / (Math.max(1, mapDimensions.width) * Math.max(1, mapView.scale));
+    const yUnitsPerPixel = 900 / (Math.max(1, mapDimensions.height) * Math.max(1, mapView.scale));
+    for (const group of groups.values()) {
+      group.sort((first, second) => compareStableIds(first.id, second.id));
+      if (group.length === 1) {
+        const item = group[0]!;
+        positions.set(item.id, { x: item.x, y: item.y });
+        continue;
+      }
+      const columns = Math.ceil(Math.sqrt(group.length));
+      const rows = Math.ceil(group.length / columns);
+      group.forEach((item, index) => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        positions.set(item.id, {
+          x: item.x + (column - (columns - 1) / 2) * 44 * xUnitsPerPixel,
+          y: item.y + (row - (rows - 1) / 2) * 44 * yUnitsPerPixel
+        });
+      });
+    }
+    return positions;
+  }, [displayedBathingAlerts, mapDimensions.height, mapDimensions.width, mapView.scale, projection]);
   const displayedAirQuality = useMemo(() => selectDeclutteredPoints(
     projectReadings(sourceAirQuality, projection, (reading) => `air:${reading.id}`, (reading) => reading.source === "measured" ? 60 : 10),
     mapViewport,
@@ -2320,7 +2354,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="map-workspace">
           <div className="workspace-heading" id="ireland-now">
             <div>
-              <p className="eyebrow">Ireland now · {formatDate(now)} · {formatTime(now)} IST</p>
+              <p className="eyebrow">Ireland now<span className="moment-time"> · {formatDate(now)} · {formatTime(now)} IST</span></p>
               <h1 id="moment-heading">Ireland now.</h1>
               <p>{isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Updating live observations across the island…" : `${narrative.period} ${narrative.detail}`}</p>
               <a className="view-map-action" href="#live-map">View live map <span aria-hidden="true">↓</span></a>
@@ -2524,12 +2558,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </div>
           <button
             type="button"
+            aria-label="Choose map layers"
             onClick={(event) => {
               panelOpenerRef.current = event.currentTarget;
               setPanelOpen(true);
             }}
           >
-            Choose layers
+            Layers
           </button>
         </div>
         <nav className="map-presets" aria-label="Map views">
@@ -2753,12 +2788,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               ) : null;
             })}
             {layers.has("bathing") && displayedBathingAlerts.map((alert) => {
-              const point = projection([alert.longitude, alert.latitude]);
+              const point = bathingMarkerPoints.get(alert.id);
               return point ? (
                 <MapMarker
                   className="bathing-marker"
                   key={alert.id}
-                  transform={`translate(${point[0]} ${point[1]})`}
+                  transform={`translate(${point.x} ${point.y})`}
                   interaction={markerInteraction(
                     `bathing:${alert.id}`,
                     `${alert.name}, ${alert.restriction}`,

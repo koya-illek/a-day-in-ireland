@@ -64,7 +64,7 @@ export function selectDeclutteredPoints<T>(
 ) {
   if (minimumSpacingPixels <= 0) {
     return points
-      .filter((point) => pointIsNearViewport(point, viewport))
+      .filter((point) => point.key === alwaysIncludeKey || pointIsNearViewport(point, viewport))
       .sort((first, second) => compareKeys(first.key, second.key));
   }
 
@@ -104,9 +104,14 @@ export function clusterProjectedPoints<T>(
   radiusPixels: number,
   alwaysIncludeKey: string | null = null
 ): ProjectedCluster<T>[] {
+  const radius = Number.isFinite(radiusPixels) ? Math.max(0, radiusPixels) : 0;
   const visible = points
-    .filter((point) => point.key === alwaysIncludeKey || pointIsNearViewport(point, viewport, Math.max(72, radiusPixels)))
+    .filter((point) => point.key === alwaysIncludeKey || pointIsNearViewport(point, viewport, Math.max(72, radius)))
     .sort((first, second) => compareKeys(first.key, second.key));
+  if (radius === 0) {
+    return visible.map((point) => ({ key: point.key, x: point.x, y: point.y, items: [point] }));
+  }
+
   const clusters: Array<{
     key: string;
     anchorX: number;
@@ -115,28 +120,45 @@ export function clusterProjectedPoints<T>(
     sumY: number;
     items: ProjectedPoint<T>[];
   }> = [];
+  const cells = new Map<string, typeof clusters>();
+  const cellKey = (x: number, y: number) => `${x}:${y}`;
 
   for (const point of visible) {
     const screen = projectToViewport(point, viewport);
-    const candidate = clusters
-      .map((cluster) => ({
-        cluster,
-        distance: Math.hypot(cluster.anchorX - screen.x, cluster.anchorY - screen.y)
-      }))
-      .filter(({ distance }) => distance < radiusPixels)
-      .sort((first, second) =>
-        first.distance - second.distance || compareKeys(first.cluster.key, second.cluster.key)
-      )[0]?.cluster;
+    const cellX = Math.floor(screen.x / radius);
+    const cellY = Math.floor(screen.y / radius);
+    let candidate: (typeof clusters)[number] | null = null;
+    let candidateDistance = Number.POSITIVE_INFINITY;
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (const cluster of cells.get(cellKey(cellX + offsetX, cellY + offsetY)) ?? []) {
+          const distance = Math.hypot(cluster.anchorX - screen.x, cluster.anchorY - screen.y);
+          if (distance >= radius) continue;
+          if (
+            distance < candidateDistance ||
+            (distance === candidateDistance && candidate && compareKeys(cluster.key, candidate.key) < 0)
+          ) {
+            candidate = cluster;
+            candidateDistance = distance;
+          }
+        }
+      }
+    }
 
     if (!candidate) {
-      clusters.push({
+      const cluster = {
         key: point.key,
         anchorX: screen.x,
         anchorY: screen.y,
         sumX: point.x,
         sumY: point.y,
         items: [point]
-      });
+      };
+      clusters.push(cluster);
+      const key = cellKey(cellX, cellY);
+      const bucket = cells.get(key);
+      if (bucket) bucket.push(cluster);
+      else cells.set(key, [cluster]);
       continue;
     }
     candidate.items.push(point);
