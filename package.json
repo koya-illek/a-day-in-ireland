@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:performance": "PLAYWRIGHT_PERFORMANCE=1 playwright test tests/map-product.spec.ts --project=desktop --grep '1,200 movement positions'",
     "deploy:cloudflare:api": "wrangler deploy --config wrangler.api.toml",
     "deploy:cloudflare:pages": "wrangler pages deploy dist/client --project-name a-day-in-ireland --branch main"
   },

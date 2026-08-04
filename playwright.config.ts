@@ -1,19 +1,22 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const playwrightPort = Number(process.env.PLAYWRIGHT_PORT ?? "3000");
-if (!Number.isInteger(playwrightPort) || playwrightPort < 1 || playwrightPort > 65_535) {
-  throw new Error("PLAYWRIGHT_PORT must be a valid TCP port");
+const port = Number.parseInt(process.env.PLAYWRIGHT_PORT ?? process.env.PORT ?? "3000", 10);
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error(`Invalid Playwright port: ${process.env.PLAYWRIGHT_PORT ?? process.env.PORT}`);
 }
-const playwrightBaseUrl = `http://127.0.0.1:${playwrightPort}`;
+const baseURL = `http://127.0.0.1:${port}`;
+const performanceMode = process.env.PLAYWRIGHT_PERFORMANCE === "1";
 
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
-  use: { baseURL: playwrightBaseUrl, trace: "retain-on-failure" },
+  workers: performanceMode ? 1 : undefined,
+  use: { baseURL, trace: "retain-on-failure" },
   webServer: {
-    command: `PORT=${playwrightPort} node scripts/static-server.mjs`,
-    url: playwrightBaseUrl,
-    reuseExistingServer: true,
+    command: "node scripts/static-server.mjs",
+    url: baseURL,
+    env: { ...process.env, PORT: String(port) },
+    reuseExistingServer: false,
     timeout: 120_000
   },
   projects: [

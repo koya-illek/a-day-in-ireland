@@ -3,8 +3,10 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 
 const root = join(process.cwd(), "dist", "client");
-const port = Number.parseInt(process.env.PORT ?? "3000", 10);
-if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("PORT must be a valid TCP port");
+const port = Number.parseInt(process.env.PORT ?? process.env.PLAYWRIGHT_PORT ?? "3000", 10);
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error(`Invalid static server port: ${process.env.PORT ?? process.env.PLAYWRIGHT_PORT}`);
+}
 const types = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
