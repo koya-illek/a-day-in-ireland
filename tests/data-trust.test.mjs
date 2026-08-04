@@ -376,7 +376,7 @@ test("concurrent NTA coordinator requests share one upstream refresh", async () 
         id: "vehicle-1",
         vehicle: {
           vehicle: { id: "vehicle-1", label: "15" },
-          trip: { routeId: "15" },
+          trip: { routeId: "15", tripHeadsign: "Clongriffin" },
           position: { latitude: 53.3, longitude: -7.2 },
           timestamp: Math.floor(Date.now() / 1000)
         }
@@ -399,6 +399,7 @@ test("concurrent NTA coordinator requests share one upstream refresh", async () 
     const bodies = await Promise.all(responses.map((response) => response.json()));
     assert.equal(upstreamCalls, 1);
     assert.deepEqual(bodies.map((body) => body.transitStatus), ["live", "live"]);
+    assert.deepEqual(bodies.map((body) => body.transit[0].destination), ["Clongriffin", "Clongriffin"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

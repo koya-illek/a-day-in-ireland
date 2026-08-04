@@ -176,6 +176,8 @@ export type TransitVehicle = {
   longitude: number;
   route: string;
   label: string;
+  destination?: string | null;
+  direction?: string | null;
   bearing: number | null;
   speedKmh: number | null;
   speedSource: "reported" | "calculated" | null;

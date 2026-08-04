@@ -106,6 +106,64 @@ async function installMapMarkerFixtures(page: Page) {
   }));
 }
 
+async function installAccessibilityContentFixtures(page: Page) {
+  await installMapMarkerFixtures(page);
+  await page.unroute("**/api/contexts");
+  await page.unroute("**/api/transit");
+  const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+  const issued = new Date(Date.now() - 45 * 60_000).toISOString();
+  const expiry = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+      warnings: [{
+        id: "accessibility-warning",
+        capId: "accessibility-warning-cap",
+        type: "yellow; Moderate",
+        severity: "Moderate",
+        certainty: "Likely",
+        regions: ["EI29"],
+        status: "Warning",
+        issued,
+        updated: issued,
+        level: "Yellow",
+        headline: "Rain warning for Westmeath",
+        description: "Heavy showers may cause difficult travelling conditions.",
+        onset: issued,
+        expiry
+      }],
+      warningsStatus: "live",
+      issTle: null,
+      satellite: null,
+      earthquakes: [],
+      contextStatus: {
+        marine: "unavailable", measuredAir: "unavailable", tides: "unavailable", bathing: "unavailable",
+        satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "live"
+      }
+    })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      transit: [{
+        id: "provider-shaped-bus",
+        label: "100",
+        route: "3 73 a",
+        destination: "City Centre",
+        latitude: 53.35,
+        longitude: -6.26,
+        bearing: 90,
+        speedKmh: 22,
+        speedSource: "reported",
+        observedAt
+      }],
+      transitStatus: "live"
+    })
+  }));
+}
+
 test("boot refresh uses canonical weather stations and one contexts request", async ({ page }) => {
   const stationNames = new Map([
     ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
@@ -158,10 +216,10 @@ test("boot refresh uses canonical weather stations and one contexts request", as
   }));
 
   await page.goto("/");
-  await expect(page.locator(".rail-status")).toContainText("Refreshing services…");
+  await expect(page.locator(".rail-status")).toContainText(/Connecting to live services|Checking for newer data/);
   await expect(page.locator(".station-marker")).toHaveCount(9);
   const weatherChip = page.locator(".freshness-chip").filter({ hasText: "Weather provider" });
-  await expect(weatherChip).toContainText("Provider: live");
+  await expect(weatherChip).toContainText(/live · observed/);
   await expect(weatherChip).not.toContainText("stale");
   expect(contextsRequests).toBe(1);
   expect(requestedStations).toContain("dublin");
@@ -199,7 +257,7 @@ test("selected place briefing leads into the across-Ireland evidence surface", a
   for (const label of localLabels) {
     expect(label).toMatch(/No nearby .* observation|(?:Met Éireann|OPW|EEA measured|CAMS modelled).*km away/);
   }
-  await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).toContainText(/Provider: .*Observation:/);
+  await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).toContainText(/(?:live|partial|fallback) · observed/);
   await expect(page.locator(".workspace-facts")).toHaveAttribute("aria-label", "Current national highlights across Ireland");
 
   const hierarchy = await page.evaluate(() => {
@@ -676,12 +734,12 @@ test("a slower context refresh cannot erase a newer public transport refresh", a
   }));
 
   await page.goto("/?view=custom&layers=transit");
-  await expect(page.getByRole("button", { name: "Route 99, live public transport position" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Route 99, Heading east, live public transport position" })).toBeVisible();
 });
 
 test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText(/Live observations|Partial observations/)).toHaveCount(1);
+  await expect(page.locator("#connection-summary")).toContainText(/Connected|Checking for newer data/);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
   await expect(page.getByText("Ireland, at a glance.")).toBeVisible();
   const freshnessChips = page.locator(".freshness-chip");
@@ -1044,10 +1102,11 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
   });
   const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
   const separator = "\u001f";
-  const vehicle = (route: string, label: string) => ({
+  const vehicle = (route: string, label: string, destination: string) => ({
     id: "separator-transit",
     label,
     route,
+    destination,
     latitude: 53.35,
     longitude: -7.4,
     bearing: 90,
@@ -1055,8 +1114,8 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     speedSource: "reported" as const,
     observedAt
   });
-  const first = vehicle(`x${separator}string:y`, "z");
-  const second = vehicle("x", `y${separator}string:z`);
+  const first = vehicle(`x${separator}string:y`, "z", "Harbour");
+  const second = vehicle("x", `y${separator}string:z`, "City Centre");
   const responses = [
     [first, second],
     [second, first],
@@ -1099,7 +1158,10 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     await page.keyboard.press("Enter");
     await expect(page.locator(".detail-transit")).toBeVisible();
     const detail = await page.locator(".detail-transit").innerText();
-    expect(detail).toContain(`y${separator}string:z`);
+    expect(detail).not.toContain(separator);
+    expect(detail).not.toContain("string:z");
+    expect(detail).toContain("Towards City Centre");
+    expect(detail).not.toContain("Towards Harbour");
     await page.getByRole("button", { name: "Close map details" }).click();
     await expect(marker).toBeFocused();
     return detail;
@@ -1111,13 +1173,16 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     id: "movement:transit:separator-transit",
     transform: firstState.transform,
     members: "transit:separator-transit",
-    ariaLabel: "Route x, live public transport position",
+    ariaLabel: "Route x, Towards City Centre, live public transport position",
     tabIndex: 0
   });
   const firstDetail = await openWithEnter();
   await marker.click();
   await expect(page.locator(".detail-transit")).toBeVisible();
-  await expect(page.locator(".detail-transit")).toContainText(`y${separator}string:z`);
+  await expect(page.locator(".detail-transit")).not.toContainText(separator);
+  await expect(page.locator(".detail-transit")).not.toContainText("string:z");
+  await expect(page.locator(".detail-transit")).toContainText("Towards City Centre");
+  await expect(page.locator(".detail-transit")).not.toContainText("Towards Harbour");
   await page.getByRole("button", { name: "Close map details" }).click();
   await expect(marker).toBeFocused();
   await assertOneRovingStop();
@@ -1877,4 +1942,224 @@ test("mobile view keeps the layer rail clear of the signals board", async ({ pag
   expect(panel).not.toBeNull();
   expect((panel?.x ?? 0) + (panel?.width ?? 0)).toBeLessThanOrEqual(viewport.clientWidth + 1);
   await expect(page.locator(".layer-group").first()).toBeVisible();
+});
+
+test("visible presets expose pressed state, clean names, and an explicit custom view", async ({ page }) => {
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+
+  const presets = page.getByRole("navigation", { name: "Map view shortcuts" });
+  const weather = presets.getByRole("button", { name: "Weather", exact: true });
+  const movement = presets.getByRole("button", { name: "Movement", exact: true });
+  const water = presets.getByRole("button", { name: "Water", exact: true });
+  const all = presets.getByRole("button", { name: "All layers", exact: true });
+  await expect(weather).toHaveAttribute("aria-pressed", "true");
+  await expect(movement).toHaveAttribute("aria-pressed", "false");
+  await expect(water).toHaveAttribute("aria-pressed", "false");
+  await expect(all).toHaveAttribute("aria-pressed", "false");
+  expect(await presets.locator("button > span").evaluateAll((glyphs) =>
+    glyphs.every((glyph) => glyph.getAttribute("aria-hidden") === "true")
+  )).toBe(true);
+
+  await movement.click();
+  await expect(movement).toHaveAttribute("aria-pressed", "true");
+  await expect(weather).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: /Air & exposure/ }).click();
+  await page.getByRole("button", { name: "Close explore panel" }).click();
+  await expect(page.locator(".custom-view-state")).toHaveText(/Custom view · \d+ active layers?/);
+});
+
+test("mobile warnings prioritise human scope and expiry with an official source", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "mobile") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const warning = page.locator(".warning-strip.official-notice");
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("Westmeath");
+  await expect(warning).not.toContainText("EI29");
+  await expect(warning.locator(".warning-key-facts dt")).toHaveText(["Scope", "Expires"]);
+  const official = warning.getByRole("link", { name: /Check official Met Éireann notice/ });
+  await expect(official).toHaveAttribute("href", "https://www.met.ie/warnings-today.html");
+  const sourceDetails = warning.getByText("Source and issue details", { exact: true });
+  await expect(sourceDetails).toBeVisible();
+  await expect(warning.locator(".warning-actions details > p")).toBeHidden();
+
+  const layout = await warning.evaluate((element) => {
+    const badge = element.querySelector(".warning-badge")?.getBoundingClientRect();
+    const heading = element.querySelector("h3")?.getBoundingClientRect();
+    const link = element.querySelector("a")?.getBoundingClientRect();
+    return { badgeBottom: badge?.bottom ?? 0, headingTop: heading?.top ?? 0, linkHeight: link?.height ?? 0 };
+  });
+  expect(layout.badgeBottom).toBeLessThanOrEqual(layout.headingTop);
+  expect(layout.linkHeight).toBeGreaterThanOrEqual(44);
+});
+
+test("shape of the day has labelled dual scales, independent rain bars, and a data list", async ({ page }) => {
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+  await expect.poll(() => page.locator(".timeline-point").count()).toBeGreaterThan(0);
+
+  await expect(page.locator(".temperature-axis")).toContainText(/Temperature/);
+  await expect(page.locator(".rain-axis")).toContainText(/Rain/);
+  await expect(page.locator(".timeline-x-axis")).toContainText(/Hour of day · Irish time/);
+  const firstPoint = page.locator(".timeline-point").first();
+  await expect(firstPoint).toHaveAccessibleName(/degrees Celsius.*millimetres.*kilometres per hour/);
+  const barHeights = await firstPoint.locator(".bar").evaluateAll((bars) => bars.map((bar) => getComputedStyle(bar).height));
+  expect(barHeights).toHaveLength(2);
+  expect(new Set(barHeights).size).toBe(2);
+
+  const list = page.locator(".timeline-data-list");
+  await list.locator("summary").click();
+  await expect(list.getByRole("table", { name: "Hourly averages across reporting Met Éireann stations" })).toBeVisible();
+  await expect(list.getByRole("columnheader")).toHaveText(["Time", "Temperature", "Rain", "Wind"]);
+});
+
+test("390px primary controls, chart points, and map marker hit regions meet touch floors", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "mobile") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect.poll(() => page.locator(".timeline-point").count()).toBeGreaterThan(0);
+
+  const controls = page.locator([
+    ".header-actions button",
+    ".section-rail nav button",
+    ".place-controls select",
+    ".place-controls button",
+    ".freshness-strip > button",
+    ".map-navigation button",
+    ".timeline-point"
+  ].join(","));
+  const undersized = await controls.evaluateAll((elements) => elements
+    .filter((element) => {
+      const style = getComputedStyle(element);
+      return style.display !== "none" && style.visibility !== "hidden";
+    })
+    .map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { name: element.getAttribute("aria-label") || element.textContent?.trim(), width: bounds.width, height: bounds.height };
+    })
+    .filter((bounds) => bounds.width < 44 || bounds.height < 44));
+  expect(undersized).toEqual([]);
+
+  const hitTarget = await page.locator(".map-marker-hit-target").first().evaluate((element) => ({
+    pointerEvents: getComputedStyle(element).pointerEvents,
+    strokeWidth: Number.parseFloat(getComputedStyle(element).strokeWidth)
+  }));
+  expect(hitTarget.pointerEvents).toBe("stroke");
+  expect(hitTarget.strokeWidth).toBeGreaterThanOrEqual(44);
+  await page.getByLabel("Live map of Ireland").scrollIntoViewIfNeeded();
+  const markerCenter = await page.locator(".station-marker .map-marker-hit-target").first().evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  });
+  await page.mouse.click(markerCenter.x, markerCenter.y);
+  await expect(page.locator("[role='dialog'].detail-station")).toBeVisible();
+});
+
+test("320px at 200 percent text keeps actions, preset overflow, map, and list usable", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+
+  const actions = page.locator(".header-actions button");
+  await expect(actions).toHaveCount(2);
+  for (const action of await actions.all()) await expect(action).toBeVisible();
+  await expect(page.locator(".preset-scroll-hint")).toBeVisible();
+  const presetStrip = page.getByRole("navigation", { name: "Map view shortcuts" });
+  await expect(presetStrip.getByRole("button")).toHaveCount(4);
+  const allLayers = presetStrip.getByRole("button", { name: "All layers", exact: true });
+  await allLayers.scrollIntoViewIfNeeded();
+  await expect(allLayers).toBeVisible();
+  await expect(page.getByLabel("Live map of Ireland")).toBeVisible();
+  await expect(page.locator(".timeline-data-list summary")).toBeVisible();
+  await page.locator(".timeline-data-list summary").click();
+  await expect(page.getByRole("region", { name: "Hourly weather data table" })).toBeVisible();
+
+  const overflow = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+    headerRight: Math.max(...[...document.querySelectorAll(".header-actions button")].map((element) => element.getBoundingClientRect().right)),
+    mapRight: document.querySelector("#live-map")?.getBoundingClientRect().right ?? Infinity
+  }));
+  expect(overflow.document).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.body).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.headerRight).toBeLessThanOrEqual(overflow.viewport + 1);
+  expect(overflow.mapRight).toBeLessThanOrEqual(overflow.viewport + 1);
+});
+
+test("meaningful status, provenance, and caveat copy stays above practical type floors", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+  const samples = await page.locator([
+    ".rail-status small",
+    ".freshness-chip small",
+    ".place-observations small",
+    ".guidance-reason",
+    ".guidance-caveat",
+    ".official-notices-heading > p",
+    ".warning-copy > p",
+    ".timeline-legend span",
+    "footer"
+  ].join(",")).evaluateAll((elements) => elements.map((element) => ({
+    selector: element.className || element.tagName,
+    size: Number.parseFloat(getComputedStyle(element).fontSize)
+  })));
+  expect(samples.length).toBeGreaterThan(10);
+  expect(samples.filter((sample) => sample.size < 12)).toEqual([]);
+  expect(samples.filter((sample) => /guidance|warning-copy/.test(String(sample.selector)) && sample.size < 14)).toEqual([]);
+});
+
+test("forced colours and reduced motion retain visible focus and non-animated map semantics", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await page.emulateMedia({ forcedColors: "active", reducedMotion: "reduce" });
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+
+  const weather = page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: "Weather", exact: true });
+  await weather.focus();
+  expect(await weather.evaluate((element) => Number.parseFloat(getComputedStyle(element).outlineWidth))).toBeGreaterThanOrEqual(3);
+  const marker = page.locator(".station-marker").first();
+  await marker.focus();
+  const ring = marker.locator(".map-marker-focus-ring");
+  expect(await ring.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity))).toBe(1);
+  const animationDuration = await page.locator(".live-dot").first().evaluate((element) => getComputedStyle(element).animationDuration);
+  expect(animationDuration).toMatch(/^(?:0\.001ms|1e-06s)$/);
+});
+
+test("TFI details expose public route and destination while hiding provider junk", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/?view=custom&layers=transit");
+  const marker = page.getByRole("button", { name: "Route 73, Towards City Centre, live public transport position" });
+  await expect(marker).toBeVisible();
+  await marker.click();
+
+  const detail = page.locator(".detail-transit");
+  await expect(detail.getByRole("heading", { name: "Route 73" })).toBeVisible();
+  await expect(detail).toContainText("Towards City Centre");
+  await expect(detail).not.toContainText("3 73 a");
+  await expect(detail).not.toContainText(/\b100\b/);
+});
+
+test("offline state names the last-data behavior and keeps retry safely gated", async ({ page, context }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installAccessibilityContentFixtures(page);
+  await page.goto("/");
+  const connection = page.locator("#connection-summary");
+  const retry = page.getByRole("button", { name: "Refresh live data" });
+  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await context.setOffline(true);
+  await expect(connection).toContainText("Offline · showing the last received data");
+  await expect(retry).toBeDisabled();
+  await context.setOffline(false);
+  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(retry).toBeEnabled();
 });

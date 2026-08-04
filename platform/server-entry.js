@@ -690,11 +690,18 @@ export const fetchTransit = async (env) => {
     const observedAt = new Date(timestamp * 1000);
     const age = Date.now() - observedAt.getTime();
     if (!Number.isFinite(observedAt.getTime()) || age < 0 || age >= 30 * 60_000) return [];
+    const destination = String(
+      vehicle.trip?.tripHeadsign ??
+      vehicle.trip?.trip_headsign ??
+      vehicle.trip?.destination ??
+      ""
+    ).trim();
     return [{
       id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? crypto.randomUUID()),
       latitude, longitude,
       route: String(vehicle.trip?.routeId ?? vehicle.trip?.route_id ?? ""),
       label: String(vehicle.vehicle?.label ?? vehicle.vehicle?.id ?? "Public transport"),
+      destination: destination || null,
       bearing: numeric(position?.bearing ?? position?.Bearing),
       speedKmh: numeric(position?.speed ?? position?.Speed) === null ? null : numeric(position?.speed ?? position?.Speed) * 3.6,
       speedSource: numeric(position?.speed ?? position?.Speed) === null ? null : "reported",
