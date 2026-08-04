@@ -2,7 +2,13 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function enableExploreLayer(page: Page, name: RegExp) {
   await page.getByRole("button", { name: "Explore", exact: true }).click();
-  const layer = page.locator(".explore-panel").getByRole("button", { name });
+  const panel = page.locator(".explore-panel");
+  const layer = panel.getByRole("button", { name, includeHidden: true });
+  const group = layer.locator("xpath=ancestor::details[1]");
+  if (await group.count() && !(await group.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await group.locator("summary").click();
+  }
+  await expect(layer).toBeVisible();
   if (await layer.getAttribute("aria-pressed") !== "true") await layer.click();
   await page.getByRole("button", { name: "Close explore panel" }).click();
 }
@@ -186,7 +192,7 @@ test("renders the living map and live observations", async ({ page }) => {
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
-test("selected place briefing leads into the across-Ireland evidence surface", async ({ page }) => {
+test("the live map leads into selected-place and across-Ireland evidence", async ({ page }) => {
   await page.goto("/?place=cork");
   const briefing = page.locator(".place-context");
   await expect(briefing).toHaveAttribute("data-place-id", "cork");
@@ -209,26 +215,27 @@ test("selected place briefing leads into the across-Ireland evidence surface", a
     const map = document.querySelector("#live-map");
     return Boolean(
       place && notices && guidance && map &&
+      (map.compareDocumentPosition(place) & Node.DOCUMENT_POSITION_FOLLOWING) &&
       (place.compareDocumentPosition(notices) & Node.DOCUMENT_POSITION_FOLLOWING) &&
       (notices.compareDocumentPosition(guidance) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-      (guidance.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING)
+      !(guidance.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING)
     );
   });
   expect(hierarchy).toBe(true);
 });
 
-test("official notices retain scope and precede the map", async ({ page }) => {
+test("official notices retain scope after the map", async ({ page }) => {
   await page.goto("/?view=weather");
   const notices = page.locator(".official-notices");
   await expect(notices).toHaveAttribute("data-scope", "across-ireland");
   await expect(notices.getByRole("heading", { name: "Official notices across Ireland", exact: true })).toBeVisible();
 
-  const beforeMap = await page.evaluate(() => {
+  const afterMap = await page.evaluate(() => {
     const notices = document.querySelector(".official-notices");
     const map = document.querySelector("#live-map");
-    return Boolean(notices && map && (notices.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING));
+    return Boolean(notices && map && (map.compareDocumentPosition(notices) & Node.DOCUMENT_POSITION_FOLLOWING));
   });
-  expect(beforeMap).toBe(true);
+  expect(afterMap).toBe(true);
 
   const warning = notices.locator(".warning-strip");
   if (await warning.count()) {
@@ -897,12 +904,11 @@ test("movement clustering is deterministic across provider permutations and pres
     return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
   }));
 
-  await expect(movementMarkers).toHaveCount(2);
+  await expect(movementMarkers).toHaveCount(1);
   const firstState = await readMovementState();
   expect(requestedOrders[0]).toBe("chain-a,chain-b,chain-c");
   expect(firstState.map(({ id, members }) => ({ id, members }))).toEqual([
-    { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b"] },
-    { id: "movement:transit:chain-c", members: ["transit:chain-c"] }
+    { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b", "transit:chain-c"] }
   ]);
   expect(new Set(firstState.map(({ id }) => id)).size).toBe(firstState.length);
   expect(firstState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
@@ -929,6 +935,33 @@ test("movement clustering is deterministic across provider permutations and pres
     const remembered = (window as unknown as { __focusedMovementMarker?: Element }).__focusedMovementMarker;
     return current === remembered;
   })).toBe(true);
+
+  for (let step = 0; step < 7; step += 1) {
+    await page.locator("svg.ireland-map").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      element.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + bounds.height / 2,
+        deltaY: -300
+      }));
+    });
+  }
+  await expect(page.locator(".map-viewport")).toHaveAttribute("data-scale", "4.00");
+  await expect(focusedMarker).toBeFocused();
+  const splitState = await readMovementState();
+  expect(splitState.flatMap(({ members }) => members).sort()).toEqual([
+    "transit:chain-a", "transit:chain-b", "transit:chain-c"
+  ]);
+  if (test.info().project.name === "desktop") {
+    expect(splitState.length).toBeGreaterThan(1);
+  } else {
+    expect(splitState).toHaveLength(1);
+    expect(splitState[0]?.members).toEqual(["transit:chain-a", "transit:chain-b", "transit:chain-c"]);
+  }
+  expect(splitState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
+  expect(splitState.filter(({ tabIndex }) => tabIndex === -1)).toHaveLength(splitState.length - 1);
 });
 
 test("duplicate public transport IDs resolve newest data and stable equal-time payloads", async ({ page }) => {
@@ -1535,7 +1568,7 @@ test("radar context exposes five-minute imagery and playback controls", async ({
   } else {
     await enableExploreLayer(page, /Rainfall radar/);
   }
-  await expect(page.getByText("Rainfall radar", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("Rainfall radar timeline")).toBeVisible();
   if (await page.locator(".radar-tiles image").count()) {
     await expect(page.locator(".radar-tiles image")).toHaveCount(4);
     await expect(page.getByLabel("Rainfall radar timeline")).toBeVisible();
@@ -1590,7 +1623,11 @@ test("new public contexts are discoverable and honestly describe unavailable dat
   await enableExploreLayer(page, /Earthquakes/);
 
   await page.getByRole("button", { name: "Explore", exact: true }).click();
-  await expect(page.getByRole("button", { name: /Public transport/ })).toBeVisible();
+  const movementGroup = page.locator('.explore-panel details[data-layer-group="movement"]');
+  if (!(await movementGroup.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await movementGroup.locator("summary").click();
+  }
+  await expect(movementGroup.getByRole("button", { name: /Public transport/ })).toBeVisible();
 });
 
 test("notable-now board is present without fabricating an event", async ({ page }) => {
@@ -1624,28 +1661,39 @@ test("all layers includes satellite and public transport", async ({ page }) => {
     .getByRole("button", { name: /All layers/ })
     .click();
   await page.getByRole("button", { name: "Explore", exact: true }).click();
-  await expect(page.getByRole("button", { name: /Satellite image/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", { name: /Public transport/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Satellite image/, includeHidden: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Public transport/, includeHidden: true })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("all-layer context panels do not overlap each other or map navigation", async ({ page }, testInfo) => {
-  if (testInfo.project.name !== "desktop") testInfo.skip();
+test("all-layer context panels disclose outside the map canvas without overlap", async ({ page }) => {
   await page.goto("/?view=all");
 
-  const panels = page.locator(".desktop-context-stack .map-data-panel");
+  const canvas = page.locator(".map-canvas");
+  const disclosure = page.locator(".map-context-disclosure");
+  await expect(disclosure).not.toHaveAttribute("open", "");
+  expect(await canvas.locator(".map-context-disclosure").count()).toBe(0);
+  await disclosure.locator("summary").click();
+  await expect(disclosure).toHaveAttribute("open", "");
+  const panels = disclosure.locator(".map-context-grid .map-data-panel");
   await expect(panels).toHaveCount(3);
-  const panelBoxes = await panels.evaluateAll((elements) => elements.map((element) => {
-    const bounds = element.getBoundingClientRect();
-    return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right };
-  }));
-  const navigationBox = await page.locator(".map-navigation").evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right };
+  const geometry = await page.evaluate(() => {
+    const canvasBounds = document.querySelector(".map-canvas")!.getBoundingClientRect();
+    const disclosureBounds = document.querySelector(".map-context-disclosure")!.getBoundingClientRect();
+    const panels = [...document.querySelectorAll(".map-context-grid .map-data-panel")].map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right };
+    });
+    return { canvasBottom: canvasBounds.bottom, disclosureTop: disclosureBounds.top, panels };
   });
-
-  expect(navigationBox.bottom).toBeLessThanOrEqual(panelBoxes[0].top);
-  for (let index = 1; index < panelBoxes.length; index += 1) {
-    expect(panelBoxes[index - 1].bottom).toBeLessThanOrEqual(panelBoxes[index].top);
+  expect(geometry.disclosureTop).toBeGreaterThanOrEqual(geometry.canvasBottom - 1);
+  for (let first = 0; first < geometry.panels.length; first += 1) {
+    for (let second = first + 1; second < geometry.panels.length; second += 1) {
+      const a = geometry.panels[first]!;
+      const b = geometry.panels[second]!;
+      const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      expect(overlapX > 1 && overlapY > 1).toBe(false);
+    }
   }
 });
 
@@ -1664,20 +1712,22 @@ test("deep links still hydrate when local storage is blocked", async ({ page }) 
 
 test("map details behave as an accessible dialog", async ({ page }) => {
   await page.goto("/");
-  const secondMarker = await page.locator(".station-marker").nth(1).boundingBox();
-  await page.locator(".station-marker").first().click();
+  const opener = page.locator(".station-marker").first();
+  await opener.click();
   await expect(page.locator('[role="dialog"].detail-station')).toBeVisible();
   await expect(page.getByRole("button", { name: "Close map details" })).toBeFocused();
   await expect(page.locator(".experience")).toHaveAttribute("inert", "");
-  const detailTitle = page.locator('.station-card[role="dialog"] h2');
-  const title = await detailTitle.textContent();
-  if (secondMarker) {
-    await page.mouse.click(secondMarker.x + secondMarker.width / 2, secondMarker.y + secondMarker.height / 2);
-    await expect(detailTitle).toHaveText(title ?? "");
-  }
+  await page.locator(".detail-modal-layer").click({ position: { x: 8, y: 8 } });
+  await expect(page.locator('.station-card[role="dialog"]')).toHaveCount(0);
+  await expect(page.locator(".experience")).not.toHaveAttribute("inert", "");
+  await expect(opener).toBeFocused();
+
+  await opener.press("Enter");
+  await expect(page.locator('[role="dialog"].detail-station')).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator('.station-card[role="dialog"]')).toHaveCount(0);
   await expect(page.locator(".experience")).not.toHaveAttribute("inert", "");
+  await expect(opener).toBeFocused();
 });
 
 test("tide details explain negative datum heights and order upcoming events by time", async ({ page }) => {

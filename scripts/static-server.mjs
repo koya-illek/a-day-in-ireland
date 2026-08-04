@@ -3,6 +3,10 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 
 const root = join(process.cwd(), "dist", "client");
+const port = Number.parseInt(process.env.PORT ?? process.env.PLAYWRIGHT_PORT ?? "3000", 10);
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error(`Invalid static server port: ${process.env.PORT ?? process.env.PLAYWRIGHT_PORT}`);
+}
 const types = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -17,7 +21,7 @@ createServer(async (request, response) => {
     if (process.env.LIVE_CONTEXTS === "1") {
       const { default: worker } = await import("../platform/server-entry.js");
       const env = process.env.NTA_API_KEY ? { NTA_API_KEY: process.env.NTA_API_KEY } : {};
-      const upstream = await worker.fetch(new Request(`http://127.0.0.1:3000${request.url}`), env);
+      const upstream = await worker.fetch(new Request(`http://127.0.0.1:${port}${request.url}`), env);
       response.writeHead(upstream.status, Object.fromEntries(upstream.headers));
       response.end(Buffer.from(await upstream.arrayBuffer()));
       return;
@@ -43,4 +47,4 @@ createServer(async (request, response) => {
   });
   response.on("error", () => stream.destroy());
   stream.pipe(response);
-}).listen(3000, "127.0.0.1");
+}).listen(port, "127.0.0.1");
