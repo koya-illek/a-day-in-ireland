@@ -840,6 +840,19 @@ body { background: #050d1b; font-family: Inter, "DM Sans", system-ui, sans-serif
   stroke-width: 4px;
 }
 .wind-marker:hover circle, .wind-marker:focus circle { fill: rgba(0, 219, 233, .24); stroke: #00f0ff; stroke-width: 2; }
+.wind-marker[aria-hidden="true"] { pointer-events: auto; }
+.map-marker-focus-ring {
+  fill: none !important;
+  opacity: 0 !important;
+  pointer-events: none;
+  stroke: #fff !important;
+  stroke-width: 2.5px !important;
+  vector-effect: non-scaling-stroke;
+}
+[data-map-marker]:focus-visible > .map-marker-focus-ring {
+  filter: drop-shadow(0 0 4px #00f0ff);
+  opacity: .95 !important;
+}
 .air-marker { cursor: pointer; outline: none; }
 .air-marker circle { fill: #4edea3; opacity: .88; stroke: #dffef3; stroke-width: 1; }
 .air-marker.modelled circle { fill-opacity: .2; stroke-dasharray: 2 2; stroke-width: 2; }

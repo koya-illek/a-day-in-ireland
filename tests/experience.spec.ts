@@ -22,6 +22,89 @@ function metObservationTime(minutesAgo: number) {
   return { date: `${parts.day}-${parts.month}-${parts.year}`, reportTime: `${parts.hour}:${parts.minute}` };
 }
 
+async function installMapMarkerFixtures(page: Page) {
+  const stationNames = new Map([
+    ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
+    ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
+    ["valentia", "Valentia"], ["cork", "Cork"], ["johnstown-castle", "Johnstown Castle"]
+  ]);
+  const observation = metObservationTime(5);
+  const observedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+
+  await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => {
+    const endpoint = new URL(route.request().url()).pathname.split("/")[2];
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify([{
+        name: stationNames.get(endpoint) ?? "Unknown station",
+        ...observation,
+        temperature: "16",
+        rainfall: "0.4",
+        windSpeed: "12",
+        cardinalWindDirection: "E",
+        weatherDescription: "Bright intervals"
+      }])
+    });
+  });
+  await page.route("https://www.met.ie/latest-reports/observations/download", (route) => route.fulfill({
+    contentType: "text/csv",
+    body: "Name,Temperature,Description,Wind,Unused,Direction,Unused,Rain,Unused\n"
+  }));
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      trains: [{
+        id: "fixture-train", latitude: 52.15, longitude: -7.4, status: "running",
+        direction: "South", message: "Fixture service", observedAt, speedKmh: null, speedSource: null
+      }],
+      rivers: [{
+        id: "fixture-river", name: "Fixture River", latitude: 53.1, longitude: -8.1,
+        level: 1.42, observedAt
+      }],
+      sourceStatus: { trains: "live", rivers: "live" }
+    })
+  }));
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      marine: [{
+        id: "fixture-buoy", name: "Fixture Buoy", kind: "weather-buoy", latitude: 53.8, longitude: -10.2,
+        observedAt, windSpeedKnots: 8, waveHeight: 1.1, wavePeriod: 5, seaTemperature: 14
+      }],
+      radar: [],
+      grid: null,
+      airQuality: [{
+        id: "fixture-air", name: "Fixture Air", latitude: 53.4, longitude: -6.5, observedAt,
+        europeanAqi: 32, pm25: 8, pm10: 14, nitrogenDioxide: 11, ozone: 80, uvIndex: 2,
+        grassPollen: 1, source: "modelled", stationClassification: null
+      }],
+      aurora: null,
+      tides: [{
+        id: "fixture-tide", name: "Fixture Tide", latitude: 53.3, longitude: -9.7, observedAt,
+        waterLevel: 1.2, predictedLevel: 1.1, surge: 0.1, trend: "rising",
+        nextHighAt: observedAt, nextHighLevel: 1.8, nextLowAt: observedAt, nextLowLevel: 0.4
+      }],
+      bathingAlerts: [],
+      warnings: [],
+      warningsStatus: "live",
+      issTle: null,
+      satellite: null,
+      earthquakes: [{
+        id: "fixture-quake", latitude: 53.5, longitude: -8.5, magnitude: 2.1, depthKm: 8,
+        place: "Fixture event", observedAt, detailUrl: "https://example.test/quake"
+      }],
+      contextStatus: {
+        marine: "live", measuredAir: "live", tides: "live", bathing: "live",
+        satellite: "unavailable", earthquakes: "live", iss: "unavailable", warnings: "live"
+      }
+    })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+}
+
 test("boot refresh uses canonical weather stations and one contexts request", async ({ page }) => {
   const stationNames = new Map([
     ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
@@ -241,6 +324,218 @@ test("explore layers and station details are interactive", async ({ page }) => {
   await expect(page.locator(".station-card h2")).not.toHaveText("");
   await expect(page.locator(".station-card .station-temperature")).toContainText(/°/);
   await expect(page.locator(".station-card dl")).toBeVisible();
+});
+
+test("map markers use one roving tab stop in default and all-layer views", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+
+  const map = page.locator("svg.ireland-map");
+  await expect(map).toHaveAttribute("role", "group");
+  await expect(map).toHaveAttribute("aria-describedby", /map-keyboard-instructions/);
+  await expect(page.locator("#map-keyboard-instructions")).toContainText(/Home and End/);
+  await expect(page.locator(".wind-marker[aria-hidden='true']")).toHaveCount(9);
+  await expect(page.locator(".wind-marker[role='button']")).toHaveCount(0);
+
+  const readTabStops = () => page.locator("svg.ireland-map [data-map-marker]").evaluateAll((markers) => ({
+    ids: markers.map((marker) => marker.getAttribute("data-marker-id")),
+    tabIndexes: markers.map((marker) => (marker as SVGElement).tabIndex)
+  }));
+  const defaultStops = await readTabStops();
+  expect(defaultStops.ids).toHaveLength(9);
+  expect(new Set(defaultStops.ids).size).toBe(defaultStops.ids.length);
+  expect(defaultStops.tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(defaultStops.tabIndexes.filter((tabIndex) => tabIndex === -1)).toHaveLength(8);
+
+  const secondDefaultMarker = page.locator("svg.ireland-map [data-marker-id='station:finner']");
+  await secondDefaultMarker.focus();
+  await expect(secondDefaultMarker).toHaveAttribute("tabindex", "0");
+  await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /All layers/ }).click();
+  await expect(secondDefaultMarker).toHaveAttribute("tabindex", "0");
+  await secondDefaultMarker.focus();
+  await page.keyboard.press("Tab");
+  expect(await page.locator("svg.ireland-map [data-map-marker]:focus").count()).toBe(0);
+  await page.keyboard.press("Shift+Tab");
+  await expect(secondDefaultMarker).toBeFocused();
+
+  await page.goto("/?view=all");
+  await expect(page.locator(".river-marker")).toHaveCount(1);
+  await expect(page.locator(".tide-marker")).toHaveCount(1);
+  await expect(page.locator(".air-marker")).toHaveCount(1);
+  await expect(page.locator(".train-marker")).toHaveCount(1);
+  await expect.poll(() => page.locator("svg.ireland-map [data-map-marker]").count()).toBeGreaterThan(defaultStops.ids.length);
+  const allStops = await readTabStops();
+  expect(allStops.ids.length).toBeGreaterThan(defaultStops.ids.length);
+  expect(new Set(allStops.ids).size).toBe(allStops.ids.length);
+  expect(allStops.tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(allStops.tabIndexes.filter((tabIndex) => tabIndex === -1)).toHaveLength(allStops.ids.length - 1);
+  expect(await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((markers) => markers.some((marker) => marker.getAttribute("tabindex") === "0"))).toBe(true);
+});
+
+test("map marker keyboard navigation announces position, prevents scroll, and restores focus", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  await page.evaluate(() => { document.documentElement.style.scrollBehavior = "auto"; });
+
+  const markers = page.locator("svg.ireland-map [data-map-marker]");
+  const first = markers.first();
+  const second = markers.nth(1);
+  const last = markers.last();
+  await first.focus();
+  await expect(first).toBeFocused();
+  await expect(page.locator("#map-marker-announcement")).toHaveText(/item 1 of 9/);
+
+  await page.keyboard.press("ArrowRight");
+  await expect(second).toBeFocused();
+  await expect(page.locator("#map-marker-announcement")).toHaveText(/item 2 of 9/);
+  await page.keyboard.press("ArrowDown");
+  await expect(markers.nth(2)).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(second).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(first).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(last).toBeFocused();
+  await expect(page.locator("#map-marker-announcement")).toHaveText(/item 9 of 9/);
+
+  await first.focus();
+  await page.evaluate(() => window.scrollTo({ left: window.scrollX, top: window.scrollY, behavior: "instant" }));
+  const beforeScroll = await page.evaluate(() => window.scrollY);
+  await page.keyboard.press("Space");
+  expect(await page.evaluate(() => window.scrollY)).toBe(beforeScroll);
+  await expect(page.locator(".detail-station")).toBeVisible();
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(first).toBeFocused();
+
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".detail-station")).toBeVisible();
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(first).toBeFocused();
+});
+
+test("weather and wind share one accessible station entry while wind-only remains keyboard accessible", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  await expect(page.locator("svg.ireland-map [role='button']")).toHaveCount(9);
+  expect(await page.locator(".wind-marker[aria-hidden='true']").first().getAttribute("aria-label")).toBeNull();
+  await expect(page.locator(".station-marker").first()).toHaveAccessibleName(/Bright intervals.*wind 12 kilometres per hour/);
+
+  await page.goto("/?view=custom&layers=wind");
+  await expect(page.locator(".station-marker")).toHaveCount(0);
+  await expect(page.locator(".wind-marker[role='button']")).toHaveCount(9);
+  await expect(page.locator("svg.ireland-map [role='button']")).toHaveCount(9);
+  const windStops = await page.locator(".wind-marker[role='button']").evaluateAll((markers) => markers.map((marker) => (marker as SVGElement).tabIndex));
+  expect(windStops.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(windStops.filter((tabIndex) => tabIndex === -1)).toHaveLength(8);
+  await page.locator(".wind-marker[role='button']").first().focus();
+  await expect(page.locator("#map-marker-announcement")).toHaveText(/wind 12 kilometres per hour.*item 1 of 9/);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".detail-station")).toBeVisible();
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(page.locator(".wind-marker[role='button']").first()).toBeFocused();
+});
+
+test("station identity and focus survive weather and wind representation changes", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const weatherLayer = page.locator(".explore-panel").getByRole("button", { name: /Weather stations/ });
+  const finner = page.locator("[data-marker-id='station:finner']");
+  await finner.focus();
+
+  const toggleWithoutMovingFocus = () => weatherLayer.evaluate((button) => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  await toggleWithoutMovingFocus();
+  const windFinner = page.locator(".wind-marker[data-marker-id='station:finner']");
+  await expect(windFinner).toBeVisible();
+  await expect(page.locator(".station-marker")).toHaveCount(0);
+  await expect(windFinner).toBeFocused();
+  await expect(windFinner).toHaveAttribute("tabindex", "0");
+
+  await toggleWithoutMovingFocus();
+  const weatherFinner = page.locator(".station-marker[data-marker-id='station:finner']");
+  await expect(weatherFinner).toBeVisible();
+  await expect(weatherFinner).toBeFocused();
+  await expect(weatherFinner).toHaveAttribute("tabindex", "0");
+
+  await weatherLayer.focus();
+  await weatherLayer.click();
+  await expect(weatherLayer).toBeFocused();
+  await expect(page.locator("[data-map-marker]:focus")).toHaveCount(0);
+  await weatherLayer.click();
+  await expect(weatherLayer).toBeFocused();
+  await expect(page.locator("[data-map-marker]:focus")).toHaveCount(0);
+
+  await weatherFinner.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Close map details" })).toBeFocused();
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(weatherFinner).toBeFocused();
+
+  const ids = await page.locator("[data-map-marker]").evaluateAll((markers) =>
+    markers.map((marker) => marker.getAttribute("data-marker-id"))
+  );
+  expect(new Set(ids).size).toBe(ids.length);
+});
+
+test("focus rings are hidden until focus-visible without changing marker opacity", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/?view=all");
+
+  const readRingStyle = (selector: string) => page.locator(selector).first().evaluate((marker) => {
+    const ring = marker.querySelector<SVGCircleElement>(":scope > .map-marker-focus-ring");
+    const ordinaryCircle = marker.querySelector<SVGCircleElement>(":scope > circle:not(.map-marker-focus-ring)");
+    return {
+      ringOpacity: ring ? Number(getComputedStyle(ring).opacity) : -1,
+      ordinaryOpacity: ordinaryCircle ? Number(getComputedStyle(ordinaryCircle).opacity) : -1,
+      focusVisible: marker.matches(":focus-visible")
+    };
+  });
+
+  const air = page.locator(".air-marker").first();
+  const movement = page.locator(".train-marker").first();
+  await expect(air).toBeVisible();
+  await expect(movement).toBeVisible();
+  expect((await readRingStyle(".air-marker")).ringOpacity).toBe(0);
+  expect((await readRingStyle(".air-marker")).ordinaryOpacity).toBeCloseTo(.88);
+  expect((await readRingStyle(".train-marker")).ringOpacity).toBe(0);
+
+  await air.focus();
+  await expect.poll(async () => (await readRingStyle(".air-marker")).focusVisible).toBe(true);
+  await expect.poll(async () => (await readRingStyle(".air-marker")).ringOpacity).toBeGreaterThan(0);
+  await movement.focus();
+  await expect.poll(async () => (await readRingStyle(".train-marker")).focusVisible).toBe(true);
+  await expect.poll(async () => (await readRingStyle(".train-marker")).ringOpacity).toBeGreaterThan(0);
+});
+
+test("representative map marker pointer activation opens each available detail", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/?view=all");
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const radar = page.locator(".explore-panel").getByRole("button", { name: /Rainfall radar/ });
+  if (await radar.getAttribute("aria-pressed") === "true") await radar.click();
+  await page.getByRole("button", { name: "Close explore panel" }).click();
+  for (const selector of [
+    ".station-marker",
+    ".river-marker",
+    ".tide-marker",
+    ".air-marker",
+    ".train-marker"
+  ]) {
+    const marker = page.locator(selector).first();
+    await expect(marker).toBeVisible();
+    await marker.click();
+    await expect(page.locator(".station-card")).toBeVisible();
+    await page.getByRole("button", { name: "Close map details" }).click();
+  }
 });
 
 test("explore layers stay grouped while preserving all layer IDs", async ({ page }) => {
@@ -489,6 +784,587 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
   await expect(page.locator(".detail-transit")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Route 42" })).toBeVisible();
   await expect(page.locator(".detail-transit")).toContainText("≈ 20 km/h");
+});
+
+test("moving transport keeps its marker identity through a boundary crossing and cluster split", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 65_000 ? 250 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const observedAt = new Date().toISOString();
+  let refreshes = 0;
+  const vehicle = (id: string, longitude: number) => ({
+    id,
+    label: "Boundary bus",
+    route: "42",
+    latitude: 53.35,
+    longitude,
+    bearing: 90,
+    speedKmh: 20,
+    speedSource: "reported",
+    observedAt
+  });
+  await page.route("**/api/transit", async (route) => {
+    refreshes += 1;
+    const body = refreshes === 1
+      ? { transit: [vehicle("boundary-bus", -6.26)], transitStatus: "live" }
+      : refreshes === 2
+        ? { transit: [vehicle("boundary-bus", -6.02), vehicle("merge-bus", -6.02)], transitStatus: "live" }
+        : { transit: [vehicle("boundary-bus", -6.02), vehicle("merge-bus", -9.2)], transitStatus: "live" };
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+  });
+
+  await page.goto("/?view=custom&layers=transit");
+  const marker = page.locator("[data-marker-id='movement:transit:boundary-bus']");
+  await expect(marker).toHaveCount(1);
+  await marker.focus();
+  const firstTransform = await marker.getAttribute("transform");
+  await page.evaluate(() => {
+    const current = document.querySelector("[data-marker-id='movement:transit:boundary-bus']");
+    (window as unknown as { __boundaryMarker?: Element }).__boundaryMarker = current ?? undefined;
+  });
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  await expect.poll(() => page.locator(".movement-stack-marker").count()).toBe(1);
+  await expect.poll(() => marker.getAttribute("transform")).not.toBe(firstTransform);
+  await expect(marker).toBeFocused();
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(3);
+  await expect(marker).toBeFocused();
+  expect(await page.evaluate(() => {
+    const current = document.querySelector("[data-marker-id='movement:transit:boundary-bus']");
+    const remembered = (window as unknown as { __boundaryMarker?: Element }).__boundaryMarker;
+    return remembered === current;
+  })).toBe(true);
+  const markers = page.locator("[data-map-marker]");
+  const markerState = await markers.evaluateAll((elements) => ({
+    ids: elements.map((element) => element.getAttribute("data-marker-id")),
+    tabIndexes: elements.map((element) => (element as SVGElement).tabIndex)
+  }));
+  expect(new Set(markerState.ids).size).toBe(markerState.ids.length);
+  expect(markerState.tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  expect(markerState.tabIndexes.filter((tabIndex) => tabIndex === -1)).toHaveLength(markerState.ids.length - 1);
+});
+
+test("movement clustering is deterministic across provider permutations and preserves focus", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 65_000 ? 800 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const observedAt = new Date().toISOString();
+  const vehicle = (id: string, longitude: number) => ({
+    id,
+    label: "Permutation test bus",
+    route: "chain",
+    latitude: 53.35,
+    longitude,
+    bearing: 90,
+    speedKmh: 20,
+    speedSource: "reported" as const,
+    observedAt
+  });
+  const chain = [
+    vehicle("chain-a", -8.35),
+    vehicle("chain-b", -8.125),
+    vehicle("chain-c", -7.9)
+  ];
+  let refreshes = 0;
+  const requestedOrders: string[] = [];
+  await page.route("**/api/transit", async (route) => {
+    refreshes += 1;
+    const orderedVehicles = refreshes === 1 ? chain : [chain[1]!, chain[0]!, chain[2]!];
+    requestedOrders.push(orderedVehicles.map((item) => item.id).join(","));
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transit: orderedVehicles, transitStatus: "live" })
+    });
+  });
+
+  await page.goto("/?view=custom&layers=transit");
+  const movementMarkers = page.locator("svg.ireland-map [data-marker-id^='movement:']");
+  const readMovementState = () => movementMarkers.evaluateAll((markers) => markers.map((marker) => ({
+    id: marker.getAttribute("data-marker-id"),
+    members: (marker.getAttribute("data-movement-members") ?? "").split(",").filter(Boolean).sort(),
+    transform: marker.getAttribute("transform"),
+    tabIndex: (marker as SVGElement).tabIndex
+  })).sort((first, second) => {
+    const firstId = first.id ?? "";
+    const secondId = second.id ?? "";
+    return firstId < secondId ? -1 : firstId > secondId ? 1 : 0;
+  }));
+
+  await expect(movementMarkers).toHaveCount(2);
+  const firstState = await readMovementState();
+  expect(requestedOrders[0]).toBe("chain-a,chain-b,chain-c");
+  expect(firstState.map(({ id, members }) => ({ id, members }))).toEqual([
+    { id: "movement:transit:chain-a", members: ["transit:chain-a", "transit:chain-b"] },
+    { id: "movement:transit:chain-c", members: ["transit:chain-c"] }
+  ]);
+  expect(new Set(firstState.map(({ id }) => id)).size).toBe(firstState.length);
+  expect(firstState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
+  expect(firstState.filter(({ tabIndex }) => tabIndex === -1)).toHaveLength(firstState.length - 1);
+
+  const focusedMarker = page.locator("[data-marker-id='movement:transit:chain-a']");
+  await focusedMarker.focus();
+  await expect(focusedMarker).toBeFocused();
+  await page.evaluate(() => {
+    const marker = document.querySelector("[data-marker-id='movement:transit:chain-a']");
+    (window as unknown as { __focusedMovementMarker?: Element }).__focusedMovementMarker = marker ?? undefined;
+  });
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  expect(requestedOrders.slice(0, 2)).toEqual(["chain-a,chain-b,chain-c", "chain-b,chain-a,chain-c"]);
+  const secondState = await readMovementState();
+  expect(secondState).toEqual(firstState);
+  expect(new Set(secondState.map(({ id }) => id)).size).toBe(secondState.length);
+  expect(secondState.filter(({ tabIndex }) => tabIndex === 0)).toHaveLength(1);
+  expect(secondState.filter(({ tabIndex }) => tabIndex === -1)).toHaveLength(secondState.length - 1);
+  await expect(focusedMarker).toBeFocused();
+  expect(await page.evaluate(() => {
+    const current = document.querySelector("[data-marker-id='movement:transit:chain-a']");
+    const remembered = (window as unknown as { __focusedMovementMarker?: Element }).__focusedMovementMarker;
+    return current === remembered;
+  })).toBe(true);
+});
+
+test("duplicate public transport IDs resolve newest data and stable equal-time payloads", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 65_000 ? 800 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const olderAt = new Date(Date.now() - 5 * 60_000).toISOString();
+  const newerAt = new Date(Date.now() - 4 * 60_000).toISOString();
+  const equalAt = new Date(Date.now() - 3 * 60_000).toISOString();
+  const vehicle = (route: string, label: string, latitude: number, longitude: number, observedAt: string) => ({
+    id: "duplicate-transit",
+    label,
+    route,
+    latitude,
+    longitude,
+    bearing: 90,
+    speedKmh: 20,
+    speedSource: "reported" as const,
+    observedAt
+  });
+  const older = vehicle("older-route", "Older position", 53.35, -9.2, olderAt);
+  const newer = vehicle("newest-route", "Newest position", 53.35, -6.26, newerAt);
+  const equalWest = vehicle("equal-west", "Equal west position", 53.35, -9.2, equalAt);
+  const equalEast = vehicle("equal-east", "Equal east position", 53.35, -7.4, equalAt);
+  const responses = [
+    [older, newer],
+    [newer, older],
+    [equalWest, equalEast],
+    [equalEast, equalWest]
+  ];
+  let refreshes = 0;
+
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+  }));
+  await page.route("**/api/transit", (route) => {
+    const ordered = responses[Math.min(refreshes, responses.length - 1)]!;
+    refreshes += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transit: ordered, transitStatus: "live" })
+    });
+  });
+
+  await page.goto("/?view=custom&layers=transit");
+  const marker = page.locator("[data-marker-id='movement:transit:duplicate-transit']");
+  const readState = () => marker.evaluate((element) => ({
+    id: element.getAttribute("data-marker-id"),
+    transform: element.getAttribute("transform"),
+    members: element.getAttribute("data-movement-members"),
+    ariaLabel: element.getAttribute("aria-label"),
+    tabIndex: (element as SVGElement).tabIndex
+  }));
+  const assertOneRovingStop = async () => {
+    const tabIndexes = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((elements) =>
+      elements.map((element) => (element as SVGElement).tabIndex)
+    );
+    expect(tabIndexes).toHaveLength(1);
+    expect(tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  };
+
+  await expect(marker).toHaveCount(1);
+  await marker.focus();
+  const firstState = await readState();
+  expect(firstState.ariaLabel).toContain("Route newest-route");
+  await assertOneRovingStop();
+  await page.evaluate(() => {
+    (window as unknown as { __duplicateTransitMarker?: Element }).__duplicateTransitMarker =
+      document.querySelector("[data-marker-id='movement:transit:duplicate-transit']") ?? undefined;
+  });
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  const secondState = await readState();
+  expect(secondState).toEqual(firstState);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  expect(await page.evaluate(() => {
+    const markerElement = document.querySelector("[data-marker-id='movement:transit:duplicate-transit']");
+    const remembered = (window as unknown as { __duplicateTransitMarker?: Element }).__duplicateTransitMarker;
+    return markerElement === remembered;
+  })).toBe(true);
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(3);
+  const thirdState = await readState();
+  expect(thirdState.id).toBe(firstState.id);
+  expect(thirdState.members).toBe(firstState.members);
+  expect(thirdState.transform).not.toBe(firstState.transform);
+  await assertOneRovingStop();
+  await expect(marker).toBeFocused();
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(4);
+  const fourthState = await readState();
+  expect(fourthState).toEqual(thirdState);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  expect(await page.evaluate(() => {
+    const markerElement = document.querySelector("[data-marker-id='movement:transit:duplicate-transit']");
+    const remembered = (window as unknown as { __duplicateTransitMarker?: Element }).__duplicateTransitMarker;
+    return markerElement === remembered;
+  })).toBe(true);
+});
+
+test("duplicate public transport IDs resolve U+001F route/label collisions independently of order", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 65_000 ? 800 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+  const separator = "\u001f";
+  const vehicle = (route: string, label: string) => ({
+    id: "separator-transit",
+    label,
+    route,
+    latitude: 53.35,
+    longitude: -7.4,
+    bearing: 90,
+    speedKmh: 20,
+    speedSource: "reported" as const,
+    observedAt
+  });
+  const first = vehicle(`x${separator}string:y`, "z");
+  const second = vehicle("x", `y${separator}string:z`);
+  const responses = [
+    [first, second],
+    [second, first],
+    [first, second],
+    [second, first]
+  ];
+  let refreshes = 0;
+
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+  }));
+  await page.route("**/api/transit", (route) => {
+    const ordered = responses[Math.min(refreshes, responses.length - 1)]!;
+    refreshes += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transit: ordered, transitStatus: "live" })
+    });
+  });
+
+  await page.goto("/?view=custom&layers=transit");
+  const marker = page.locator("[data-marker-id='movement:transit:separator-transit']");
+  const readState = () => marker.evaluate((element) => ({
+    id: element.getAttribute("data-marker-id"),
+    transform: element.getAttribute("transform"),
+    members: element.getAttribute("data-movement-members"),
+    ariaLabel: element.getAttribute("aria-label"),
+    tabIndex: (element as SVGElement).tabIndex
+  }));
+  const assertOneRovingStop = async () => {
+    const tabIndexes = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((elements) =>
+      elements.map((element) => (element as SVGElement).tabIndex)
+    );
+    expect(tabIndexes).toHaveLength(1);
+    expect(tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  };
+  const openWithEnter = async () => {
+    await marker.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".detail-transit")).toBeVisible();
+    const detail = await page.locator(".detail-transit").innerText();
+    expect(detail).toContain(`y${separator}string:z`);
+    await page.getByRole("button", { name: "Close map details" }).click();
+    await expect(marker).toBeFocused();
+    return detail;
+  };
+
+  await expect(marker).toHaveCount(1);
+  const firstState = await readState();
+  expect(firstState).toEqual({
+    id: "movement:transit:separator-transit",
+    transform: firstState.transform,
+    members: "transit:separator-transit",
+    ariaLabel: "Route x, live public transport position",
+    tabIndex: 0
+  });
+  const firstDetail = await openWithEnter();
+  await marker.click();
+  await expect(page.locator(".detail-transit")).toBeVisible();
+  await expect(page.locator(".detail-transit")).toContainText(`y${separator}string:z`);
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  await page.evaluate(() => {
+    (window as unknown as { __separatorTransitMarker?: Element }).__separatorTransitMarker =
+      document.querySelector("[data-marker-id='movement:transit:separator-transit']") ?? undefined;
+  });
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  const secondState = await readState();
+  expect(secondState).toEqual(firstState);
+  expect(await openWithEnter()).toBe(firstDetail);
+  await assertOneRovingStop();
+  expect(await page.evaluate(() => {
+    const current = document.querySelector("[data-marker-id='movement:transit:separator-transit']");
+    const remembered = (window as unknown as { __separatorTransitMarker?: Element }).__separatorTransitMarker;
+    return current === remembered;
+  })).toBe(true);
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(3);
+  const thirdState = await readState();
+  expect(thirdState).toEqual(firstState);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(4);
+  const fourthState = await readState();
+  expect(fourthState).toEqual(firstState);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+});
+
+test("duplicate train IDs resolve equal-time direction/message separator collisions identically", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 60_000 ? 800 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const observedAt = new Date(Date.now() - 2 * 60_000).toISOString();
+  const separator = "\u001f";
+  const train = (direction: string, message: string, latitude: number, longitude: number) => ({
+    id: "duplicate-train",
+    latitude,
+    longitude,
+    status: "running" as const,
+    direction,
+    message,
+    observedAt,
+    speedKmh: 48,
+    speedSource: "calculated" as const
+  });
+  const west = train(`x${separator}string:y`, "z", 53.35, -7.4);
+  const east = train("x", `y${separator}string:z`, 53.35, -7.4);
+  const responses = [[west, east], [east, west]];
+  let refreshes = 0;
+
+  await page.route("**/api/living", (route) => {
+    const ordered = responses[Math.min(refreshes, responses.length - 1)]!;
+    refreshes += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        trains: ordered,
+        rivers: [],
+        sourceStatus: { trains: "live", rivers: "unavailable" }
+      })
+    });
+  });
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+
+  await page.goto("/?view=custom&layers=trains");
+  const marker = page.locator("[data-marker-id='movement:train:duplicate-train']");
+  const readState = () => marker.evaluate((element) => ({
+    id: element.getAttribute("data-marker-id"),
+    transform: element.getAttribute("transform"),
+    members: element.getAttribute("data-movement-members"),
+    ariaLabel: element.getAttribute("aria-label"),
+    className: element.getAttribute("class"),
+    tabIndex: (element as SVGElement).tabIndex
+  }));
+  const readDetail = async () => {
+    await marker.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".detail-train")).toBeVisible();
+    const detail = await page.locator(".detail-train").innerText();
+    await page.getByRole("button", { name: "Close map details" }).click();
+    await expect(marker).toBeFocused();
+    return detail;
+  };
+  const assertOneRovingStop = async () => {
+    const tabIndexes = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((elements) =>
+      elements.map((element) => (element as SVGElement).tabIndex)
+    );
+    expect(tabIndexes).toHaveLength(1);
+    expect(tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  };
+
+  await expect(marker).toHaveCount(1);
+  const firstState = await readState();
+  const firstDetail = await readDetail();
+  expect(firstState.ariaLabel).toBe("Train duplicate-train, x, running");
+  expect(firstDetail).toContain(`y${separator}string:z`);
+  const expectedCheckedTime = new Intl.DateTimeFormat("en-IE", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/Dublin"
+  }).format(new Date(observedAt));
+  expect(firstDetail).toContain(expectedCheckedTime);
+  await assertOneRovingStop();
+  await page.evaluate(() => {
+    (window as unknown as { __duplicateTrainMarker?: Element }).__duplicateTrainMarker =
+      document.querySelector("[data-marker-id='movement:train:duplicate-train']") ?? undefined;
+  });
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  const secondState = await readState();
+  const secondDetail = await readDetail();
+  expect(secondState).toEqual(firstState);
+  expect(secondDetail).toBe(firstDetail);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  expect(await page.evaluate(() => {
+    const markerElement = document.querySelector("[data-marker-id='movement:train:duplicate-train']");
+    const remembered = (window as unknown as { __duplicateTrainMarker?: Element }).__duplicateTrainMarker;
+    return markerElement === remembered;
+  })).toBe(true);
+});
+
+test("duplicate trains with invalid timestamps remain deterministic and show unavailable time", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetInterval = window.setInterval;
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetInterval(handler, timeout === 60_000 ? 800 : timeout, ...args)
+    ) as typeof window.setInterval;
+  });
+  const train = (direction: string, message: string, observedAt: string) => ({
+    id: "invalid-date-train",
+    latitude: 53.35,
+    longitude: -7.4,
+    status: "running" as const,
+    direction,
+    message,
+    observedAt,
+    speedKmh: 48,
+    speedSource: "calculated" as const
+  });
+  const first = train("Alpha", "Alpha detail", "invalid-alpha-time");
+  const second = train("Beta", "Beta detail", "invalid-beta-time");
+  const responses = [
+    [first, second],
+    [second, first],
+    [first, second]
+  ];
+  let refreshes = 0;
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+
+  await page.route("**/api/living", (route) => {
+    const ordered = responses[Math.min(refreshes, responses.length - 1)]!;
+    refreshes += 1;
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        trains: ordered,
+        rivers: [],
+        sourceStatus: { trains: "live", rivers: "unavailable" }
+      })
+    });
+  });
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+
+  await page.goto("/?view=custom&layers=trains");
+  const marker = page.locator("[data-marker-id='movement:train:invalid-date-train']");
+  const readState = () => marker.evaluate((element) => ({
+    id: element.getAttribute("data-marker-id"),
+    transform: element.getAttribute("transform"),
+    members: element.getAttribute("data-movement-members"),
+    ariaLabel: element.getAttribute("aria-label"),
+    className: element.getAttribute("class"),
+    tabIndex: (element as SVGElement).tabIndex
+  }));
+  const assertOneRovingStop = async () => {
+    const tabIndexes = await page.locator("svg.ireland-map [data-map-marker]").evaluateAll((elements) =>
+      elements.map((element) => (element as SVGElement).tabIndex)
+    );
+    expect(tabIndexes).toHaveLength(1);
+    expect(tabIndexes.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
+  };
+  const openWithEnter = async () => {
+    await marker.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".detail-train")).toBeVisible();
+    const detail = await page.locator(".detail-train").innerText();
+    expect(detail).toContain("Alpha detail");
+    expect(detail).toContain("Unavailable");
+    await page.getByRole("button", { name: "Close map details" }).click();
+    await expect(marker).toBeFocused();
+    return detail;
+  };
+
+  await expect(marker).toHaveCount(1);
+  const firstState = await readState();
+  expect(firstState).toEqual({
+    id: "movement:train:invalid-date-train",
+    transform: firstState.transform,
+    members: "train:invalid-date-train",
+    ariaLabel: "Train invalid-date-train, Alpha, running",
+    className: "train-marker running",
+    tabIndex: 0
+  });
+  const firstDetail = await openWithEnter();
+  await marker.click();
+  await expect(page.locator(".detail-train")).toBeVisible();
+  await expect(page.locator(".detail-train")).toContainText("Alpha detail");
+  await expect(page.locator(".detail-train")).toContainText("Unavailable");
+  await page.getByRole("button", { name: "Close map details" }).click();
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  await page.evaluate(() => {
+    (window as unknown as { __invalidTrainMarker?: Element }).__invalidTrainMarker =
+      document.querySelector("[data-marker-id='movement:train:invalid-date-train']") ?? undefined;
+  });
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
+  const secondState = await readState();
+  expect(secondState).toEqual(firstState);
+  expect(await openWithEnter()).toBe(firstDetail);
+  await assertOneRovingStop();
+  expect(await page.evaluate(() => {
+    const current = document.querySelector("[data-marker-id='movement:train:invalid-date-train']");
+    const remembered = (window as unknown as { __invalidTrainMarker?: Element }).__invalidTrainMarker;
+    return current === remembered;
+  })).toBe(true);
+
+  await expect.poll(() => refreshes).toBeGreaterThanOrEqual(3);
+  const thirdState = await readState();
+  expect(thirdState).toEqual(firstState);
+  await expect(marker).toBeFocused();
+  await assertOneRovingStop();
+  expect(pageErrors).toEqual([]);
 });
 
 test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {
