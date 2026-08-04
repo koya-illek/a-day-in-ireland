@@ -36,6 +36,13 @@ export default function DataPage() {
         <p>A timestamp describes the underlying observation or model time whenever the source provides one. A service can be online while an individual measurement is older than expected.</p>
       </section>
       <section>
+        <h2>Historical coverage and retention</h2>
+        <p>History is collected every 15 minutes once collection begins. Fifteen-minute snapshots—the raw history tier, not copies of every provider payload—are kept for 30 days. Hourly rollups are kept for 12 months, and daily summaries are retained thereafter.</p>
+        <p>Exact cross-provider playback begins when collection starts. Missing provider observations and collection gaps remain missing; they are never inferred as zero. Hourly rollups and daily summaries describe the available observations rather than recreating every value that was visible at the time.</p>
+        <p>Transport history contains only national or route-level NTA summaries. It does not retain raw train or public-transport vehicle positions, vehicle identifiers or public messages. Radar and satellite image bytes are not archived, so historical imagery is not guaranteed.</p>
+        <p>Historical Iarnród Éireann / Irish Rail data is not retained while permission for archival and derivative display remains pending.</p>
+      </section>
+      <section>
         <h2>Calculated values</h2>
         <p>Transport speeds marked with ≈ are estimated from the distance and elapsed time between successive positions. Unrealistic jumps are rejected. ISS passes are calculated locally from published orbital elements. Neither should be treated as a provider-issued measurement.</p>
       </section>
@@ -57,7 +64,10 @@ export default function DataPage() {
       </section>
       <section>
         <h2>Attribution</h2>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
+        <p>
+          Contains NTA GTFS data © 2025 NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalized by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
+        </p>
       </section>
     </InfoPage>
   );
