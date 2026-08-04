@@ -159,6 +159,148 @@ test("map hierarchy and persistent view controls survive every target width and 
   await expect(page.getByRole("navigation", { name: "Map view shortcuts" }).locator("button:visible")).toHaveCount(5);
 });
 
+test("320px at 200% text keeps map, shortcut, and Custom controls fully operable", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "One deterministic combined reflow profile is sufficient.");
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto("/");
+  await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
+  await page.waitForTimeout(700);
+
+  const canvas = page.locator(".map-canvas");
+  const mapNavigation = page.getByRole("navigation", { name: "Map navigation" });
+  const mapGeometry = await page.evaluate(() => {
+    const canvasBounds = document.querySelector(".map-canvas")!.getBoundingClientRect();
+    return {
+      canvas: {
+        left: canvasBounds.left,
+        right: canvasBounds.right,
+        top: canvasBounds.top,
+        bottom: canvasBounds.bottom
+      },
+      controls: [...document.querySelector(".map-navigation")!.children].map((element) => {
+        const control = element as HTMLElement;
+        const bounds = control.getBoundingClientRect();
+        const visibleWidth = Math.max(0, Math.min(bounds.right, canvasBounds.right) - Math.max(bounds.left, canvasBounds.left));
+        const visibleHeight = Math.max(0, Math.min(bounds.bottom, canvasBounds.bottom) - Math.max(bounds.top, canvasBounds.top));
+        return {
+          name: control.getAttribute("aria-label") ?? control.textContent?.trim() ?? "map control",
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
+          width: bounds.width,
+          height: bounds.height,
+          visibleWidth,
+          visibleHeight,
+          visibleArea: visibleWidth * visibleHeight,
+          clientWidth: control.clientWidth,
+          scrollWidth: control.scrollWidth
+        };
+      })
+    };
+  });
+  for (const control of mapGeometry.controls) {
+    expect(control.left, `${control.name} left edge`).toBeGreaterThanOrEqual(mapGeometry.canvas.left);
+    expect(control.right, `${control.name} right edge`).toBeLessThanOrEqual(mapGeometry.canvas.right);
+    expect(control.top, `${control.name} top edge`).toBeGreaterThanOrEqual(mapGeometry.canvas.top);
+    expect(control.bottom, `${control.name} bottom edge`).toBeLessThanOrEqual(mapGeometry.canvas.bottom);
+    expect(control.width, `${control.name} target width`).toBeGreaterThanOrEqual(44);
+    expect(control.height, `${control.name} target height`).toBeGreaterThanOrEqual(44);
+    expect(control.visibleWidth, `${control.name} visible width`).toBeGreaterThanOrEqual(44);
+    expect(control.visibleHeight, `${control.name} visible height`).toBeGreaterThanOrEqual(44);
+    expect(control.visibleArea, `${control.name} visible target area`).toBeGreaterThanOrEqual(44 * 44);
+    expect(control.scrollWidth, `${control.name} internal overflow`).toBeLessThanOrEqual(control.clientWidth);
+  }
+
+  const zoomIn = mapNavigation.getByRole("button", { name: "Zoom in" });
+  const zoomOut = mapNavigation.getByRole("button", { name: "Zoom out" });
+  const reset = mapNavigation.getByRole("button", { name: "Reset" });
+  const zoom = mapNavigation.getByLabel("Current map zoom");
+  await zoomIn.click();
+  await expect(zoom).toHaveText("140%");
+  await zoomOut.click();
+  await expect(zoom).toHaveText("100%");
+  await zoomIn.click();
+  await reset.click();
+  await expect(zoom).toHaveText("100%");
+
+  const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
+  const shortcutGeometry = await shortcuts.locator("button:visible").evaluateAll((buttons) => buttons.map((button) => {
+    const target = button as HTMLButtonElement;
+    const label = target.querySelector<HTMLElement>(".rail-label")!;
+    const bounds = target.getBoundingClientRect();
+    return {
+      name: target.textContent?.trim() ?? "shortcut",
+      left: bounds.left,
+      right: bounds.right,
+      top: bounds.top,
+      bottom: bounds.bottom,
+      width: bounds.width,
+      height: bounds.height,
+      clientWidth: target.clientWidth,
+      scrollWidth: target.scrollWidth,
+      labelClientWidth: label.clientWidth,
+      labelScrollWidth: label.scrollWidth
+    };
+  }));
+  expect(shortcutGeometry).toHaveLength(5);
+  for (const shortcut of shortcutGeometry) {
+    expect(shortcut.left, `${shortcut.name} left edge`).toBeGreaterThanOrEqual(0);
+    expect(shortcut.right, `${shortcut.name} right edge`).toBeLessThanOrEqual(320);
+    expect(shortcut.width, `${shortcut.name} target width`).toBeGreaterThanOrEqual(44);
+    expect(shortcut.height, `${shortcut.name} target height`).toBeGreaterThanOrEqual(44);
+    expect(shortcut.scrollWidth, `${shortcut.name} button overflow`).toBeLessThanOrEqual(shortcut.clientWidth);
+    expect(shortcut.labelScrollWidth, `${shortcut.name} label overflow`).toBeLessThanOrEqual(shortcut.labelClientWidth);
+  }
+  for (let first = 0; first < shortcutGeometry.length; first += 1) {
+    for (let second = first + 1; second < shortcutGeometry.length; second += 1) {
+      const a = shortcutGeometry[first]!;
+      const b = shortcutGeometry[second]!;
+      const overlapWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+      const overlapHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      expect(overlapWidth * overlapHeight, `${a.name} overlaps ${b.name}`).toBe(0);
+    }
+  }
+
+  await shortcuts.getByRole("button", { name: "Movement", exact: true }).click();
+  await expect(shortcuts.getByRole("button", { name: "Movement", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const custom = shortcuts.getByRole("button", { name: /Custom/ });
+  await custom.click();
+  const panel = page.getByRole("dialog", { name: "Explore live map layers" });
+  await expect(panel).toBeVisible();
+  const panelOverflow = await panel.evaluate((element) => {
+    const targets = [
+      element,
+      ...element.querySelectorAll<HTMLElement>(
+        ".panel-heading, .panel-layer-state, .panel-presets, .panel-presets button, .layer-group, .layer-group-heading, .layer-group-controls, .layer-group-controls > button, .source-note"
+      )
+    ];
+    return targets.map((target) => ({
+      name: target.getAttribute("aria-label") ?? target.className ?? target.tagName,
+      clientWidth: target.clientWidth,
+      scrollWidth: target.scrollWidth
+    }));
+  });
+  for (const target of panelOverflow) {
+    expect(target.scrollWidth, `${target.name} internal overflow`).toBeLessThanOrEqual(target.clientWidth);
+  }
+
+  const movementPreset = panel.getByRole("button", { name: "Movement", exact: true });
+  await movementPreset.click();
+  await expect(movementPreset).toHaveAttribute("aria-pressed", "true");
+  const movementGroup = panel.locator('details[data-layer-group="movement"]');
+  await movementGroup.locator("summary").click();
+  const publicTransport = movementGroup.getByRole("button", { name: /Public transport/ });
+  await publicTransport.focus();
+  await page.keyboard.press("Space");
+  await expect(publicTransport).toHaveAttribute("aria-pressed", "false");
+  await expect(panel.locator(".panel-layer-state")).toContainText("Custom");
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await expect(custom).toBeFocused();
+  await expect(canvas).toBeVisible();
+});
+
 test("mobile preset changes preserve the visible map anchor", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "Mobile-only scroll anchoring behavior.");
   for (const width of [390, 320]) {
