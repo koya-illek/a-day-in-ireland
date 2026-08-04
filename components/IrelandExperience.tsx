@@ -231,7 +231,7 @@ const LAYER_GROUPS: LayerGroup[] = [
       ["rain", "Observed rain", "Measured recent rainfall around stations"],
       ["wind", "Observed wind", "Met Éireann direction and speed in km/h"],
       ["warnings", "Met Éireann notices", "Current official Met Éireann warnings and advisories"],
-      ["radar", "Rainfall radar", "Observed Met Éireann precipitation frames, updated every five minutes"]
+      ["radar", "Rainfall radar", "Met Éireann precipitation tiles, checked when the layer is displayed"]
     ]
   },
   {
@@ -558,14 +558,34 @@ const aqiLabel = (value: number | null) => {
 const tileLatitude = (y: number, zoom: number) =>
   Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2 ** zoom))) * 180 / Math.PI;
 
+const IRELAND_RADAR_TILES = [
+  [30, 20], [31, 20], [30, 21], [31, 21]
+] as const;
+type RadarTileStatus = "loading" | "ready" | "unavailable";
+type RadarPresentationState = "unchecked" | "loading" | "partial" | "live" | "cached" | "unavailable";
+type RadarTileStatusReporter = (
+  frameKey: string,
+  tileKey: string,
+  status: RadarTileStatus
+) => void;
+const createRadarTileStatusRecord = (): Record<string, RadarTileStatus> => Object.fromEntries(
+  IRELAND_RADAR_TILES.map(([x, y]) => [`${x}-${y}`, "loading" as const])
+);
+
 function RadarTileImage({
   href,
+  frameKey,
+  tileKey,
+  onStatus,
   x,
   y,
   width,
   height
 }: {
   href: string;
+  frameKey: string;
+  tileKey: string;
+  onStatus: RadarTileStatusReporter;
   x: number;
   y: number;
   width: number;
@@ -580,6 +600,7 @@ function RadarTileImage({
     const controller = new AbortController();
     let objectUrl: string | null = null;
     setTile({ href: null, status: "loading" });
+    onStatus(frameKey, tileKey, "loading");
 
     const prepare = async () => {
       try {
@@ -614,11 +635,15 @@ function RadarTileImage({
             return;
           }
           setTile({ href: objectUrl, status: "ready" });
+          onStatus(frameKey, tileKey, "ready");
         } finally {
           bitmap.close();
         }
       } catch {
-        if (!controller.signal.aborted) setTile({ href: null, status: "unavailable" });
+        if (!controller.signal.aborted) {
+          setTile({ href: null, status: "unavailable" });
+          onStatus(frameKey, tileKey, "unavailable");
+        }
       }
     };
     void prepare();
@@ -626,7 +651,7 @@ function RadarTileImage({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [href]);
+  }, [frameKey, href, onStatus, tileKey]);
 
   return (
     <image
@@ -645,15 +670,19 @@ function RadarTileImage({
 
 function RadarTiles({
   frame,
-  projection
+  frameKey,
+  projection,
+  onTileStatus
 }: {
   frame: LiveSnapshot["radar"][number];
+  frameKey: string;
   projection: ReturnType<typeof geoMercator>;
+  onTileStatus: RadarTileStatusReporter;
 }) {
   const zoom = 6;
   return (
-    <g className="radar-tiles" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar observed ${formatTime(new Date(frame.observedAt))}`}>
-      {[30, 31].flatMap((x) => [20, 21].map((y) => {
+    <g className="radar-tiles" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar tiles for ${formatTime(new Date(frame.observedAt))}`}>
+      {IRELAND_RADAR_TILES.map(([x, y]) => {
         const west = x / 2 ** zoom * 360 - 180;
         const east = (x + 1) / 2 ** zoom * 360 - 180;
         const north = tileLatitude(y, zoom);
@@ -661,18 +690,22 @@ function RadarTiles({
         const topLeft = projection([west, north]);
         const bottomRight = projection([east, south]);
         if (!topLeft || !bottomRight) return null;
+        const tileKey = `${x}-${y}`;
         return <RadarTileImage
-          key={`${x}-${y}`}
+          key={tileKey}
           href={frame.tileTemplate
             .replace("{x}", String(x))
             .replace("{y}", String(y))
             .replace("{z}", String(zoom))}
+          frameKey={frameKey}
+          tileKey={tileKey}
+          onStatus={onTileStatus}
           x={topLeft[0]}
           y={topLeft[1]}
           width={bottomRight[0] - topLeft[0]}
           height={bottomRight[1] - topLeft[1]}
         />;
-      }))}
+      })}
     </g>
   );
 }
@@ -1088,9 +1121,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
   const [initialRefreshComplete, setInitialRefreshComplete] = useState(() => initialSnapshot.lastSuccessAt !== null);
   const [showAllNotables, setShowAllNotables] = useState(false);
-  const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
+  const [mapNotice, setMapNotice] = useState<{ title: string; detail: string; focus?: ContextFocus } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
   const [radarPlaying, setRadarPlaying] = useState(false);
+  const [radarTileState, setRadarTileState] = useState<{
+    frameKey: string;
+    tiles: Record<string, RadarTileStatus>;
+  } | null>(null);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
@@ -1103,6 +1140,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
   const snapshotRef = useRef(initialSnapshot);
   const refreshAllRef = useRef<() => Promise<void>>(async () => undefined);
+  const activeRadarFrameKeyRef = useRef<string | null>(null);
   const mapRef = useRef<SVGSVGElement | null>(null);
   const markerOpenerRef = useRef<SVGElement | null>(null);
   const focusedMarkerRef = useRef<{ id: string; element: SVGGElement } | null>(null);
@@ -1264,15 +1302,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   useEffect(() => {
     setShowAllNotables(false);
   }, [layers]);
-
-  useEffect(() => {
-    if (prefersReducedMotion || !radarPlaying || !layers.has("radar") || snapshot.contextStatus.radar !== "live" || snapshot.radar.length < 2) return;
-    const animation = window.setInterval(() => {
-      setRadarFrameIndex((index) => (index + 1) % snapshot.radar.length);
-    }, 850);
-    return () => window.clearInterval(animation);
-  }, [layers, prefersReducedMotion, radarPlaying, snapshot.contextStatus.radar, snapshot.radar.length]);
-
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -1670,6 +1699,57 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     now.getTime()
   );
   const online = connectionStatus === "online";
+  const radarLayerActive = layers.has("radar");
+  const radarFrames = online && snapshot.contextStatus.radar === "live" ? snapshot.radar : [];
+  const radarFrame = radarFrames[Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))] ?? null;
+  const radarFrameKey = radarFrame ? `${radarFrame.id}:${radarFrame.modifiedTime}` : null;
+  activeRadarFrameKeyRef.current = radarLayerActive ? radarFrameKey : null;
+  const reportRadarTileStatus = useCallback<RadarTileStatusReporter>((frameKey, tileKey, status) => {
+    if (frameKey !== activeRadarFrameKeyRef.current) return;
+    setRadarTileState((current) => {
+      const tiles = current?.frameKey === frameKey ? current.tiles : createRadarTileStatusRecord();
+      if (current?.frameKey === frameKey && tiles[tileKey] === status) return current;
+      return { frameKey, tiles: { ...tiles, [tileKey]: status } };
+    });
+  }, []);
+  useEffect(() => {
+    setRadarTileState(radarLayerActive && radarFrameKey
+      ? { frameKey: radarFrameKey, tiles: createRadarTileStatusRecord() }
+      : null);
+  }, [radarFrameKey, radarLayerActive]);
+  const radarTileStatuses = radarFrameKey && radarTileState?.frameKey === radarFrameKey
+    ? Object.values(radarTileState.tiles)
+    : [];
+  const radarReadyCount = radarTileStatuses.filter((status) => status === "ready").length;
+  const radarUnavailableCount = radarTileStatuses.filter((status) => status === "unavailable").length;
+  const radarTileCount = IRELAND_RADAR_TILES.length;
+  const radarPresentationState: RadarPresentationState = !online
+    ? "unavailable"
+    : snapshot.contextStatus.radar === "stale" && snapshot.radar.length
+      ? "cached"
+      : !radarFrame
+        ? "unavailable"
+        : !radarLayerActive
+          ? "unchecked"
+          : radarReadyCount === radarTileCount
+            ? "live"
+            : radarUnavailableCount === radarTileCount
+              ? "unavailable"
+              : radarReadyCount + radarUnavailableCount === radarTileCount && radarReadyCount > 0
+                ? "partial"
+                : "loading";
+  useEffect(() => {
+    if (!radarPlaying || prefersReducedMotion || !radarLayerActive || radarFrames.length < 2) return;
+    if (radarPresentationState === "partial" || radarPresentationState === "unavailable" || radarPresentationState === "cached") {
+      setRadarPlaying(false);
+      return;
+    }
+    if (radarPresentationState !== "live") return;
+    const animation = window.setInterval(() => {
+      setRadarFrameIndex((index) => (index + 1) % radarFrames.length);
+    }, 850);
+    return () => window.clearInterval(animation);
+  }, [prefersReducedMotion, radarFrames.length, radarLayerActive, radarPlaying, radarPresentationState]);
   const weatherCached = snapshot.sourceStatus === "stale" || (!online && snapshot.stations.length > 0);
   const trainsLive = online && snapshot.sourceProvenance?.trains.status === "live";
   const trainsCached = snapshot.sourceProvenance?.trains.status === "stale" || (!online && snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0);
@@ -1704,7 +1784,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     (showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
     (showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake ? 1 : 0) +
     (showIssNotable && issNotableCurrent && visibleIssPass ? 1 : 0);
-  const assessedSources = getSelectedSourceAssessment(snapshot, layers, now.getTime());
+  const assessmentSnapshot = radarLayerActive && radarPresentationState !== "live"
+    ? { ...snapshot, contextStatus: { ...snapshot.contextStatus, radar: "unavailable" as const } }
+    : snapshot;
+  const assessedSources = getSelectedSourceAssessment(assessmentSnapshot, layers, now.getTime());
   const selectedSourceAssessment = online ? assessedSources : {
     ...assessedSources,
     fullyAssessed: false,
@@ -1715,7 +1798,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0 && !transitStale,
     snapshot.sourceProvenance?.rivers.status === "live" && snapshot.rivers.length > 0 && !riverDataStale,
     snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0,
-    snapshot.contextStatus.radar === "live" && snapshot.radar.length > 0,
+    radarPresentationState === "live",
     snapshot.contextStatus.grid === "live" && Boolean(snapshot.grid),
     snapshot.contextStatus.modelledAir === "live" && snapshot.airQuality.some((reading) => reading.source === "modelled"),
     snapshot.contextStatus.tides === "live",
@@ -1728,8 +1811,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   ].filter(Boolean).length : 0;
   const weatherBuoyCount = snapshot.marine.filter((reading) => reading.kind === "weather-buoy").length;
   const coastalObservatoryCount = snapshot.marine.length - weatherBuoyCount;
-  const radarFrames = online && snapshot.contextStatus.radar === "live" ? snapshot.radar : [];
-  const radarFrame = radarFrames[Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))] ?? null;
   const serviceDisplayState = getServiceDisplayState(snapshot, {
     initialRefreshComplete,
     refreshing: servicesRefreshing,
@@ -1751,6 +1832,64 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     degraded: "Online · partial service",
     live: "Online · live"
   } as const)[serviceDisplayState];
+  const radarAvailabilityNotice = radarPresentationState === "live"
+    ? {
+        title: "Rainfall radar",
+        detail: `${snapshot.radar.length} Met Éireann ${snapshot.radar.length === 1 ? "frame is" : "frames are"} available; all ${radarTileCount} Ireland tiles loaded for the displayed frame.`
+      }
+    : radarPresentationState === "partial"
+      ? {
+          title: "Partial rainfall radar coverage",
+          detail: `${radarReadyCount} of ${radarTileCount} Ireland tiles loaded for this frame. Displayed imagery is incomplete, so precipitation in the missing areas cannot be assessed.`
+        }
+      : radarPresentationState === "loading"
+        ? {
+            title: "Loading rainfall radar tiles",
+            detail: `${radarReadyCount} of ${radarTileCount} Ireland tiles have loaded; ${radarUnavailableCount} failed while the remaining tiles settle. No complete precipitation view is claimed yet.`
+          }
+        : radarPresentationState === "cached"
+          ? {
+              title: "Cached rainfall radar",
+              detail: `${snapshot.radar.length} cached frame${snapshot.radar.length === 1 ? " is" : "s are"} retained from the last successful refresh; current precipitation imagery is unavailable.`
+            }
+          : radarPresentationState === "unchecked"
+            ? {
+                title: "Rainfall radar not loaded",
+                detail: "Frame metadata is available, but the Ireland image tiles have not been requested in this view."
+              }
+            : {
+                title: "Rainfall radar unavailable",
+                detail: radarFrame && radarUnavailableCount === radarTileCount
+                  ? `Frame metadata was available, but none of the ${radarTileCount} Ireland tiles loaded. Current precipitation imagery cannot be assessed.`
+                  : "Met Éireann radar imagery is unavailable, so current precipitation cannot be assessed."
+              };
+  const displayedMapNotice = mapNotice?.focus === "radar"
+    ? online
+      ? { ...radarAvailabilityNotice, focus: "radar" as const }
+      : {
+          title: "Offline · radar not current",
+          detail: `Radar tiles cannot be refreshed while offline. Last successful refresh ${lastSuccessLabel}; saved metadata is not presented as current precipitation imagery.`,
+          focus: "radar" as const
+        }
+    : mapNotice;
+  const radarTimelineText = radarPresentationState === "live"
+    ? "Observed precipitation · all Ireland tiles loaded"
+    : radarPresentationState === "partial"
+      ? `Partial radar coverage · ${radarReadyCount} of ${radarTileCount} Ireland tiles loaded`
+      : radarPresentationState === "loading"
+        ? `Loading radar tiles · ${radarReadyCount} of ${radarTileCount} loaded`
+        : radarPresentationState === "cached"
+          ? "Cached radar metadata · current imagery unavailable"
+          : "Radar tiles unavailable · current precipitation cannot be assessed";
+  const radarFrameValueText = radarFrame
+    ? radarPresentationState === "live"
+      ? `Radar imagery loaded for ${formatTime(new Date(radarFrame.observedAt))}`
+      : radarPresentationState === "partial"
+        ? `Partial radar imagery for ${formatTime(new Date(radarFrame.observedAt))}; ${radarReadyCount} of ${radarTileCount} tiles loaded`
+        : radarPresentationState === "loading"
+          ? `Radar tiles loading for ${formatTime(new Date(radarFrame.observedAt))}`
+          : `Radar imagery unavailable for ${formatTime(new Date(radarFrame.observedAt))}`
+    : "Radar frame unavailable";
   const constrainMapView = useCallback((scale: number, x: number, y: number) => {
     const nextScale = Math.min(4, Math.max(1, scale));
     return {
@@ -2061,7 +2200,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       radar: {
         title: "Rainfall radar",
         detail: snapshot.contextStatus.radar === "live" && snapshot.radar.length
-          ? `${snapshot.radar.length} Met Éireann frames at five-minute intervals. Use the timeline to replay the latest half hour.`
+          ? `${snapshot.radar.length} Met Éireann frame-metadata record${snapshot.radar.length === 1 ? " is" : "s are"} available. Ireland tile availability is checked when the frame is displayed.`
           : snapshot.contextStatus.radar === "stale" && snapshot.radar.length
             ? `${snapshot.radar.length} cached radar frames are retained from the last successful refresh; they are not current precipitation imagery.`
             : "Met Éireann radar imagery is unavailable, so current precipitation cannot be assessed."
@@ -2152,11 +2291,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     setLayers(new Set(contextLayers[focus]));
     setActivePreset("custom");
     setSelected(null);
-    setMapNotice(online ? notices[focus] : {
+    setMapNotice(online ? { ...notices[focus], focus } : {
       title: "Offline · source not current",
-      detail: `${notices[focus].title} cannot be refreshed while offline. Last successful refresh ${lastSuccessLabel}; saved values are not presented as current map signals.`
+      detail: `${notices[focus].title} cannot be refreshed while offline. Last successful refresh ${lastSuccessLabel}; saved values are not presented as current map signals.`,
+      focus
     });
-    setRadarPlaying(online && focus === "radar" && snapshot.contextStatus.radar === "live" && snapshot.radar.length > 1 && !prefersReducedMotion);
+    setRadarPlaying(false);
     if (focus === "radar") setRadarFrameIndex(0);
     window.requestAnimationFrame(() => {
       document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
@@ -2555,12 +2695,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         aria-label="Live map of Ireland"
         aria-describedby="map-keyboard-instructions map-marker-announcement"
       >
-        {mapNotice && (
-          <aside className="map-notice" aria-live="polite">
+        {displayedMapNotice && (
+          <aside className="map-notice" data-radar-availability={displayedMapNotice.focus === "radar" ? radarPresentationState : undefined} aria-live="polite">
             <span>Focused view</span>
             <button onClick={() => setMapNotice(null)} aria-label="Dismiss map context">×</button>
-            <strong>{mapNotice.title}</strong>
-            <p>{mapNotice.detail}</p>
+            <strong>{displayedMapNotice.title}</strong>
+            <p>{displayedMapNotice.detail}</p>
           </aside>
         )}
         <nav className="map-presets" aria-label="Map views">
@@ -2650,7 +2790,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               {islandPaths.map((path, index) => <path key={index} d={path} />)}
             </g>
             {online && layers.has("satellite") && (snapshot.contextStatus.satellite === "live" || snapshot.contextStatus.satellite === "fallback") && snapshot.satellite && <SatelliteTiles frame={snapshot.satellite} projection={projection} />}
-            {layers.has("radar") && radarFrame && <RadarTiles frame={radarFrame} projection={projection} />}
+            {radarLayerActive && radarFrame && radarFrameKey && (
+              <RadarTiles
+                frame={radarFrame}
+                frameKey={radarFrameKey}
+                projection={projection}
+                onTileStatus={reportRadarTileStatus}
+              />
+            )}
             <g className="road-network" role="img" aria-label="Major roads from OpenStreetMap">
               {roadPaths.map((road, index) => (
                 <path key={`${road.ref}-${index}`} d={road.path} className={road.roadClass} />
@@ -2934,15 +3081,26 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </nav>
 
         {layers.has("radar") && (
-          <div className="radar-control" role="group" aria-label="Rainfall radar timeline">
+          <div
+            className="radar-control"
+            role="group"
+            aria-label="Rainfall radar timeline"
+            data-radar-availability={radarPresentationState}
+            data-radar-ready-tiles={radarReadyCount}
+            data-radar-unavailable-tiles={radarUnavailableCount}
+          >
             <button
               type="button"
               onClick={() => {
                 if (!prefersReducedMotion) setRadarPlaying((playing) => !playing);
               }}
-              disabled={radarFrames.length < 2 || prefersReducedMotion}
+              disabled={radarFrames.length < 2 || prefersReducedMotion || radarPresentationState !== "live"}
               aria-pressed={radarPlaying}
-              aria-label={prefersReducedMotion ? "Replay radar timeline disabled because reduced motion is enabled" : radarPlaying ? "Pause radar replay" : "Replay radar timeline"}
+              aria-label={prefersReducedMotion
+                ? "Replay radar timeline disabled because reduced motion is enabled"
+                : radarPresentationState !== "live"
+                  ? "Replay radar timeline unavailable until all Ireland tiles load"
+                  : radarPlaying ? "Pause radar replay" : "Replay radar timeline"}
               aria-describedby="radar-motion-note"
             >
               {radarPlaying ? "Pause" : "Replay"}
@@ -2960,13 +3118,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   setRadarFrameIndex(Number(event.target.value));
                 }}
                 aria-label="Radar frame"
-                aria-valuetext={radarFrame ? `Radar frame observed ${formatTime(new Date(radarFrame.observedAt))}` : "Radar frame unavailable"}
+                aria-valuetext={radarFrameValueText}
               />
-              <small id="radar-motion-note">{prefersReducedMotion
+              <small id="radar-motion-note">{radarPresentationState === "live" && prefersReducedMotion
                 ? "Replay disabled for reduced motion · select a frame manually"
-                : radarFrames.length
-                  ? "Observed precipitation · 5-minute frames"
-                  : "Radar temporarily unavailable"}</small>
+                : radarTimelineText}</small>
             </label>
           </div>
         )}
