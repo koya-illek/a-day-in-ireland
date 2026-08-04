@@ -560,7 +560,7 @@ const fetchTides = async () => {
   });
 };
 
-const irishGridToLonLat = (east, north) => {
+export const irishGridToLonLat = (east, north) => {
   const a = 6377340.189, b = 6356034.447, f0 = 1.000035;
   const lat0 = 53.5 * Math.PI / 180, lon0 = -8 * Math.PI / 180;
   const n0 = 250000, e0 = 200000;

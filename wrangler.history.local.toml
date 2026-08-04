@@ -1,22 +1,19 @@
-name = "a-day-in-ireland-api"
+name = "a-day-in-ireland-history-local"
 main = "platform/cloudflare-entry.js"
 compatibility_date = "2026-07-25"
-workers_dev = true
-
-routes = [
-  { pattern = "day.illek.ie", custom_domain = true }
-]
-
-[triggers]
-crons = ["*/15 * * * *", "7 * * * *"]
-
-# Provisioning handoff: production HISTORY_DB is intentionally absent until
-# `wrangler d1 create a-day-in-ireland-history` succeeds with D1 account scope.
-# Add the returned real database_id under [[d1_databases]] before deployment.
 
 [vars]
 EDGE_RUNTIME = "cloudflare"
 PAGES_ORIGIN = "https://a-day-in-ireland.pages.dev"
+
+[triggers]
+crons = ["*/15 * * * *", "7 * * * *"]
+
+[[d1_databases]]
+binding = "HISTORY_DB"
+database_name = "a-day-in-ireland-history-local"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
 name = "NTA_FEED"

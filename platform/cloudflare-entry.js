@@ -1,5 +1,6 @@
 import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./server-entry.js";
 import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
+import { captureHistory, handleHistoryRequest, maintainHistory } from "./history.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
@@ -213,6 +214,49 @@ const livingResponse = async (env) => {
   }), { headers });
 };
 
+// Historical rail retention is disabled unless reuse permission is explicitly
+// recorded in configuration. Avoid even calling the Irish Rail upstream during
+// the default scheduled capture; only the OPW half of /api/living is needed.
+export const historyLivingSnapshot = async (env) => {
+  const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
+  try {
+    const response = await riverCoordinator.fetch("https://internal/rivers");
+    if (!response.ok) throw new Error(`river-coordinator-http-${response.status}`);
+    const result = await response.json();
+    const rivers = Array.isArray(result.rivers) ? result.rivers : [];
+    const riverStatus = result.status ?? "unavailable";
+    return {
+      trains: [],
+      rivers,
+      sourceStatus: { trains: "unavailable", rivers: riverStatus },
+      sourceProvenance: {
+        trains: makeSourceProvenance({
+          provider: "Irish Rail",
+          endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+          status: "unavailable",
+          readings: []
+        }),
+        rivers: result.provenance ?? makeRiverProvenance({ status: riverStatus, readings: rivers })
+      }
+    };
+  } catch (error) {
+    console.error("OPW history capture failed", error);
+    return {
+      trains: [], rivers: [],
+      sourceStatus: { trains: "unavailable", rivers: "unavailable" },
+      sourceProvenance: {
+        trains: makeSourceProvenance({
+          provider: "Irish Rail",
+          endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+          status: "unavailable",
+          readings: []
+        }),
+        rivers: makeRiverProvenance({ status: "unavailable", readings: [] })
+      }
+    };
+  }
+};
+
 const staticResponse = async (request, env) => {
   const incoming = new URL(request.url);
   const pagesOrigin = env.PAGES_ORIGIN || "https://a-day-in-ireland.pages.dev";
@@ -232,6 +276,9 @@ const staticResponse = async (request, env) => {
 const cloudflareWorker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/api/history" || url.pathname === "/api/history/range") {
+      return handleHistoryRequest(request, env);
+    }
     if (url.pathname === "/api/transit") {
       const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
       return coordinator.fetch("https://internal/transit");
@@ -247,6 +294,26 @@ const cloudflareWorker = {
       status: 405,
       headers: { allow: "GET, HEAD" }
     });
+  },
+
+  async scheduled(controller, env, ctx) {
+    if (!env.HISTORY_DB) {
+      console.warn("Historical storage is not provisioned; scheduled history work was skipped.");
+      return;
+    }
+    if (controller.cron === "*/15 * * * *") {
+      const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
+      ctx.waitUntil(captureHistory(env, controller.scheduledTime, {
+        loadLiving: () => env.HISTORY_INCLUDE_IRISH_RAIL === "true"
+          ? livingResponse(env)
+          : historyLivingSnapshot(env),
+        loadTransit: () => coordinator.fetch("https://internal/transit")
+      }));
+      return;
+    }
+    if (controller.cron === "7 * * * *") {
+      ctx.waitUntil(maintainHistory(env, controller.scheduledTime));
+    }
   }
 };
 
