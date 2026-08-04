@@ -2325,14 +2325,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <span><b>Live systems</b><small>{connectionLabel}</small><small>{servicesRefreshing ? "Refreshing services…" : `${liveServiceCount} services connected`}</small></span>
           </div>
           <nav aria-label="Map view shortcuts">
-            <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span aria-hidden="true">☁</span>Weather</button>
-            <button className="rail-extra" onClick={() => focusContext("radar")}><span aria-hidden="true">◉</span>Rain radar</button>
-            <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span aria-hidden="true">↗</span>Movement</button>
-            <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span aria-hidden="true">≈</span>Water</button>
-            <button className="rail-extra" onClick={() => focusContext("sea")}><span aria-hidden="true">⌁</span>Sea</button>
-            <button className="rail-extra" onClick={() => focusContext("grid")}><span aria-hidden="true">ϟ</span>Energy</button>
-            <button className="rail-extra" onClick={() => focusContext("air")}><span aria-hidden="true">◌</span>Air</button>
-            <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span aria-hidden="true">⌘</span>All layers</button>
+            <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span aria-hidden="true">☁</span><span className="rail-label">Weather</span></button>
+            <button className="rail-extra" onClick={() => focusContext("radar")}><span aria-hidden="true">◉</span><span className="rail-label">Rain radar</span></button>
+            <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span aria-hidden="true">↗</span><span className="rail-label">Movement</span></button>
+            <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span aria-hidden="true">≈</span><span className="rail-label">Water</span></button>
+            <button className="rail-extra" onClick={() => focusContext("sea")}><span aria-hidden="true">⌁</span><span className="rail-label">Sea</span></button>
+            <button className="rail-extra" onClick={() => focusContext("grid")}><span aria-hidden="true">ϟ</span><span className="rail-label">Energy</span></button>
+            <button className="rail-extra" onClick={() => focusContext("air")}><span aria-hidden="true">◌</span><span className="rail-label">Air</span></button>
+            <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span aria-hidden="true">⌘</span><span className="rail-label">All layers</span></button>
             <button
               className={activePreset === "custom" ? "active rail-custom" : "rail-custom"}
               aria-pressed={activePreset === "custom"}
@@ -2340,7 +2340,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 panelOpenerRef.current = event.currentTarget;
                 setPanelOpen(true);
               }}
-            ><span aria-hidden="true">⋯</span>Custom · {layers.size}</button>
+            ><span aria-hidden="true">⋯</span><span className="rail-label">Custom · {layers.size}</span></button>
           </nav>
           <a className="rail-map-action" href="#live-map">View live map <span aria-hidden="true">↓</span></a>
           <div className="rail-metrics">
