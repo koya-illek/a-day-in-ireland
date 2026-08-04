@@ -95,7 +95,7 @@ function stableMovementPayload(item: MovementRecord) {
   const fields = "route" in item
     ? [
         "transit", item.id, item.latitude, item.longitude, item.route, item.label,
-        item.destination, item.direction, item.bearing, item.speedKmh, item.speedSource, item.observedAt
+        item.bearing, item.speedKmh, item.speedSource, item.observedAt
       ]
     : [
         "train", item.id, item.latitude, item.longitude, item.status, item.direction,
@@ -867,7 +867,8 @@ function DetailCard({
           <p className="transit-direction">{transitDetail?.direction}</p>
           {transitDetail?.label && <p className="transit-service-label">{transitDetail.label}</p>}
           <dl>
-            <div><dt>Route</dt><dd>{transitDetail?.route || "Not supplied"}</dd></div>
+            <div><dt>Route</dt><dd>{transitDetail?.route || "Route unavailable from this TFI live vehicle feed"}</dd></div>
+            <div><dt>Destination</dt><dd>{transitDetail?.destination}</dd></div>
             <div><dt>Direction</dt><dd>{transitDetail?.direction}</dd></div>
             <div>
               <dt>Speed</dt>
@@ -1508,7 +1509,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     ? Math.ceil(Math.max(...timelineTemperatures) + 1)
     : 20;
   const timelineTemperatureRange = Math.max(1, timelineTemperatureMax - timelineTemperatureMin);
-  const timelineRainMax = Math.max(1, ...snapshot.timeline.map((point) => point.rainfall));
+  const timelineRainValues = snapshot.timeline
+    .map((point) => point.rainfall)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const timelineRainMax = Math.max(1, ...timelineRainValues);
   const visibleWarnings = warningsUnavailable ? [] : sortOfficialWeatherWarnings(snapshot.warnings, now.getTime());
   const currentWarnings = visibleWarnings.filter((warning) => warningTiming(warning, now.getTime()) === "active");
   const activeWarning = currentWarnings[0] ?? null;
@@ -1603,7 +1607,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const riversAvailable = riversLive || riversStale;
   const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
   const connectionLabel = connectionStatus === "offline"
-    ? "Offline · showing the last received data"
+    ? "Offline · live refresh unavailable"
     : servicesRefreshing
       ? isConnectingWithoutSnapshot
         ? "Connecting to live services"
@@ -1769,6 +1773,26 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     event.preventDefault();
     event.stopPropagation();
     mapDidPanRef.current = false;
+  }, []);
+  const activateNearestMapMarker = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
+    if (event.defaultPrevented || (event.target as Element).closest("[data-map-marker]")) return;
+    const markers = [...event.currentTarget.querySelectorAll<SVGGElement>("[data-map-marker]")];
+    const nearest = markers.reduce<{ marker: SVGGElement; distance: number } | null>((best, marker) => {
+      const matrix = marker.getScreenCTM();
+      if (!matrix) return best;
+      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
+      const distance = Math.hypot(event.clientX - centre.x, event.clientY - centre.y);
+      return !best || distance < best.distance ? { marker, distance } : best;
+    }, null);
+    if (!nearest || nearest.distance > 22) return;
+    event.preventDefault();
+    nearest.marker.dispatchEvent(new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      view: window
+    }));
   }, []);
   const showPreset = useCallback((preset: Exclude<Preset, "custom">) => {
     setLayers(new Set(PRESET_LAYERS[preset]));
@@ -2264,9 +2288,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               id="connection-summary"
               className={`freshness-chip connection-chip ${connectionStatus}`}
               data-connection-status={connectionStatus}
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
             >
               <i aria-hidden="true" /><b>Connection</b><small>{connectionLabel} · checked {formatTime(lastCheckedAt)}</small>
             </span>
@@ -2401,6 +2422,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           aria-labelledby="map-title map-description"
           aria-describedby="map-keyboard-instructions map-marker-announcement"
           onClickCapture={suppressClickAfterPan}
+          onClick={activateNearestMapMarker}
           onPointerDown={handleMapPointerDown}
           onPointerMove={handleMapPointerMove}
           onPointerUp={handleMapPointerEnd}
@@ -2926,11 +2948,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <section className="dayline" aria-label="Today so far across Ireland">
         <div className="dayline-heading">
           <div><p className="eyebrow">Today so far</p><h2>The shape of the day</h2></div>
-          <p>Temperature and rain use separate labelled scales. Select an hour for wind and exact values, or open the data list below.</p>
+          <p>Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below.</p>
         </div>
         <div className="timeline-legend" aria-label="Chart legend">
           <span><i className="temperature" />Average temperature (°C)</span>
-          <span><i className="rain" />Observed rain (mm)</span>
+          <span><i className="rain" />Average observed rain per station (mm)</span>
         </div>
         <div
           className="timeline-plot-scroll"
@@ -2944,7 +2966,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <strong>Temperature</strong>
               <span>{timelineTemperatureMin}°C</span>
             </div>
-            <div className="timeline-chart" role="group" aria-label="Hourly average temperature and observed rainfall across reporting Met Éireann stations">
+            <div className="timeline-chart" role="group" aria-label="Hourly average temperature, rainfall, and wind across reporting Met Éireann stations">
               {snapshot.timeline.length === 0 && (
                 <p className="timeline-empty">The day is just beginning. Hourly observations will gather here as stations report.</p>
               )}
@@ -2952,7 +2974,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 const temperatureHeight = point.temperature === null
                   ? 4
                   : 12 + ((point.temperature - timelineTemperatureMin) / timelineTemperatureRange) * 76;
-                const rainHeight = point.rainfall <= 0
+                const rainHeight = point.rainfall === null || point.rainfall <= 0
                   ? 0
                   : Math.max(5, (point.rainfall / timelineRainMax) * 88);
                 return (
@@ -2961,7 +2983,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                     className={`timeline-point ${timelineSelection === point.time ? "selected" : ""}`}
                     key={point.time}
                     aria-pressed={timelineSelection === point.time}
-                    aria-label={`${point.time}: temperature ${point.temperature?.toFixed(1) ?? "unavailable"} degrees Celsius, rainfall ${point.rainfall.toFixed(1)} millimetres, wind ${point.windSpeed?.toFixed(0) ?? "unavailable"} kilometres per hour`}
+                    aria-label={`${point.time}: average temperature ${point.temperature?.toFixed(1) ?? "unavailable"} degrees Celsius, average observed rainfall ${point.rainfall?.toFixed(1) ?? "unavailable"} millimetres per reporting station, average wind ${point.windSpeed?.toFixed(0) ?? "unavailable"} kilometres per hour`}
                     onClick={() => setTimelineSelection(point.time)}
                   >
                     <span className="timeline-bars" aria-hidden="true">
@@ -2975,7 +2997,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </div>
             <div className="timeline-axis rain-axis" aria-hidden="true">
               <span>{timelineRainMax.toFixed(1)} mm</span>
-              <strong>Rain</strong>
+              <strong>Average rain</strong>
               <span>0 mm</span>
             </div>
             <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
@@ -2985,14 +3007,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <summary>View hourly values as a list</summary>
           <div className="timeline-table-scroll" role="region" aria-label="Hourly weather data table" tabIndex={0}>
             <table>
-              <caption>Hourly averages across reporting Met Éireann stations</caption>
-              <thead><tr><th scope="col">Time</th><th scope="col">Temperature</th><th scope="col">Rain</th><th scope="col">Wind</th></tr></thead>
+              <caption>Hourly averages across reporting Met Éireann stations; rain is the mean of available station observations, not an island-wide total</caption>
+              <thead><tr><th scope="col">Time</th><th scope="col">Average temperature</th><th scope="col">Average rain</th><th scope="col">Average wind</th></tr></thead>
               <tbody>
                 {snapshot.timeline.map((point) => (
                   <tr key={`list-${point.time}`}>
                     <th scope="row">{point.time}</th>
                     <td>{point.temperature === null ? "Unavailable" : `${point.temperature.toFixed(1)} °C`}</td>
-                    <td>{point.rainfall.toFixed(1)} mm</td>
+                    <td>{point.rainfall === null ? "Unavailable" : `${point.rainfall.toFixed(1)} mm`}</td>
                     <td>{point.windSpeed === null ? "Unavailable" : `${point.windSpeed.toFixed(0)} km/h`}</td>
                   </tr>
                 ))}
@@ -3003,7 +3025,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </details>
         {selectedTimelinePoint && (
           <p className="timeline-selection" role="status">
-            <b>{selectedTimelinePoint.time}</b> · {selectedTimelinePoint.temperature?.toFixed(1) ?? "—"}° average temperature · {selectedTimelinePoint.rainfall.toFixed(1)} mm observed rain · {selectedTimelinePoint.windSpeed?.toFixed(0) ?? "—"} km/h average wind.
+            <b>{selectedTimelinePoint.time}</b> · {selectedTimelinePoint.temperature?.toFixed(1) ?? "—"}° average temperature · {selectedTimelinePoint.rainfall?.toFixed(1) ?? "—"} mm average observed rain per reporting station · {selectedTimelinePoint.windSpeed?.toFixed(0) ?? "—"} km/h average wind.
           </p>
         )}
       </section>

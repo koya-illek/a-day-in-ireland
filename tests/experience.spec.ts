@@ -56,6 +56,9 @@ async function installMapMarkerFixtures(page: Page) {
       trains: [{
         id: "fixture-train", latitude: 52.15, longitude: -7.4, status: "running",
         direction: "South", message: "Fixture service", observedAt, speedKmh: null, speedSource: null
+      }, {
+        id: "fixture-stack-train", latitude: 54.1, longitude: -8, status: "running",
+        direction: "North", message: "Fixture stacked service", observedAt, speedKmh: null, speedSource: null
       }],
       rivers: [{
         id: "fixture-river", name: "Fixture River", latitude: 53.1, longitude: -8.1,
@@ -85,7 +88,11 @@ async function installMapMarkerFixtures(page: Page) {
         nextHighAt: "2026-08-04T21:10:00.000Z", nextHighLevel: 1.8,
         nextLowAt: "2026-08-04T15:10:00.000Z", nextLowLevel: -1.72
       }],
-      bathingAlerts: [],
+      bathingAlerts: [{
+        id: "fixture-bathing", name: "Fixture Beach", county: "Clare", latitude: 52.7, longitude: -9.2,
+        restriction: "Temporary advice", description: "Fixture bathing-water notice", startedAt: new Date(Date.now() - 60_000).toISOString(),
+        updatedAt: observedAt, endsAt: new Date(Date.now() + 60 * 60_000).toISOString(), noticeUrl: null
+      }],
       warnings: [],
       warningsStatus: "live",
       issTle: null,
@@ -102,7 +109,16 @@ async function installMapMarkerFixtures(page: Page) {
   }));
   await page.route("**/api/transit", (route) => route.fulfill({
     contentType: "application/json",
-    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+    body: JSON.stringify({
+      transit: [{
+        id: "fixture-transit", label: "7100", route: "2 NX c a", latitude: 54.75, longitude: -7.1,
+        bearing: 225, speedKmh: 18, speedSource: "reported", observedAt
+      }, {
+        id: "fixture-stack-transit", label: "121", route: "3 73 a", latitude: 54.1, longitude: -8,
+        bearing: null, speedKmh: null, speedSource: null, observedAt
+      }],
+      transitStatus: "live"
+    })
   }));
 }
 
@@ -151,7 +167,6 @@ async function installAccessibilityContentFixtures(page: Page) {
         id: "provider-shaped-bus",
         label: "100",
         route: "3 73 a",
-        destination: "City Centre",
         latitude: 53.35,
         longitude: -6.26,
         bearing: 90,
@@ -550,7 +565,9 @@ test("focus rings are hidden until focus-visible without changing marker opacity
 
   const readRingStyle = (selector: string) => page.locator(selector).first().evaluate((marker) => {
     const ring = marker.querySelector<SVGCircleElement>(":scope > .map-marker-focus-ring");
-    const ordinaryCircle = marker.querySelector<SVGCircleElement>(":scope > circle:not(.map-marker-focus-ring)");
+    const ordinaryCircle = marker.querySelector<SVGCircleElement>(
+      ":scope > circle:not(.map-marker-focus-ring):not(.map-marker-hit-target)"
+    );
     return {
       ringOpacity: ring ? Number(getComputedStyle(ring).opacity) : -1,
       ordinaryOpacity: ordinaryCircle ? Number(getComputedStyle(ordinaryCircle).opacity) : -1,
@@ -1010,10 +1027,10 @@ test("duplicate public transport IDs resolve newest data and stable equal-time p
     speedSource: "reported" as const,
     observedAt
   });
-  const older = vehicle("older-route", "Older position", 53.35, -9.2, olderAt);
-  const newer = vehicle("newest-route", "Newest position", 53.35, -6.26, newerAt);
-  const equalWest = vehicle("equal-west", "Equal west position", 53.35, -9.2, equalAt);
-  const equalEast = vehicle("equal-east", "Equal east position", 53.35, -7.4, equalAt);
+  const older = vehicle("3 220 d a", "Older position", 53.35, -9.2, olderAt);
+  const newer = vehicle("2 NX c a", "Newest position", 53.35, -6.26, newerAt);
+  const equalWest = vehicle("3 S4 a", "Equal west position", 53.35, -9.2, equalAt);
+  const equalEast = vehicle("3 L27 a", "Equal east position", 53.35, -7.4, equalAt);
   const responses = [
     [older, newer],
     [newer, older],
@@ -1055,7 +1072,7 @@ test("duplicate public transport IDs resolve newest data and stable equal-time p
   await expect(marker).toHaveCount(1);
   await marker.focus();
   const firstState = await readState();
-  expect(firstState.ariaLabel).toContain("Route newest-route");
+  expect(firstState.ariaLabel).toContain("Route NX");
   await assertOneRovingStop();
   await page.evaluate(() => {
     (window as unknown as { __duplicateTransitMarker?: Element }).__duplicateTransitMarker =
@@ -1102,20 +1119,19 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
   });
   const observedAt = new Date(Date.now() - 3 * 60_000).toISOString();
   const separator = "\u001f";
-  const vehicle = (route: string, label: string, destination: string) => ({
+  const vehicle = (route: string, label: string, bearing: number) => ({
     id: "separator-transit",
     label,
     route,
-    destination,
     latitude: 53.35,
     longitude: -7.4,
-    bearing: 90,
+    bearing,
     speedKmh: 20,
     speedSource: "reported" as const,
     observedAt
   });
-  const first = vehicle(`x${separator}string:y`, "z", "Harbour");
-  const second = vehicle("x", `y${separator}string:z`, "City Centre");
+  const first = vehicle(`x${separator}string:y`, "z", 270);
+  const second = vehicle("x", `y${separator}string:z`, 90);
   const responses = [
     [first, second],
     [second, first],
@@ -1160,8 +1176,8 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     const detail = await page.locator(".detail-transit").innerText();
     expect(detail).not.toContain(separator);
     expect(detail).not.toContain("string:z");
-    expect(detail).toContain("Towards City Centre");
-    expect(detail).not.toContain("Towards Harbour");
+    expect(detail).toContain("Heading east");
+    expect(detail).not.toContain("Heading west");
     await page.getByRole("button", { name: "Close map details" }).click();
     await expect(marker).toBeFocused();
     return detail;
@@ -1173,7 +1189,7 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
     id: "movement:transit:separator-transit",
     transform: firstState.transform,
     members: "transit:separator-transit",
-    ariaLabel: "Route x, Towards City Centre, live public transport position",
+    ariaLabel: "Route X, Heading east, live public transport position",
     tabIndex: 0
   });
   const firstDetail = await openWithEnter();
@@ -1181,8 +1197,8 @@ test("duplicate public transport IDs resolve U+001F route/label collisions indep
   await expect(page.locator(".detail-transit")).toBeVisible();
   await expect(page.locator(".detail-transit")).not.toContainText(separator);
   await expect(page.locator(".detail-transit")).not.toContainText("string:z");
-  await expect(page.locator(".detail-transit")).toContainText("Towards City Centre");
-  await expect(page.locator(".detail-transit")).not.toContainText("Towards Harbour");
+  await expect(page.locator(".detail-transit")).toContainText("Heading east");
+  await expect(page.locator(".detail-transit")).not.toContainText("Heading west");
   await page.getByRole("button", { name: "Close map details" }).click();
   await expect(marker).toBeFocused();
   await assertOneRovingStop();
@@ -2003,18 +2019,19 @@ test("shape of the day has labelled dual scales, independent rain bars, and a da
   await expect.poll(() => page.locator(".timeline-point").count()).toBeGreaterThan(0);
 
   await expect(page.locator(".temperature-axis")).toContainText(/Temperature/);
-  await expect(page.locator(".rain-axis")).toContainText(/Rain/);
+  await expect(page.locator(".rain-axis")).toContainText(/rain/i);
   await expect(page.locator(".timeline-x-axis")).toContainText(/Hour of day · Irish time/);
   const firstPoint = page.locator(".timeline-point").first();
-  await expect(firstPoint).toHaveAccessibleName(/degrees Celsius.*millimetres.*kilometres per hour/);
+  await expect(firstPoint).toHaveAccessibleName(/average temperature.*degrees Celsius.*average observed rainfall.*millimetres per reporting station.*average wind.*kilometres per hour/);
   const barHeights = await firstPoint.locator(".bar").evaluateAll((bars) => bars.map((bar) => getComputedStyle(bar).height));
   expect(barHeights).toHaveLength(2);
   expect(new Set(barHeights).size).toBe(2);
 
   const list = page.locator(".timeline-data-list");
   await list.locator("summary").click();
-  await expect(list.getByRole("table", { name: "Hourly averages across reporting Met Éireann stations" })).toBeVisible();
-  await expect(list.getByRole("columnheader")).toHaveText(["Time", "Temperature", "Rain", "Wind"]);
+  await expect(list.getByRole("table", { name: /Hourly averages across reporting Met Éireann stations; rain is the mean/ })).toBeVisible();
+  await expect(list.getByRole("columnheader")).toHaveText(["Time", "Average temperature", "Average rain", "Average wind"]);
+  await expect(list.locator("tbody tr").first().locator("td").nth(1)).toHaveText("0.4 mm");
 });
 
 test("390px primary controls, chart points, and map marker hit regions meet touch floors", async ({ page }, testInfo) => {
@@ -2060,6 +2077,76 @@ test("390px primary controls, chart points, and map marker hit regions meet touc
   await expect(page.locator("[role='dialog'].detail-station")).toBeVisible();
 });
 
+test("every interactive marker retains its 44px hit stroke through hover and forced colours", async ({ page }, testInfo) => {
+  if (testInfo.project.name !== "desktop") testInfo.skip();
+  await installMapMarkerFixtures(page);
+  const markerCases = [
+    { view: "/?view=custom&layers=weather", selector: ".station-marker", detail: ".detail-station" },
+    { view: "/?view=custom&layers=rivers", selector: ".river-marker", detail: ".detail-river" },
+    { view: "/?view=custom&layers=sea", selector: ".buoy", detail: ".detail-buoy" },
+    { view: "/?view=custom&layers=tides", selector: ".tide-marker", detail: ".detail-tide" },
+    { view: "/?view=custom&layers=bathing", selector: ".bathing-marker", detail: ".detail-bathing" },
+    { view: "/?view=custom&layers=air", selector: ".air-marker", detail: ".detail-air" },
+    { view: "/?view=custom&layers=trains", selector: ".train-marker", detail: ".detail-train" },
+    { view: "/?view=custom&layers=transit", selector: ".transit-marker", detail: ".detail-transit" },
+    { view: "/?view=custom&layers=trains,transit", selector: ".movement-stack-marker", detail: ".detail-train" },
+    { view: "/?view=custom&layers=earthquakes", selector: ".earthquake-marker", detail: ".detail-earthquake" },
+    { view: "/?view=custom&layers=wind", selector: ".wind-marker[data-map-marker]", detail: ".detail-station" }
+  ];
+
+  const hitStyle = async (selector: string) => page.locator(selector).first().locator(":scope > .map-marker-hit-target").evaluate((target) => {
+    const style = getComputedStyle(target);
+    return {
+      pointerEvents: style.pointerEvents,
+      strokeWidth: Number.parseFloat(style.strokeWidth),
+      opacity: Number.parseFloat(style.opacity),
+      filter: style.filter
+    };
+  });
+  const expectStableStyle = (style: Awaited<ReturnType<typeof hitStyle>>) => {
+    expect(style).toEqual({ pointerEvents: "stroke", strokeWidth: 44, opacity: 1, filter: "none" });
+  };
+  const assertRealHitArea = async (selector: string, expectedDetail: string) => {
+    const marker = page.locator(selector).first();
+    await expect(marker).toBeVisible();
+    expectStableStyle(await hitStyle(selector));
+    await marker.hover({ force: true });
+    expectStableStyle(await hitStyle(selector));
+    const hitTest = await marker.evaluate((group) => {
+      const target = group.querySelector(".map-marker-hit-target") as SVGCircleElement | null;
+      const matrix = target?.getScreenCTM();
+      if (!target || !matrix) return { points: [], click: null };
+      const centre = new DOMPoint(0, 0).matrixTransform(matrix);
+      const offsets = [[-20, 0], [20, 0], [0, -20], [0, 20]];
+      return { points: offsets.map(([x, y]) => ({ x: centre.x + x, y: centre.y + y })) };
+    });
+    expect(hitTest.points).toHaveLength(4);
+    for (const [index, point] of hitTest.points.entries()) {
+      await page.mouse.click(point.x, point.y);
+      await expect(
+        page.locator(`[role='dialog']${expectedDetail}`),
+        `${selector} must activate at hit offset ${index} (${point.x}, ${point.y})`
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Close map details" }).click();
+    }
+  };
+
+  for (const marker of markerCases) {
+    await page.goto(marker.view);
+    await page.locator("#live-map").scrollIntoViewIfNeeded();
+    await assertRealHitArea(marker.selector, marker.detail);
+  }
+
+  await page.emulateMedia({ forcedColors: "active" });
+  for (const marker of markerCases) {
+    await page.goto(marker.view);
+    await page.locator("#live-map").scrollIntoViewIfNeeded();
+    expectStableStyle(await hitStyle(marker.selector));
+    await page.locator(marker.selector).first().hover({ force: true });
+    expectStableStyle(await hitStyle(marker.selector));
+  }
+});
+
 test("320px at 200 percent text keeps actions, preset overflow, map, and list usable", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
   await installAccessibilityContentFixtures(page);
@@ -2070,13 +2157,42 @@ test("320px at 200 percent text keeps actions, preset overflow, map, and list us
   const actions = page.locator(".header-actions button");
   await expect(actions).toHaveCount(2);
   for (const action of await actions.all()) await expect(action).toBeVisible();
+  const actionBounds = await actions.evaluateAll((buttons) => buttons.map((button) => {
+    const bounds = button.getBoundingClientRect();
+    return { top: bounds.top, width: bounds.width, height: bounds.height };
+  }));
+  expect(Math.abs(actionBounds[0]!.top - actionBounds[1]!.top)).toBeLessThanOrEqual(1);
+  expect(actionBounds.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
   await expect(page.locator(".preset-scroll-hint")).toBeVisible();
   const presetStrip = page.getByRole("navigation", { name: "Map view shortcuts" });
   await expect(presetStrip.getByRole("button")).toHaveCount(4);
   const allLayers = presetStrip.getByRole("button", { name: "All layers", exact: true });
   await allLayers.scrollIntoViewIfNeeded();
   await expect(allLayers).toBeVisible();
-  await expect(page.getByLabel("Live map of Ireland")).toBeVisible();
+  const map = page.getByLabel("Live map of Ireland");
+  await expect(map).toBeVisible();
+  await map.scrollIntoViewIfNeeded();
+  const clippedControls = await page.evaluate(() => {
+    const stage = document.querySelector("#live-map")?.getBoundingClientRect();
+    if (!stage) return [{ name: "map", reason: "missing" }];
+    return [...document.querySelectorAll<HTMLElement>(".map-navigation button")].flatMap((control) => {
+      const bounds = control.getBoundingClientRect();
+      const visibleWidth = Math.max(0, Math.min(bounds.right, stage.right, innerWidth) - Math.max(bounds.left, stage.left, 0));
+      const visibleHeight = Math.max(0, Math.min(bounds.bottom, stage.bottom, innerHeight) - Math.max(bounds.top, stage.top, 0));
+      return bounds.left < stage.left - 1 || bounds.right > stage.right + 1 || visibleWidth < 44 || visibleHeight < 44
+        ? [{
+            name: control.getAttribute("aria-label") || control.textContent?.trim(),
+            left: bounds.left,
+            right: bounds.right,
+            stageLeft: stage.left,
+            stageRight: stage.right,
+            visibleWidth,
+            visibleHeight
+          }]
+        : [];
+    });
+  });
+  expect(clippedControls).toEqual([]);
   await expect(page.locator(".timeline-data-list summary")).toBeVisible();
   await page.locator(".timeline-data-list summary").click();
   await expect(page.getByRole("region", { name: "Hourly weather data table" })).toBeVisible();
@@ -2094,27 +2210,52 @@ test("320px at 200 percent text keeps actions, preset overflow, map, and list us
   expect(overflow.mapRight).toBeLessThanOrEqual(overflow.viewport + 1);
 });
 
-test("meaningful status, provenance, and caveat copy stays above practical type floors", async ({ page }, testInfo) => {
+test("every visible meaningful term and map label stays above the practical type floor", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
-  await installAccessibilityContentFixtures(page);
-  await page.goto("/");
-  const samples = await page.locator([
-    ".rail-status small",
-    ".freshness-chip small",
-    ".place-observations small",
-    ".guidance-reason",
-    ".guidance-caveat",
-    ".official-notices-heading > p",
-    ".warning-copy > p",
-    ".timeline-legend span",
-    "footer"
-  ].join(",")).evaluateAll((elements) => elements.map((element) => ({
-    selector: element.className || element.tagName,
-    size: Number.parseFloat(getComputedStyle(element).fontSize)
+  await installMapMarkerFixtures(page);
+  await page.goto("/?view=all");
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+
+  const result = await page.evaluate(() => {
+    const root = document.querySelector(".experience");
+    if (!root) return { inspected: 0, undersized: [{ text: "experience missing", size: 0, selector: "body" }] };
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const seen = new Set<Element>();
+    const undersized: Array<{ text: string; size: number; selector: string }> = [];
+    let inspected = 0;
+    while (walker.nextNode()) {
+      const text = walker.currentNode.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const element = walker.currentNode.parentElement;
+      if (!text || !element || seen.has(element)) continue;
+      if (element.closest(".sr-only, [hidden], script, style")) continue;
+      const hiddenAncestor = element.closest("[aria-hidden='true']");
+      if (hiddenAncestor && element.tagName.toLowerCase() !== "text") continue;
+      if (!/[\p{L}\p{N}]/u.test(text)) continue;
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      if (style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.opacity) === 0 || !bounds.width || !bounds.height) continue;
+      seen.add(element);
+      inspected += 1;
+      const size = Number.parseFloat(style.fontSize);
+      if (size < 12) {
+        undersized.push({
+          text: text.slice(0, 80),
+          size,
+          selector: `${element.tagName.toLowerCase()}.${String(element.className).replace(/\s+/g, ".")}`
+        });
+      }
+    }
+    return { inspected, undersized };
+  });
+  expect(result.inspected).toBeGreaterThan(100);
+  expect(result.undersized).toEqual([]);
+
+  const mapLabelSizes = await page.locator("svg.ireland-map text").evaluateAll((labels) => labels.map((label) => ({
+    text: label.textContent?.trim(),
+    size: Number.parseFloat(getComputedStyle(label).fontSize)
   })));
-  expect(samples.length).toBeGreaterThan(10);
-  expect(samples.filter((sample) => sample.size < 12)).toEqual([]);
-  expect(samples.filter((sample) => /guidance|warning-copy/.test(String(sample.selector)) && sample.size < 14)).toEqual([]);
+  expect(mapLabelSizes.length).toBeGreaterThan(10);
+  expect(mapLabelSizes.filter((label) => label.size < 12)).toEqual([]);
 });
 
 test("forced colours and reduced motion retain visible focus and non-animated map semantics", async ({ page }, testInfo) => {
@@ -2134,30 +2275,45 @@ test("forced colours and reduced motion retain visible focus and non-animated ma
   expect(animationDuration).toMatch(/^(?:0\.001ms|1e-06s)$/);
 });
 
-test("TFI details expose public route and destination while hiding provider junk", async ({ page }, testInfo) => {
+test("TFI details expose a captured public route and honest live-feed limitations", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
   await installAccessibilityContentFixtures(page);
   await page.goto("/?view=custom&layers=transit");
-  const marker = page.getByRole("button", { name: "Route 73, Towards City Centre, live public transport position" });
+  const marker = page.getByRole("button", { name: "Route 73, Heading east, live public transport position" });
   await expect(marker).toBeVisible();
   await marker.click();
 
   const detail = page.locator(".detail-transit");
   await expect(detail.getByRole("heading", { name: "Route 73" })).toBeVisible();
-  await expect(detail).toContainText("Towards City Centre");
+  await expect(detail).toContainText("Heading east");
+  await expect(detail).toContainText("Destination unavailable from this TFI live vehicle feed");
   await expect(detail).not.toContainText("3 73 a");
   await expect(detail).not.toContainText(/\b100\b/);
 });
 
-test("offline state names the last-data behavior and keeps retry safely gated", async ({ page, context }, testInfo) => {
+test("success then 503 then offline never claims erased data was retained", async ({ page, context }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
-  await installAccessibilityContentFixtures(page);
+  await installMapMarkerFixtures(page);
   await page.goto("/");
   const connection = page.locator("#connection-summary");
-  const retry = page.getByRole("button", { name: "Refresh live data" });
+  const retry = page.locator(".refresh-data-button");
   await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(page.locator(".station-marker")).toHaveCount(9);
+  await expect(retry).toBeEnabled();
+  await expect(page.locator(".live-state[role='status'][aria-live='polite']")).toHaveCount(1);
+  await expect(connection).not.toHaveAttribute("role", "status");
+  await expect(connection).not.toHaveAttribute("aria-live", "polite");
+
+  await page.unroute("https://prodapi.metweb.ie/observations/*/today");
+  await page.unroute("https://www.met.ie/latest-reports/observations/download");
+  await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => route.fulfill({ status: 503 }));
+  await page.route("https://www.met.ie/latest-reports/observations/download", (route) => route.fulfill({ status: 503 }));
+  await retry.click();
+  await expect(page.locator(".station-marker")).toHaveCount(0);
+
   await context.setOffline(true);
-  await expect(connection).toContainText("Offline · showing the last received data");
+  await expect(connection).toContainText("Offline · live refresh unavailable");
+  await expect(connection).not.toContainText(/showing|last received|retained/i);
   await expect(retry).toBeDisabled();
   await context.setOffline(false);
   await expect(connection).toContainText(/Connected|Checking for newer data/);

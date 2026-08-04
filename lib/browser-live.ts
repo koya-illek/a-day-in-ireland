@@ -9,6 +9,7 @@ import {
   normalizeRiverReadings
 } from "../platform/river-source.js";
 import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
+import { aggregateHourlyWeather } from "./weather-timeline.js";
 import {
   degreesLat,
   degreesLong,
@@ -280,7 +281,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
             history: stationRows.map((row) => ({
               time: String(row.reportTime ?? ""),
               temperature: numeric(row.temperature),
-              rainfall: numeric(row.rainfall) ?? 0,
+              rainfall: numeric(row.rainfall),
               windSpeed: numeric(row.windSpeed)
             }))
           };
@@ -319,14 +320,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     const fresh = stations;
     const top = (field: "temperature" | "rainfall" | "windSpeed") =>
       [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
-    const buckets = new Map<string, { temp: number[]; rain: number; wind: number[] }>();
-    valid.forEach(({ history }) => history.forEach((point) => {
-      const bucket = buckets.get(point.time) ?? { temp: [], rain: 0, wind: [] };
-      if (point.temperature !== null) bucket.temp.push(point.temperature);
-      if (point.windSpeed !== null) bucket.wind.push(point.windSpeed);
-      bucket.rain += point.rainfall;
-      buckets.set(point.time, bucket);
-    }));
+    const timeline = aggregateHourlyWeather(valid.map(({ history }) => history));
     const now = Date.now();
     return {
       ...previous,
@@ -344,12 +338,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
         windiest: top("windSpeed"),
         reporting: fresh.length
       },
-      timeline: [...buckets].map(([time, values]) => ({
-        time,
-        temperature: values.temp.length ? values.temp.reduce((a, b) => a + b, 0) / values.temp.length : null,
-        rainfall: values.rain,
-        windSpeed: values.wind.length ? values.wind.reduce((a, b) => a + b, 0) / values.wind.length : null
-      }))
+      timeline
     };
   }, () => emptyWeatherSnapshot(previous));
 }

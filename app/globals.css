@@ -1889,11 +1889,15 @@ footer {
 /* Accessibility, legibility and calm information hierarchy */
 :root { --line: rgba(117, 150, 184, .13); }
 
-.map-marker-hit-target {
-  fill: transparent;
-  pointer-events: stroke;
-  stroke: transparent;
-  stroke-width: 44px;
+[data-map-marker] > circle.map-marker-hit-target {
+  fill: transparent !important;
+  filter: none !important;
+  opacity: 1 !important;
+  pointer-events: stroke !important;
+  stroke: rgba(0, 0, 0, .001) !important;
+  stroke-dasharray: none !important;
+  stroke-opacity: 1 !important;
+  stroke-width: 44px !important;
 }
 
 .brand small,
@@ -1917,7 +1921,19 @@ footer {
 .layer-group-heading h3,
 .guidance-status,
 .place-picker label,
-.preset-scroll-hint {
+.preset-scroll-hint,
+.freshness-chip b,
+.place-observations dt,
+.context-actions small,
+.context-actions i,
+.dayline-heading > p,
+.layer-group-controls small,
+.layer-list small,
+.moment-facts span,
+.warning-strip > span,
+.warning-strip time,
+.info-brand small,
+.map-presets button {
   font-size: .75rem;
 }
 
@@ -1947,6 +1963,20 @@ footer {
 footer {
   font-size: .8125rem;
 }
+
+.place text,
+.buoy text,
+.wind-marker text,
+.air-marker text,
+.tide-marker text,
+.bathing-marker text,
+.movement-stack-marker text,
+.transit-marker text,
+.place-focus text {
+  font-size: 12px;
+}
+
+.station-marker text { font-size: 13px; }
 
 .station-card dl div,
 .warning-copy p,
@@ -2291,9 +2321,26 @@ footer {
   .header-actions { flex-wrap: wrap; }
   .section-rail nav button { font-size: .75rem; min-height: 44px; padding: .65rem .7rem; }
   .map-stage { aspect-ratio: auto; height: 420px; min-height: 420px; width: 100%; }
-  .map-navigation { top: .55rem; }
-  .map-navigation button { height: 44px; min-width: 44px; }
-  .map-navigation output { min-width: 48px; }
+  .map-navigation {
+    display: grid;
+    grid-template-columns: 44px 44px minmax(88px, 1fr) 64px;
+    left: .35rem;
+    right: .35rem;
+    top: .55rem;
+  }
+  .map-navigation button {
+    height: 44px;
+    min-width: 0;
+    padding-left: .2rem;
+    padding-right: .2rem;
+  }
+  .map-navigation output {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+    padding: 0 .2rem;
+  }
   .map-notice { max-height: 9rem; overflow-y: auto; padding-right: 2.8rem; top: 3.8rem; }
   .map-notice > button { height: 44px; min-width: 44px; right: .1rem; top: .1rem; }
   .map-notice p { display: block; }
@@ -2309,8 +2356,18 @@ footer {
 
 @media (max-width: 400px) {
   .topbar { grid-template-columns: 1fr; }
-  .header-actions { justify-self: stretch; width: 100%; }
-  .header-actions button { flex: 1 1 7rem; }
+  .header-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-self: stretch;
+    width: 100%;
+  }
+  .header-actions button {
+    min-width: 0;
+    padding-left: .35rem;
+    padding-right: .35rem;
+    width: 100%;
+  }
   .place-controls { align-items: stretch; flex-direction: column; }
   .place-controls select,
   .place-controls button { width: 100%; }
@@ -2318,7 +2375,7 @@ footer {
 }
 
 @media (forced-colors: active) {
-  .map-marker-hit-target { forced-color-adjust: none; stroke: transparent; }
+  [data-map-marker] > circle.map-marker-hit-target { forced-color-adjust: none; }
   [data-map-marker]:focus-visible > .map-marker-focus-ring {
     filter: none;
     opacity: 1 !important;

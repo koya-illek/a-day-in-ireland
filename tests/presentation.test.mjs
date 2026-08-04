@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import { humaniseWarningRegions, transitPresentation } from "../lib/presentation.js";
+import {
+  humaniseWarningRegions,
+  publicRouteFromNtaRouteId,
+  transitPresentation
+} from "../lib/presentation.js";
 
 test("warning region codes become county names without leaking raw provider codes", () => {
   assert.equal(humaniseWarningRegions(["EI27", "EI30", "EI31"]), "Waterford, Wexford and Wicklow");
@@ -11,31 +16,44 @@ test("warning region codes become county names without leaking raw provider code
   assert.equal(humaniseWarningRegions([]), "Scope not specified by Met Éireann");
 });
 
-test("TFI presentation turns provider route IDs into public route and direction language", () => {
+test("captured NTA route_ids map to their public route token without leaking internal suffixes", async () => {
+  const fixture = JSON.parse(await readFile(
+    new URL("./fixtures/nta-route-ids.json", import.meta.url),
+    "utf8"
+  ));
+  assert.match(fixture.source, /NTA GTFS-Realtime TripDescriptor\.route_id/);
+  for (const { routeId, publicRoute } of fixture.routes) {
+    assert.equal(publicRouteFromNtaRouteId(routeId), publicRoute, routeId);
+  }
+  assert.equal(publicRouteFromNtaRouteId("operator route:not-public a"), "");
+  assert.equal(publicRouteFromNtaRouteId(""), "");
+});
+
+test("TFI presentation turns a captured provider route ID into public route and bearing language", () => {
   assert.deepEqual(transitPresentation({
     id: "vehicle-100",
-    route: "3 73 a",
+    route: "03C 126 e a",
     label: "100",
     bearing: 91
   }), {
-    route: "73",
-    title: "Route 73",
+    route: "126",
+    title: "Route 126",
     direction: "Heading east",
-    destination: null,
+    destination: "Destination unavailable from this TFI live vehicle feed",
     label: null
   });
 });
 
-test("TFI presentation prioritises a destination and strips internal control characters", () => {
+test("TFI presentation strips internal control characters instead of inventing a destination", () => {
   const presentation = transitPresentation({
     id: "vehicle-15",
     route: "Route 15",
     label: "City service\u001fvehicle",
-    destination: "Clongriffin\u0000",
     bearing: 270
   });
   assert.equal(presentation.title, "Route 15");
-  assert.equal(presentation.direction, "Towards Clongriffin");
+  assert.equal(presentation.direction, "Heading west");
+  assert.match(presentation.destination, /^Destination unavailable/);
   assert.equal(presentation.label, null);
   assert.doesNotMatch(JSON.stringify(presentation), /[\u0000-\u001f]/);
 });
@@ -43,6 +61,7 @@ test("TFI presentation prioritises a destination and strips internal control cha
 test("TFI presentation states when direction is genuinely unavailable", () => {
   const presentation = transitPresentation({ id: "opaque", route: "", label: "opaque", bearing: null });
   assert.equal(presentation.title, "Public transport vehicle");
-  assert.equal(presentation.direction, "Direction not supplied by TFI");
+  assert.equal(presentation.direction, "Direction unavailable from this TFI live vehicle feed");
+  assert.equal(presentation.destination, "Destination unavailable from this TFI live vehicle feed");
   assert.equal(presentation.label, null);
 });

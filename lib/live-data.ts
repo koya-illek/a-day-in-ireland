@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { parseIrelandLocalTimestamp, parseLatestObservations } from "./latest-observations";
 import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
+import { aggregateHourlyWeather } from "./weather-timeline.js";
 import {
   RIVER_ENDPOINT,
   latestEirGridValue,
@@ -35,7 +36,7 @@ export const normalizeWeatherWarnings = (
 
 type StationResult = {
   reading: StationReading;
-  history: Array<{ time: string; temperature: number | null; rainfall: number; windSpeed: number | null }>;
+  history: Array<{ time: string; temperature: number | null; rainfall: number | null; windSpeed: number | null }>;
 };
 
 async function fetchStation(station: (typeof WEATHER_STATIONS)[number]): Promise<StationResult | null> {
@@ -67,7 +68,7 @@ async function fetchStation(station: (typeof WEATHER_STATIONS)[number]): Promise
       history: stationRows.map((row) => ({
         time: String(row.reportTime ?? ""),
         temperature: numberOrNull(row.temperature),
-        rainfall: numberOrNull(row.rainfall) ?? 0,
+        rainfall: numberOrNull(row.rainfall),
         windSpeed: numberOrNull(row.windSpeed)
       }))
     };
@@ -525,16 +526,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
       .filter((station) => station[field] !== null)
       .sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
 
-  const timelineByTime = new Map<string, { temperatures: number[]; rainfall: number; winds: number[] }>();
-  for (const result of results) {
-    for (const point of result.history) {
-      const bucket = timelineByTime.get(point.time) ?? { temperatures: [], rainfall: 0, winds: [] };
-      if (point.temperature !== null) bucket.temperatures.push(point.temperature);
-      if (point.windSpeed !== null) bucket.winds.push(point.windSpeed);
-      bucket.rainfall += point.rainfall;
-      timelineByTime.set(point.time, bucket);
-    }
-  }
+  const timeline = aggregateHourlyWeather(results.map(({ history }) => history));
 
   const generatedAt = new Date().toISOString();
   return {
@@ -590,15 +582,6 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
       runningTrains: trains.filter((train) => train.status === "running").length,
       riverStations: rivers.length
     },
-    timeline: [...timelineByTime.entries()].map(([time, values]) => ({
-      time,
-      temperature: values.temperatures.length
-        ? values.temperatures.reduce((sum, value) => sum + value, 0) / values.temperatures.length
-        : null,
-      rainfall: values.rainfall,
-      windSpeed: values.winds.length
-        ? values.winds.reduce((sum, value) => sum + value, 0) / values.winds.length
-        : null
-    }))
+    timeline
   };
 }
