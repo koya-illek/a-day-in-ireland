@@ -59,6 +59,79 @@ const importDataStateAdapter = async () => {
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 
+const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
+  const moduleUrl = new URL("../platform/server-entry.js", import.meta.url);
+  moduleUrl.searchParams.set("satellite-race", newerSucceeds ? "newer-success" : "newer-failure");
+  const api = await import(moduleUrl.href);
+  const originalFetch = globalThis.fetch;
+  const advertisedDate = new Date(Date.now() - 24 * 60 * 60_000).toISOString().slice(0, 10);
+  const tileResolvers = [];
+  let tileRequests = 0;
+  globalThis.fetch = async (input) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+    if (url.endsWith("/all/all.xml")) {
+      return new Response(`<Domain>2026-01-01/${advertisedDate}/P1D</Domain>`);
+    }
+    if (url.includes("gibs.earthdata.nasa.gov") && url.endsWith(".jpeg")) {
+      tileRequests += 1;
+      if (tileRequests <= 8) {
+        return new Promise((resolve) => tileResolvers.push(resolve));
+      }
+      return new Response(null, { status: 503 });
+    }
+    return new Response("upstream unavailable", { status: 503 });
+  };
+
+  const waitForTileBatches = async (count) => {
+    for (let attempt = 0; attempt < 100 && tileResolvers.length < count; attempt += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(tileResolvers.length, count, `expected ${count} controlled satellite tile requests`);
+  };
+  const satelliteTile = () => new Response(null, {
+    status: 200,
+    headers: {
+      "content-type": "image/jpeg",
+      "layer-time-actual": `${advertisedDate}T00:00:00Z`
+    }
+  });
+  const failedTile = () => new Response(null, { status: 503 });
+
+  try {
+    const olderResponse = api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    await waitForTileBatches(4);
+    const newerResponse = api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    await waitForTileBatches(8);
+
+    const newerResolvers = tileResolvers.slice(4, 8);
+    newerResolvers.forEach((resolve) => resolve(newerSucceeds ? satelliteTile() : failedTile()));
+    const newerBody = await (await newerResponse).json();
+
+    const olderResolvers = tileResolvers.slice(0, 4);
+    olderResolvers.forEach((resolve) => resolve(newerSucceeds ? failedTile() : satelliteTile()));
+    const olderBody = await (await olderResponse).json();
+    const tileRequestsBeforeThirdContext = tileRequests;
+    const thirdBody = await (await api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    )).json();
+
+    return { advertisedDate, newerBody, olderBody, thirdBody, tileRequests, tileRequestsBeforeThirdContext };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+};
+
 test("the static page starts with a truthful empty shell", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
   const snapshot = createInitialSnapshot("2026-08-03T09:00:00.000Z");
@@ -297,6 +370,131 @@ test("satellite discovery suppresses the layer when no recent Ireland tile is va
     }),
     /no verified Ireland satellite frame/
   );
+});
+
+test("an older failed satellite context cannot clear a newer successful cache publication", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const pending = [];
+  const frame = {
+    observedAt: "2026-08-03T00:00:00Z",
+    label: "verified",
+    tileTemplate: "https://example.test/{z}/{y}/{x}.jpeg"
+  };
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => Date.parse("2026-08-04T12:00:00Z"),
+    resolveAvailability: async () => ({
+      advertisedDate: "2026-08-03",
+      startDate: "2026-08-03",
+      cacheKey: "2026-08-04|2026-08-03"
+    }),
+    discoverFrame: () => new Promise((resolve, reject) => pending.push({ resolve, reject }))
+  });
+
+  const older = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  const newer = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+
+  pending[1].resolve(frame);
+  assert.deepEqual(await newer, frame);
+  pending[0].reject(new Error("older context failed"));
+  await assert.rejects(older, /older context failed/);
+
+  assert.deepEqual(await resolver(), frame);
+  assert.equal(pending.length, 2, "the third context must reuse the newer successful publication");
+});
+
+test("an older successful satellite context cannot overwrite a newer failed cache publication", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const pending = [];
+  const olderFrame = {
+    observedAt: "2026-08-02T00:00:00Z",
+    label: "older verified frame",
+    tileTemplate: "https://example.test/{z}/{y}/{x}.jpeg"
+  };
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => Date.parse("2026-08-04T12:00:00Z"),
+    resolveAvailability: async () => ({
+      advertisedDate: "2026-08-03",
+      startDate: "2026-08-03",
+      cacheKey: "2026-08-04|2026-08-03"
+    }),
+    discoverFrame: () => new Promise((resolve, reject) => pending.push({ resolve, reject }))
+  });
+
+  const older = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  const newer = resolver();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 2);
+
+  pending[1].reject(new Error("newer context failed"));
+  await assert.rejects(newer, /newer context failed/);
+  pending[0].resolve(olderFrame);
+  assert.deepEqual(await older, olderFrame);
+
+  await assert.rejects(resolver(), /recent failed state/);
+  assert.equal(pending.length, 2, "the third context must retain the newer failed publication");
+});
+
+test("concurrent context endpoints retain a newer satellite success after the older request fails", async () => {
+  const result = await exerciseSatelliteContextRace({ newerSucceeds: true });
+  assert.equal(result.newerBody.contextStatus.satellite, "fallback");
+  assert.equal(result.newerBody.satellite?.observedAt?.slice(0, 10), result.advertisedDate);
+  assert.equal(result.olderBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.olderBody.satellite, null);
+  assert.equal(result.thirdBody.contextStatus.satellite, "fallback");
+  assert.deepEqual(result.thirdBody.satellite, result.newerBody.satellite);
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must reuse the newer success without probing tiles");
+});
+
+test("concurrent context endpoints retain a newer satellite failure after the older request succeeds", async () => {
+  const result = await exerciseSatelliteContextRace({ newerSucceeds: false });
+  assert.equal(result.newerBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.newerBody.satellite, null);
+  assert.equal(result.olderBody.contextStatus.satellite, "fallback");
+  assert.ok(result.olderBody.satellite);
+  assert.equal(result.thirdBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.thirdBody.satellite, null);
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must retain the newer failure without probing tiles");
+});
+
+test("satellite cache revalidates at UTC rollover and when the provider-advertised date advances", async () => {
+  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  let now = Date.parse("2026-08-04T23:59:00Z");
+  let advertisedDate = "2026-08-03";
+  let metadataCalls = 0;
+  let discoveries = 0;
+  const resolver = createSatelliteAvailabilityResolver({
+    clock: () => now,
+    fetcher: async () => {
+      metadataCalls += 1;
+      return new Response(`<Domain>2026-07-16/${advertisedDate}/P1D</Domain>`);
+    },
+    discoverFrame: async ({ startDate }) => {
+      discoveries += 1;
+      return {
+        observedAt: `${startDate}T00:00:00Z`,
+        label: `verified ${startDate}`,
+        tileTemplate: `https://example.test/${startDate}/{z}/{y}/{x}.jpeg`
+      };
+    }
+  });
+
+  const first = await resolver();
+  assert.equal((await resolver()).observedAt, first.observedAt);
+  assert.equal(discoveries, 1, "same provider date and UTC day should reuse the verified frame");
+
+  now = Date.parse("2026-08-05T00:01:00Z");
+  await resolver();
+  assert.equal(discoveries, 2, "UTC rollover must force metadata-keyed tile revalidation");
+
+  advertisedDate = "2026-08-04";
+  const advanced = await resolver();
+  assert.equal(advanced.observedAt, "2026-08-04T00:00:00Z");
+  assert.equal(discoveries, 3, "a newer provider-advertised date must bypass the prior frame cache");
+  assert.equal(metadataCalls, 4, "provider metadata is checked before every cache reuse decision");
 });
 
 test("tide query windows remain stable inside a cache bucket", async () => {

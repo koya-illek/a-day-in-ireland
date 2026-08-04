@@ -642,7 +642,6 @@ const SATELLITE_PROBE_TILES = [
 ];
 const SATELLITE_DOMAINS_URL =
   `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/${SATELLITE_LAYER}/default/${SATELLITE_MATRIX_SET}/all/all.xml`;
-const satelliteAvailabilityCache = { checkedAt: 0, frame: null };
 const SATELLITE_SUCCESS_CACHE_MS = 6 * 60 * 60 * 1000;
 const SATELLITE_FAILURE_CACHE_MS = 30 * 60 * 1000;
 
@@ -682,21 +681,42 @@ const latestDomainDate = (xml, notAfter) => {
   return candidates.at(-1) ?? null;
 };
 
+export const resolveSatelliteAvailability = async ({
+  now = Date.now(),
+  fetcher = (...args) => fetch(...args)
+} = {}) => {
+  const today = dateOnly(now);
+  const fallbackDate = dateOnly(now - DAY_MS);
+  try {
+    const domains = await fetcher(SATELLITE_DOMAINS_URL, {
+      cf: { cacheEverything: true, cacheTtl: 300 }
+    });
+    if (!domains.ok) throw new Error(`NASA GIBS Domains returned ${domains.status}`);
+    const advertisedDate = latestDomainDate(await domains.text(), today);
+    return {
+      advertisedDate,
+      startDate: advertisedDate ?? fallbackDate,
+      cacheKey: `${today}|${advertisedDate ?? "metadata-unavailable"}`
+    };
+  } catch {
+    return {
+      advertisedDate: null,
+      startDate: fallbackDate,
+      cacheKey: `${today}|metadata-unavailable`
+    };
+  }
+};
+
 export const findLatestSatelliteFrame = async ({
   now = Date.now(),
   fetcher = fetch,
-  maximumLookbackDays = 14
+  maximumLookbackDays = 14,
+  startDate
 } = {}) => {
-  const today = dateOnly(now);
-  let firstDate = dateOnly(now - DAY_MS);
-  try {
-    const domains = await fetcher(SATELLITE_DOMAINS_URL, {
-      cf: { cacheEverything: true, cacheTtl: 21600 }
-    });
-    if (domains.ok) firstDate = latestDomainDate(await domains.text(), today) ?? firstDate;
-  } catch {
-    // A real tile probe below remains the source of truth when Domains fails.
-  }
+  const availability = typeof startDate === "string"
+    ? { startDate }
+    : await resolveSatelliteAvailability({ now, fetcher });
+  const firstDate = availability.startDate;
 
   const firstTimestamp = Date.parse(`${firstDate}T00:00:00Z`);
   for (let offset = 0; offset <= maximumLookbackDays; offset += 1) {
@@ -711,27 +731,65 @@ export const findLatestSatelliteFrame = async ({
   throw new Error("NASA GIBS has no verified Ireland satellite frame in the recent archive");
 };
 
-const fetchSatellite = async () => {
-  const now = Date.now();
-  const cacheAge = now - satelliteAvailabilityCache.checkedAt;
-  if (satelliteAvailabilityCache.frame && cacheAge < SATELLITE_SUCCESS_CACHE_MS) {
-    return satelliteAvailabilityCache.frame;
-  }
-  if (!satelliteAvailabilityCache.frame && satelliteAvailabilityCache.checkedAt > 0 && cacheAge < SATELLITE_FAILURE_CACHE_MS) {
-    throw new Error("NASA GIBS satellite availability is in a recent failed state");
-  }
+export const createSatelliteAvailabilityResolver = ({
+  clock = () => Date.now(),
+  fetcher = (...args) => fetch(...args),
+  resolveAvailability = resolveSatelliteAvailability,
+  discoverFrame = findLatestSatelliteFrame,
+  maximumLookbackDays = 14,
+  successCacheMs = SATELLITE_SUCCESS_CACHE_MS,
+  failureCacheMs = SATELLITE_FAILURE_CACHE_MS
+} = {}) => {
+  let latestGeneration = 0;
+  const cache = {
+    key: null,
+    checkedAt: 0,
+    outcome: "empty",
+    frame: null
+  };
 
-  try {
-    const frame = await findLatestSatelliteFrame({ now });
-    satelliteAvailabilityCache.checkedAt = now;
-    satelliteAvailabilityCache.frame = frame;
-    return frame;
-  } catch (error) {
-    satelliteAvailabilityCache.checkedAt = now;
-    satelliteAvailabilityCache.frame = null;
-    throw error;
-  }
+  return async () => {
+    // Allocate before the first await so request start order, not upstream
+    // response order, decides which completion is allowed to publish.
+    const generation = ++latestGeneration;
+    const now = clock();
+    const availability = await resolveAvailability({ now, fetcher });
+    const cacheAge = now - cache.checkedAt;
+    const cacheIsCurrent = cache.key === availability.cacheKey && cacheAge >= 0;
+    if (cacheIsCurrent && cache.outcome === "success" && cacheAge < successCacheMs) {
+      return cache.frame;
+    }
+    if (cacheIsCurrent && cache.outcome === "failure" && cacheAge < failureCacheMs) {
+      throw new Error("NASA GIBS satellite availability is in a recent failed state");
+    }
+
+    try {
+      const frame = await discoverFrame({
+        now,
+        fetcher,
+        maximumLookbackDays,
+        startDate: availability.startDate
+      });
+      if (generation === latestGeneration) {
+        cache.key = availability.cacheKey;
+        cache.checkedAt = now;
+        cache.outcome = "success";
+        cache.frame = frame;
+      }
+      return frame;
+    } catch (error) {
+      if (generation === latestGeneration) {
+        cache.key = availability.cacheKey;
+        cache.checkedAt = now;
+        cache.outcome = "failure";
+        cache.frame = null;
+      }
+      throw error;
+    }
+  };
 };
+
+const fetchSatellite = createSatelliteAvailabilityResolver();
 
 const fetchEarthquakes = async () => {
   const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
