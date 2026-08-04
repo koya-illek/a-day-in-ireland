@@ -37,6 +37,12 @@ import {
   parseViewState,
   serializeViewState
 } from "../lib/view-state";
+import {
+  clusterProjectedPoints,
+  selectDeclutteredPoints,
+  type MapViewport,
+  type ProjectedPoint
+} from "../lib/map-density";
 import { WEATHER_OBSERVATION_MAX_AGE_MS } from "../lib/weather-stations";
 
 type Layer =
@@ -75,8 +81,17 @@ type MapSelection =
   | Selection
   | { type: "movement-stack"; items: MovementSelection[]; index: number };
 
+type MovementStack = {
+  key: string;
+  x: number;
+  y: number;
+  items: MovementSelection[];
+};
+
 const movementItemIdentity = (item: MovementSelection) => `${item.type}:${item.item.id}`;
 const movementMarkerId = (identity: string) => `movement:${identity}`;
+const MOVEMENT_DRILL_THRESHOLD = 12;
+const MOVEMENT_PAGE_SIZE = 12;
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
 
@@ -369,6 +384,24 @@ function nearestReadingWithinRadius<T extends { latitude: number; longitude: num
   return nearest && nearest.distanceKm <= radiusKm ? nearest : null;
 }
 
+function projectReadings<T extends { latitude: number; longitude: number }>(
+  items: readonly T[],
+  projection: ReturnType<typeof geoMercator>,
+  keyFor: (item: T) => string,
+  priorityFor: (item: T) => number = () => 0
+): ProjectedPoint<T>[] {
+  return items.flatMap((item) => {
+    const point = projection([item.longitude, item.latitude]);
+    return point ? [{
+      key: keyFor(item),
+      x: point[0],
+      y: point[1],
+      item,
+      priority: priorityFor(item)
+    }] : [];
+  });
+}
+
 const formatDistance = (value: number) => value < 10 ? `${value.toFixed(1)} km away` : `${Math.round(value)} km away`;
 
 const ACTIVITY_STATUS_LABELS: Record<ReturnType<typeof getActivityGuidance>[number]["status"], string> = {
@@ -456,6 +489,7 @@ function MapMarker({
   focusRadius,
   onActivate,
   dataMovementMembers,
+  dataClusterSize,
   children
 }: {
   className: string;
@@ -464,6 +498,7 @@ function MapMarker({
   focusRadius: number;
   onActivate: () => void;
   dataMovementMembers?: string;
+  dataClusterSize?: number;
   children: ReactNode;
 }) {
   return (
@@ -472,6 +507,7 @@ function MapMarker({
       data-map-marker="true"
       data-marker-id={interaction.markerId}
       data-movement-members={dataMovementMembers}
+      data-cluster-size={dataClusterSize}
       data-marker-pointer-target="true"
       transform={transform}
       role="button"
@@ -630,13 +666,42 @@ function DetailCard({
 }) {
   const stack = selected.type === "movement-stack" ? selected : null;
   const resolved: Selection = selected.type === "movement-stack"
-    ? selected.items[selected.index]
+    ? selected.items[selected.index]!
     : selected;
   const { type, item } = resolved;
+  const [movementQuery, setMovementQuery] = useState("");
+  const [movementKind, setMovementKind] = useState<"all" | "train" | "transit">("all");
+  const [movementPage, setMovementPage] = useState(0);
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+
+  const movementMatches = useMemo(() => {
+    if (!stack) return [];
+    const query = movementQuery.trim().toLocaleLowerCase("en-IE");
+    return stack.items.map((movement, index) => ({ movement, index })).filter(({ movement }) => {
+      if (movementKind !== "all" && movement.type !== movementKind) return false;
+      if (!query) return true;
+      const searchable = movement.type === "train"
+        ? [movement.item.id, movement.item.direction, movement.item.message, "rail", "train"]
+        : [movement.item.id, movement.item.route, movement.item.label, "tfi", "public transport"];
+      return searchable.some((value) => value.toLocaleLowerCase("en-IE").includes(query));
+    });
+  }, [movementKind, movementQuery, stack]);
+  const movementPageCount = Math.max(1, Math.ceil(movementMatches.length / MOVEMENT_PAGE_SIZE));
+  const visibleMovementMatches = movementMatches.slice(
+    movementPage * MOVEMENT_PAGE_SIZE,
+    (movementPage + 1) * MOVEMENT_PAGE_SIZE
+  );
+
+  useEffect(() => {
+    setMovementPage(0);
+  }, [movementKind, movementQuery]);
+
+  useEffect(() => {
+    setMovementPage((current) => Math.min(current, movementPageCount - 1));
+  }, [movementPageCount]);
 
   useLayoutEffect(() => {
     const focused = document.activeElement instanceof HTMLElement || document.activeElement instanceof SVGElement
@@ -664,8 +729,8 @@ function DetailCard({
       }
       if (event.key !== "Tab") return;
       const focusable = [...dialog.querySelectorAll<HTMLElement>(
-        "button, a[href], [tabindex]:not([tabindex='-1'])"
-      )].filter((element) => !element.hasAttribute("disabled"));
+        "button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
+      )].filter((element) => !element.hasAttribute("disabled") && element.getClientRects().length > 0);
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
@@ -692,7 +757,7 @@ function DetailCard({
   return (
     <aside
       ref={dialogRef}
-      className={`station-card detail-${type}`}
+      className={`station-card detail-${type} ${stack ? "has-movement-browser" : ""}`}
       aria-live="polite"
       aria-modal="true"
       aria-labelledby="map-detail-title"
@@ -700,7 +765,7 @@ function DetailCard({
       tabIndex={-1}
     >
       <button ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>
-      {stack && (
+      {stack && stack.items.length <= MOVEMENT_DRILL_THRESHOLD && (
         <div className="detail-stack-navigation" aria-label="Overlapping map items">
           <button
             onClick={() => onStackChange((stack.index - 1 + stack.items.length) % stack.items.length)}
@@ -716,6 +781,62 @@ function DetailCard({
             →
           </button>
         </div>
+      )}
+      {stack && (
+        <section className="movement-browser" aria-label={`${stack.items.length} transport positions in this area`}>
+          <div className="movement-browser-heading">
+            <strong>Transport in this area</strong>
+            <span>{movementMatches.length} of {stack.items.length}</span>
+          </div>
+          <div className="movement-browser-filters">
+            <label>
+              <span>Search route, direction or vehicle</span>
+              <input
+                type="search"
+                value={movementQuery}
+                onChange={(event) => setMovementQuery(event.target.value)}
+                placeholder="Try 42, Cork, or rail"
+              />
+            </label>
+            <label>
+              <span>Transport type</span>
+              <select value={movementKind} onChange={(event) => setMovementKind(event.target.value as typeof movementKind)}>
+                <option value="all">Rail and TFI</option>
+                <option value="train">Rail only</option>
+                <option value="transit">TFI only</option>
+              </select>
+            </label>
+          </div>
+          {visibleMovementMatches.length ? (
+            <ol className="movement-results">
+              {visibleMovementMatches.map(({ movement, index }) => {
+                const label = movement.type === "train"
+                  ? `Train ${movement.item.id} · ${movement.item.direction || "Direction unavailable"}`
+                  : `${movement.item.route ? `Route ${movement.item.route}` : "TFI vehicle"} · ${movement.item.label}`;
+                return (
+                  <li key={movementItemIdentity(movement)}>
+                    <button
+                      type="button"
+                      className={index === stack.index ? "active" : ""}
+                      aria-current={index === stack.index ? "true" : undefined}
+                      onClick={() => onStackChange(index)}
+                    >
+                      <b>{label}</b>
+                      <small>{movement.type === "train" ? "Iarnród Éireann" : "Transport for Ireland"} · updated {formatTime(new Date(movement.item.observedAt))}</small>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          ) : <p className="movement-results-empty">No transport positions match this search.</p>}
+          {movementPageCount > 1 && (
+            <nav className="movement-pagination" aria-label="Transport result pages">
+              <button type="button" disabled={movementPage === 0} onClick={() => setMovementPage((page) => page - 1)}>Previous</button>
+              <span>Page {movementPage + 1} of {movementPageCount}</span>
+              <button type="button" disabled={movementPage >= movementPageCount - 1} onClick={() => setMovementPage((page) => page + 1)}>Next</button>
+            </nav>
+          )}
+        </section>
       )}
       {type === "station" && (
         <>
@@ -987,6 +1108,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [markerAnnouncement, setMarkerAnnouncement] = useState("");
   const [selected, setSelected] = useState<MapSelection | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [openLayerGroups, setOpenLayerGroups] = useState<Set<string>>(() => new Set(["weather"]));
   const [activePreset, setActivePreset] = useState<Preset>("weather");
   const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
   const [showAllNotables, setShowAllNotables] = useState(false);
@@ -1000,12 +1122,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [mapView, setMapView] = useState({ scale: 1, x: 0, y: 0 });
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const [selectedPlaceId, setSelectedPlaceId] = useState(DEFAULT_PLACE_ID);
+  const [ephemeralPlace, setEphemeralPlace] = useState<Place | null>(null);
   const [placeMessage, setPlaceMessage] = useState("");
   const [viewHydrated, setViewHydrated] = useState(false);
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
+  const [mapDimensions, setMapDimensions] = useState({ width: 1000, height: 900 });
+  const [mapFeedback, setMapFeedback] = useState("");
   const snapshotRef = useRef(initialSnapshot);
   const mapRef = useRef<SVGSVGElement | null>(null);
+  const mapSectionRef = useRef<HTMLElement | null>(null);
+  const pendingMapAnchorRef = useRef<number | null>(null);
   const markerOpenerRef = useRef<SVGElement | null>(null);
   const focusedMarkerRef = useRef<{ id: string; element: SVGGElement } | null>(null);
   const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
@@ -1023,6 +1150,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     updateMotionPreference();
     mediaQuery.addEventListener("change", updateMotionPreference);
     return () => mediaQuery.removeEventListener("change", updateMotionPreference);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      const width = Math.max(1, Math.round(entry.contentRect.width));
+      const height = Math.max(1, Math.round(entry.contentRect.height));
+      setMapDimensions((current) => current.width === width && current.height === height
+        ? current
+        : { width, height }
+      );
+    });
+    observer.observe(map);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -1179,6 +1322,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       "input:not([disabled])",
       "select:not([disabled])",
       "textarea:not([disabled])",
+      "summary",
       "[tabindex]:not([tabindex=\"-1\"])",
     ].join(", ");
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1190,7 +1334,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       if (event.key !== "Tab") return;
 
       const focusable = Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector))
-        .filter((element) => element.getAttribute("aria-hidden") !== "true");
+        .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
       if (!focusable.length) {
         event.preventDefault();
         return;
@@ -1237,7 +1381,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       ref: road.properties.ref
     }));
   }, [projection]);
-  const displayedAirQuality = useMemo(() => {
+  const mapViewport = useMemo<MapViewport>(() => ({
+    ...mapView,
+    width: mapDimensions.width,
+    height: mapDimensions.height
+  }), [mapDimensions.height, mapDimensions.width, mapView]);
+  const isDenseView = (activePreset === "all" || activePreset === "water" || layers.size >= 8) && mapView.scale < 2.4;
+  const sourceAirQuality = useMemo(() => {
     const measured = snapshot.airQuality.filter((reading) => reading.source === "measured");
     const cells = new Map<string, AirQualityReading>();
     for (const reading of measured) {
@@ -1251,41 +1401,55 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     );
     return [...cells.values(), ...modelled];
   }, [snapshot.airQuality]);
-  const transitClusters = useMemo(() => {
-    const cellSize = 22 / mapView.scale;
-    const cells = new Map<string, { sumX: number; sumY: number; vehicles: LiveSnapshot["transit"] }>();
-    const orderedTransit = deduplicateMovementRecords(snapshot.transit);
-    for (const vehicle of orderedTransit) {
-      const point = projection([vehicle.longitude, vehicle.latitude]);
-      if (!point || point[0] < 0 || point[0] > 1000 || point[1] < 0 || point[1] > 900) continue;
-      const cellX = Math.floor(point[0] / cellSize);
-      const cellY = Math.floor(point[1] / cellSize);
-      const key = `${cellX}:${cellY}`;
-      const cell = cells.get(key) ?? {
-        sumX: 0,
-        sumY: 0,
-        vehicles: []
-      };
-      cell.sumX += point[0];
-      cell.sumY += point[1];
-      cell.vehicles.push(vehicle);
-      cells.set(key, cell);
-    }
-    return [...cells.values()]
-      .map((cell) => ({
-        x: cell.sumX / cell.vehicles.length,
-        y: cell.sumY / cell.vehicles.length,
-        vehicles: [...cell.vehicles].sort((first, second) => compareStableIds(first.id, second.id))
-      }))
-      .sort((first, second) => compareStableIds(first.vehicles[0]?.id ?? "", second.vehicles[0]?.id ?? ""));
-  }, [mapView.scale, projection, snapshot.transit]);
-  const movementStacks = useMemo(() => {
-    const points: Array<{
-      x: number;
-      y: number;
-      items: MovementSelection[];
-      trainAnchor: boolean;
-    }> = [];
+  const displayedStations = useMemo(() => selectDeclutteredPoints(
+    projectReadings(
+      snapshot.stations.filter((station) => layers.has("weather") || station.windSpeed !== null),
+      projection,
+      (station) => `station:${station.id}`,
+      (station) => (station.rainfall ?? 0) > 0 ? 20 : 0
+    ),
+    mapViewport,
+    isDenseView ? (activePreset === "all" ? 38 : 30) : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, activePreset, isDenseView, layers, mapViewport, projection, snapshot.stations]);
+  const displayedRivers = useMemo(() => selectDeclutteredPoints(
+    projectReadings(snapshot.rivers, projection, (river) => `river:${river.id}`),
+    mapViewport,
+    isDenseView ? (activePreset === "all" ? 42 : 32) : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, activePreset, isDenseView, mapViewport, projection, snapshot.rivers]);
+  const displayedMarine = useMemo(() => selectDeclutteredPoints(
+    projectReadings(snapshot.marine, projection, (reading) => `buoy:${reading.id}`, (reading) => reading.kind === "weather-buoy" ? 10 : 0),
+    mapViewport,
+    isDenseView ? 40 : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.marine]);
+  const displayedTides = useMemo(() => selectDeclutteredPoints(
+    projectReadings(snapshot.tides, projection, (tide) => `tide:${tide.id}`, (tide) => tide.surge !== null && Math.abs(tide.surge) >= .2 ? 80 : 20),
+    mapViewport,
+    isDenseView ? 38 : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.tides]);
+  const displayedBathingAlerts = useMemo(() => selectDeclutteredPoints(
+    projectReadings(snapshot.bathingAlerts, projection, (alert) => `bathing:${alert.id}`, () => 100),
+    mapViewport,
+    isDenseView ? 34 : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.bathingAlerts]);
+  const displayedAirQuality = useMemo(() => selectDeclutteredPoints(
+    projectReadings(sourceAirQuality, projection, (reading) => `air:${reading.id}`, (reading) => reading.source === "measured" ? 60 : 10),
+    mapViewport,
+    isDenseView ? 40 : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, sourceAirQuality]);
+  const displayedEarthquakes = useMemo(() => selectDeclutteredPoints(
+    projectReadings(snapshot.earthquakes, projection, (reading) => `earthquake:${reading.id}`, (reading) => reading.magnitude * 10),
+    mapViewport,
+    isDenseView ? 40 : 0,
+    activeMarkerId
+  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.earthquakes]);
+  const movementStacks = useMemo<MovementStack[]>(() => {
+    const points: ProjectedPoint<MovementSelection>[] = [];
 
     if (layers.has("trains")) {
       const orderedTrains = deduplicateMovementRecords(snapshot.trains);
@@ -1293,125 +1457,102 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         const point = projection([train.longitude, train.latitude]);
         if (point) {
           points.push({
+            key: `train:${train.id}`,
             x: point[0],
             y: point[1],
-            items: [{ type: "train", item: train }],
-            trainAnchor: true
+            item: { type: "train", item: train },
+            priority: 20
           });
         }
       }
     }
     if (layers.has("transit")) {
-      for (const cluster of transitClusters) {
+      for (const vehicle of deduplicateMovementRecords(snapshot.transit)) {
+        const point = projection([vehicle.longitude, vehicle.latitude]);
+        if (!point) continue;
         points.push({
-          // The cell is only a rendering aid. Marker identity is assigned
-          // below from a stable vehicle or train constituent.
-          x: cluster.x,
-          y: cluster.y,
-          items: cluster.vehicles.map((vehicle) => ({ type: "transit", item: vehicle })),
-          trainAnchor: false
+          key: `transit:${vehicle.id}`,
+          x: point[0],
+          y: point[1],
+          item: { type: "transit", item: vehicle },
+          priority: 10
         });
-      }
-    }
-
-    points.sort((first, second) => compareStableIds(
-      movementItemIdentity(first.items[0]!),
-      movementItemIdentity(second.items[0]!)
-    ));
-
-    const collisionDistance = 25 / mapView.scale;
-    const groups: typeof points = [];
-    for (const point of points) {
-      const group = groups.find((candidate) =>
-        Math.hypot(candidate.x - point.x, candidate.y - point.y) < collisionDistance
-      );
-      if (!group) {
-        groups.push({ ...point, items: [...point.items] });
-        continue;
-      }
-      group.items.push(...point.items);
-      if (point.trainAnchor && !group.trainAnchor) {
-        group.x = point.x;
-        group.y = point.y;
-        group.trainAnchor = true;
       }
     }
     const focusedMovementIdentity = activeMarkerId?.startsWith("movement:")
       ? activeMarkerId.slice("movement:".length)
       : null;
-    return groups.map((group) => {
-      const items = [...group.items].sort((first, second) => {
-        const firstIdentity = movementItemIdentity(first);
-        const secondIdentity = movementItemIdentity(second);
-        return firstIdentity < secondIdentity ? -1 : firstIdentity > secondIdentity ? 1 : 0;
-      });
-      const anchor = focusedMovementIdentity && items.some((item) =>
-        movementItemIdentity(item) === focusedMovementIdentity
-      )
-        ? focusedMovementIdentity
-        : movementItemIdentity(items[0]!);
+    const clusterRadius = mapDimensions.width < 600
+      ? 64
+      : mapDimensions.width < 900
+        ? 54
+        : 44;
+    return clusterProjectedPoints(
+      points,
+      mapViewport,
+      clusterRadius + (activePreset === "all" ? 8 : 0),
+      focusedMovementIdentity
+    ).map((cluster) => {
+      const items = cluster.items.map((point) => point.item);
+      const trainPoint = cluster.items.find((point) => point.item.type === "train");
       return {
-        key: movementMarkerId(anchor),
-        x: group.x,
-        y: group.y,
-        items,
-        trainAnchor: group.trainAnchor
+        key: movementMarkerId(cluster.key),
+        x: trainPoint?.x ?? cluster.x,
+        y: trainPoint?.y ?? cluster.y,
+        items
       };
     });
-  }, [activeMarkerId, layers, mapView.scale, projection, snapshot.trains, transitClusters]);
+  }, [activeMarkerId, activePreset, layers, mapDimensions.width, mapViewport, projection, snapshot.trains, snapshot.transit]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
-    const isProjected = (longitude: number, latitude: number) => Boolean(projection([longitude, latitude]));
 
     if (layers.has("rivers")) {
-      snapshot.rivers.forEach((river) => {
-        if (isProjected(river.longitude, river.latitude)) ids.push(`river:${river.id}`);
-      });
+      displayedRivers.forEach((river) => ids.push(`river:${river.id}`));
     }
     if (layers.has("sea")) {
-      snapshot.marine.forEach((marineSite) => {
-        if (isProjected(marineSite.longitude, marineSite.latitude)) ids.push(`buoy:${marineSite.id}`);
-      });
+      displayedMarine.forEach((marineSite) => ids.push(`buoy:${marineSite.id}`));
     }
     if (layers.has("tides")) {
-      snapshot.tides.forEach((tide) => {
-        if (isProjected(tide.longitude, tide.latitude)) ids.push(`tide:${tide.id}`);
-      });
+      displayedTides.forEach((tide) => ids.push(`tide:${tide.id}`));
     }
     if (layers.has("bathing")) {
-      snapshot.bathingAlerts.forEach((alert) => {
-        if (isProjected(alert.longitude, alert.latitude)) ids.push(`bathing:${alert.id}`);
-      });
+      displayedBathingAlerts.forEach((alert) => ids.push(`bathing:${alert.id}`));
     }
-    if (layers.has("weather")) {
-      snapshot.stations.forEach((station) => {
-        if (isProjected(station.longitude, station.latitude)) ids.push(`station:${station.id}`);
-      });
-    } else if (layers.has("wind")) {
-      snapshot.stations.forEach((station) => {
-        if (station.windSpeed !== null && isProjected(station.longitude, station.latitude)) {
-          ids.push(`station:${station.id}`);
-        }
-      });
+    if (layers.has("weather") || layers.has("wind")) {
+      displayedStations.forEach((station) => ids.push(`station:${station.id}`));
     }
     if (layers.has("air")) {
-      displayedAirQuality.forEach((reading) => {
-        if (isProjected(reading.longitude, reading.latitude)) ids.push(`air:${reading.id}`);
-      });
+      displayedAirQuality.forEach((reading) => ids.push(`air:${reading.id}`));
     }
     if (layers.has("trains") || layers.has("transit")) {
       movementStacks.forEach((stack) => ids.push(stack.key));
     }
     if (layers.has("earthquakes")) {
-      snapshot.earthquakes.forEach((earthquake) => {
-        if (isProjected(earthquake.longitude, earthquake.latitude)) ids.push(`earthquake:${earthquake.id}`);
-      });
+      displayedEarthquakes.forEach((earthquake) => ids.push(`earthquake:${earthquake.id}`));
     }
     return ids;
-  }, [displayedAirQuality, layers, movementStacks, projection, snapshot.bathingAlerts, snapshot.earthquakes, snapshot.marine, snapshot.rivers, snapshot.stations, snapshot.tides]);
+  }, [displayedAirQuality, displayedBathingAlerts, displayedEarthquakes, displayedMarine, displayedRivers, displayedStations, displayedTides, layers, movementStacks]);
   const rovingMarkerId = activeMarkerId && markerIds.includes(activeMarkerId)
     ? activeMarkerId
     : markerIds[0] ?? null;
+  const rawPointMarkerCount =
+    (layers.has("rivers") ? snapshot.rivers.length : 0) +
+    (layers.has("sea") ? snapshot.marine.length : 0) +
+    (layers.has("tides") ? snapshot.tides.length : 0) +
+    (layers.has("bathing") ? snapshot.bathingAlerts.length : 0) +
+    (layers.has("weather") || layers.has("wind") ? snapshot.stations.filter((station) => layers.has("weather") || station.windSpeed !== null).length : 0) +
+    (layers.has("air") ? sourceAirQuality.length : 0) +
+    (layers.has("trains") ? deduplicateMovementRecords(snapshot.trains).length : 0) +
+    (layers.has("transit") ? deduplicateMovementRecords(snapshot.transit).length : 0) +
+    (layers.has("earthquakes") ? snapshot.earthquakes.length : 0);
+  const activeLegendGroups = useMemo(() => LAYER_GROUPS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    layers: group.layers.filter(([id]) => layers.has(id)).map(([, label]) => label)
+  })).filter((group) => group.layers.length > 0), [layers]);
+  const densitySummary = markerIds.length < rawPointMarkerCount
+    ? `${markerIds.length} grouped markers represent ${rawPointMarkerCount} point observations at this zoom. Zoom in to reveal more.`
+    : `${markerIds.length} point marker${markerIds.length === 1 ? "" : "s"} visible at this zoom.`;
 
   useLayoutEffect(() => {
     const focusedMarker = focusedMarkerRef.current;
@@ -1438,7 +1579,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const currentHour = irelandHour(now);
   const isNight = currentHour < 6 || currentHour >= 21;
   const isConnectingWithoutSnapshot = servicesRefreshing && snapshot.stations.length === 0;
-  const selectedPlace = PLACE_OPTIONS.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
+  const selectedPlace = ephemeralPlace ?? PLACE_OPTIONS.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
+  const selectedPlaceIsEphemeral = selectedPlace.id === "nearby";
   const selectedPlacePoint = selectedPlace.id === "island"
     ? null
     : projection([selectedPlace.lon, selectedPlace.lat]);
@@ -1447,14 +1589,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     : nearestReadingWithinRadius(
         snapshot.stations.filter((station) => station.fresh),
         selectedPlace,
-        NEARBY_RADIUS_KM.weather
+        selectedPlaceIsEphemeral ? Number.POSITIVE_INFINITY : NEARBY_RADIUS_KM.weather
       );
   const localRiver = selectedPlace.id === "island"
     ? null
     : nearestReadingWithinRadius(
         snapshot.rivers.filter((river) => river.fresh),
         selectedPlace,
-        NEARBY_RADIUS_KM.river
+        selectedPlaceIsEphemeral ? Number.POSITIVE_INFINITY : NEARBY_RADIUS_KM.river
       );
   const localAir = selectedPlace.id === "island"
     ? null
@@ -1463,13 +1605,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           .filter((reading) => reading.source === "measured")
           .sort((first, second) => Date.parse(second.observedAt) - Date.parse(first.observedAt)),
         selectedPlace,
-        NEARBY_RADIUS_KM.air
+        selectedPlaceIsEphemeral ? Number.POSITIVE_INFINITY : NEARBY_RADIUS_KM.air
       ) ?? nearestReadingWithinRadius(
         snapshot.airQuality
           .filter((reading) => reading.source === "modelled")
           .sort((first, second) => Date.parse(second.observedAt) - Date.parse(first.observedAt)),
         selectedPlace,
-        NEARBY_RADIUS_KM.air
+        selectedPlaceIsEphemeral ? Number.POSITIVE_INFINITY : NEARBY_RADIUS_KM.air
       );
   const warningsUnavailable = snapshot.contextStatus.warnings === "unavailable";
   const guidancePlace: GuidancePlace = {
@@ -1597,6 +1739,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       );
     });
   }, [constrainMapView]);
+  const activateMovementStack = useCallback((stack: MovementStack) => {
+    setActiveMarkerId(stack.key);
+    if (stack.items.length > MOVEMENT_DRILL_THRESHOLD && mapView.scale < 4) {
+      setMapView((current) => {
+        const scale = Math.min(4, Math.max(current.scale + 1, current.scale * 2));
+        return constrainMapView(scale, 500 - stack.x * scale, 450 - stack.y * scale);
+      });
+      setSelected(null);
+      setMapFeedback(`Zoomed in on ${stack.items.length} transport positions. Select a cluster again to drill down or open the result list.`);
+      setMarkerAnnouncement(`${stack.items.length} transport positions; map zoomed in.`);
+      return;
+    }
+    markerOpenerRef.current = [...(mapRef.current?.querySelectorAll<SVGElement>("[data-map-marker]") ?? [])]
+      .find((candidate) => candidate.getAttribute("data-marker-id") === stack.key) ?? markerOpenerRef.current;
+    setSelected({ type: "movement-stack", items: stack.items, index: 0 });
+  }, [constrainMapView, mapView.scale]);
   const mapPointFromClient = useCallback((clientX: number, clientY: number) => {
     const bounds = mapRef.current?.getBoundingClientRect();
     if (!bounds) return { x: 500, y: 450 };
@@ -1737,13 +1895,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     event.stopPropagation();
     mapDidPanRef.current = false;
   }, []);
+  const rememberVisibleMapAnchor = useCallback(() => {
+    const map = mapSectionRef.current;
+    if (!map) return;
+    const bounds = map.getBoundingClientRect();
+    if (bounds.bottom > 0 && bounds.top < window.innerHeight) {
+      pendingMapAnchorRef.current = bounds.top;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousTop = pendingMapAnchorRef.current;
+    const map = mapSectionRef.current;
+    if (previousTop === null || !map) return;
+    pendingMapAnchorRef.current = null;
+    const delta = map.getBoundingClientRect().top - previousTop;
+    if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+  }, [activePreset, layers]);
+
   const showPreset = useCallback((preset: Exclude<Preset, "custom">) => {
+    rememberVisibleMapAnchor();
     setLayers(new Set(PRESET_LAYERS[preset]));
     setActivePreset(preset);
     setSelected(null);
     setMapNotice(null);
     setRadarPlaying(false);
-  }, []);
+    setMapFeedback(`${preset === "all" ? "All layers" : `${preset[0]!.toUpperCase()}${preset.slice(1)}`} view shown.`);
+  }, [rememberVisibleMapAnchor]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1790,9 +1968,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useEffect(() => {
     if (!viewHydrated) return;
-    storePlace(selectedPlaceId);
+    if (!ephemeralPlace) storePlace(selectedPlaceId);
     const serialized = new URL(serializeViewState(window.location.href, {
-      placeId: selectedPlaceId,
+      placeId: ephemeralPlace ? DEFAULT_PLACE_ID : selectedPlaceId,
       view: activePreset,
       layers,
       zoom: mapView.scale,
@@ -1811,7 +1989,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }
     }
     window.history.replaceState(null, "", `${serialized.pathname}${serialized.search}${serialized.hash}`);
-  }, [activePreset, layers, mapView, projection, selectedPlaceId, viewHydrated]);
+  }, [activePreset, ephemeralPlace, layers, mapView, projection, selectedPlaceId, viewHydrated]);
 
   const focusContext = useCallback((focus: ContextFocus) => {
     const contextLayers: Record<ContextFocus, Layer[]> = {
@@ -1957,6 +2135,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [activeWarning, coastalObservatoryCount, prefersReducedMotion, snapshot, warningsUnavailable, weatherBuoyCount]);
 
   const toggleLayer = useCallback((layer: Layer) => {
+    rememberVisibleMapAnchor();
     setActivePreset("custom");
     setLayers((current) => {
       const next = new Set(current);
@@ -1964,10 +2143,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       else next.add(layer);
       return next;
     });
-  }, []);
+    setMapFeedback("Custom layer selection updated.");
+  }, [rememberVisibleMapAnchor]);
 
   const choosePlace = useCallback((placeId: string) => {
     if (!PLACE_OPTIONS.some((place) => place.id === placeId)) return;
+    setEphemeralPlace(null);
     setSelectedPlaceId(placeId);
     setPlaceMessage("");
   }, []);
@@ -1977,22 +2158,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       setPlaceMessage("Location is not available in this browser.");
       return;
     }
-    setPlaceMessage("Finding the nearest place…");
+    setPlaceMessage("Finding nearby observations…");
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
-        const nearest = PLACES.reduce((best, place) => {
-          const candidateDistance = distanceKm(
-            { lat: coords.latitude, lon: coords.longitude },
-            { lat: place.lat, lon: place.lon }
-          );
-          const bestDistance = distanceKm(
-            { lat: coords.latitude, lon: coords.longitude },
-            { lat: best.lat, lon: best.lon }
-          );
-          return candidateDistance < bestDistance ? place : best;
+        const withinIreland = coords.latitude >= 51.2 && coords.latitude <= 55.6 &&
+          coords.longitude >= -11 && coords.longitude <= -5.2;
+        if (!withinIreland) {
+          setPlaceMessage("That location is outside this Ireland view. Choose a mapped place instead.");
+          return;
+        }
+        setEphemeralPlace({
+          id: "nearby",
+          name: "Your area",
+          lat: coords.latitude,
+          lon: coords.longitude
         });
-        setSelectedPlaceId(nearest.id);
-        setPlaceMessage(`Using ${nearest.name} as the nearest mapped place.`);
+        setPlaceMessage("Using your shared coordinates for this session only. They are not saved or added to share links.");
       },
       () => setPlaceMessage("Location was not shared. Choose a place instead."),
       { enableHighAccuracy: false, maximumAge: 300_000, timeout: 8_000 }
@@ -2017,8 +2198,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [prefersReducedMotion]);
 
   const shareExperience = useCallback(async () => {
+    const shareablePlaceId = selectedPlaceIsEphemeral ? DEFAULT_PLACE_ID : selectedPlace.id;
     const url = serializeViewState(window.location.href, {
-      placeId: selectedPlace.id,
+      placeId: shareablePlaceId,
       view: activePreset,
       layers,
       zoom: mapView.scale,
@@ -2027,7 +2209,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     });
     const shareData = {
       title: "A Day in Ireland",
-      text: selectedPlace.id === "island"
+      text: selectedPlace.id === "island" || selectedPlaceIsEphemeral
         ? "See weather, movement, water and energy across Ireland—happening now."
         : `See what is happening around ${selectedPlace.name} right now.`,
       url
@@ -2050,7 +2232,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         window.prompt("Copy this link", shareData.url);
       }
     }
-  }, [activePreset, layers, mapView, selectedPlace]);
+  }, [activePreset, layers, mapView, selectedPlace, selectedPlaceIsEphemeral]);
 
   return (
     <main ref={experienceRef} className={`experience ${isNight ? "is-night" : ""}`}>
@@ -2109,15 +2291,24 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <span><b>Live systems</b><small>{connectionLabel}</small><small>{servicesRefreshing ? "Refreshing services…" : `${liveServiceCount} services connected`}</small></span>
           </div>
           <nav aria-label="Map view shortcuts">
-            <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
-            <button className="rail-extra" onClick={() => focusContext("radar")}><span>◉</span>Rain radar</button>
-            <button className={activePreset === "movement" ? "active" : ""} onClick={() => showPreset("movement")}><span>↗</span>Movement</button>
-            <button className={activePreset === "water" ? "active" : ""} onClick={() => showPreset("water")}><span>≈</span>Water</button>
-            <button className="rail-extra" onClick={() => focusContext("sea")}><span>⌁</span>Sea</button>
-            <button className="rail-extra" onClick={() => focusContext("grid")}><span>ϟ</span>Energy</button>
-            <button className="rail-extra" onClick={() => focusContext("air")}><span>◌</span>Air</button>
-            <button className={activePreset === "all" ? "active" : ""} onClick={() => showPreset("all")}><span>⌘</span>All layers</button>
+            <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span aria-hidden="true">☁</span>Weather</button>
+            <button className="rail-extra" onClick={() => focusContext("radar")}><span aria-hidden="true">◉</span>Rain radar</button>
+            <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span aria-hidden="true">↗</span>Movement</button>
+            <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span aria-hidden="true">≈</span>Water</button>
+            <button className="rail-extra" onClick={() => focusContext("sea")}><span aria-hidden="true">⌁</span>Sea</button>
+            <button className="rail-extra" onClick={() => focusContext("grid")}><span aria-hidden="true">ϟ</span>Energy</button>
+            <button className="rail-extra" onClick={() => focusContext("air")}><span aria-hidden="true">◌</span>Air</button>
+            <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span aria-hidden="true">⌘</span>All layers</button>
+            <button
+              className={activePreset === "custom" ? "active rail-custom" : "rail-custom"}
+              aria-pressed={activePreset === "custom"}
+              onClick={(event) => {
+                panelOpenerRef.current = event.currentTarget;
+                setPanelOpen(true);
+              }}
+            ><span aria-hidden="true">⋯</span>Custom · {layers.size}</button>
           </nav>
+          <a className="rail-map-action" href="#live-map">View live map <span aria-hidden="true">↓</span></a>
           <div className="rail-metrics">
             <p><span>Warmest</span><strong>{snapshot.summary.warmest?.temperature ?? "—"}°</strong><small>{snapshot.summary.warmest?.name ?? "No report"}</small></p>
             <p><span>Strongest wind</span><strong>{snapshot.summary.windiest?.windSpeed ?? "—"}</strong><small>km/h · {snapshot.summary.windiest?.name ?? "No report"}</small></p>
@@ -2127,11 +2318,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </aside>
 
         <div className="map-workspace">
-          <div className="workspace-heading">
+          <div className="workspace-heading" id="ireland-now">
             <div>
-              <p className="eyebrow">Across Ireland · {formatDate(now)} · {formatTime(now)} IST</p>
-              <h1 id="moment-heading">See Ireland happening.</h1>
+              <p className="eyebrow">Ireland now · {formatDate(now)} · {formatTime(now)} IST</p>
+              <h1 id="moment-heading">Ireland now.</h1>
               <p>{isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Updating live observations across the island…" : `${narrative.period} ${narrative.detail}`}</p>
+              <a className="view-map-action" href="#live-map">View live map <span aria-hidden="true">↓</span></a>
             </div>
             <div className="workspace-facts" aria-label="Current national highlights across Ireland">
               <button onClick={() => focusContext("grid")}><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>demand met by wind</small></button>
@@ -2140,6 +2332,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </div>
           </div>
 
+          {(() => {
+            const briefing = (
+              <>
           <section
             className={`place-context ${selectedPlace.id === "island" ? "island-context" : "local-context"}`}
             data-place-id={selectedPlace.id}
@@ -2150,18 +2345,23 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <h2 id="my-place-heading">{selectedPlace.name}</h2>
               <p className="place-context-summary">
                 {selectedPlace.id === "island"
-                  ? "Whole-island context is shown above; choose a town for local observations."
-                  : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}
+                  ? "Whole-island context is shown above; choose a mapped place or use your location for nearby observations."
+                  : selectedPlaceIsEphemeral
+                    ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."
+                    : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}
               </p>
               <label htmlFor="place-select">Nearby context</label>
               <div className="place-controls">
                 <select id="place-select" value={selectedPlace.id} onChange={(event) => choosePlace(event.target.value)}>
+                  {selectedPlaceIsEphemeral && <option value="nearby">Your area · this session</option>}
                   {PLACE_OPTIONS.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
                 </select>
-                <button type="button" className="locate-button" onClick={useMyLocation} aria-label="Use my location">⌖ Locate</button>
+                <button type="button" className="locate-button" onClick={useMyLocation} aria-label="Use my location"><span aria-hidden="true">⌖</span> Locate</button>
               </div>
               <small id="place-message" aria-live="polite">{placeMessage || "Saved as a place ID; GPS coordinates are never stored or shared."}</small>
-              <small className="place-limits">Nearby limits: weather {NEARBY_RADIUS_KM.weather} km · rivers {NEARBY_RADIUS_KM.river} km · air {NEARBY_RADIUS_KM.air} km.</small>
+              <small className="place-limits">{selectedPlaceIsEphemeral
+                ? "Session-only location: nearest available readings are shown with distance; the share link remains an Ireland view."
+                : `Nearby limits: weather ${NEARBY_RADIUS_KM.weather} km · rivers ${NEARBY_RADIUS_KM.river} km · air ${NEARBY_RADIUS_KM.air} km.`}</small>
             </div>
             <div
               className="place-observations"
@@ -2174,28 +2374,28 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   <dd>{localStation?.item.temperature ?? "—"}°</dd>
                   <small>{localStation
                     ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now)
-                    : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
+                    : selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
                 </div>
                 <div>
                   <dt>Rain</dt>
                   <dd>{localStation?.item.rainfall == null ? "—" : `${localStation.item.rainfall} mm`}</dd>
                   <small>{localStation
                     ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now)
-                    : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
+                    : selectedPlaceIsEphemeral ? "No current rain observation is available." : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
                 </div>
                 <div>
                   <dt>River</dt>
                   <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "—"}</dd>
                   <small>{localRiver
                     ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now)
-                    : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.`}</small>
+                    : selectedPlaceIsEphemeral ? "No current river observation is available." : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.`}</small>
                 </div>
                 <div>
                   <dt>Air</dt>
                   <dd>{localAir?.item.europeanAqi == null ? "—" : `AQI ${localAir.item.europeanAqi}`}</dd>
                   <small>{localAir
                     ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now)
-                    : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.`}</small>
+                    : selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.`}</small>
                 </div>
               </dl>
             </div>
@@ -2304,12 +2504,64 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </div>
           </section>
 
+              </>
+            );
+            return (
+              <>
+
       <section
         id="live-map"
         className="map-stage"
+        ref={mapSectionRef}
         aria-label="Live map of Ireland"
         aria-describedby="map-keyboard-instructions map-marker-announcement"
       >
+        <div className="map-explorer-heading">
+          <div>
+            <p className="eyebrow">Explore map · near real time</p>
+            <h2>Ireland on the map</h2>
+            <p>Choose a view, zoom into grouped markers, or open the layer catalogue. Observations keep their provider meaning and timestamps.</p>
+          </div>
+          <button
+            type="button"
+            onClick={(event) => {
+              panelOpenerRef.current = event.currentTarget;
+              setPanelOpen(true);
+            }}
+          >
+            Choose layers
+          </button>
+        </div>
+        <nav className="map-presets" aria-label="Map views">
+          <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" />Weather</button>
+          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" />Movement</button>
+          <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" aria-hidden="true" />Water</button>
+          <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}>All layers</button>
+          <button
+            className={activePreset === "custom" ? "active custom" : "custom"}
+            aria-pressed={activePreset === "custom"}
+            onClick={(event) => {
+              panelOpenerRef.current = event.currentTarget;
+              setPanelOpen(true);
+            }}
+          >
+            Custom · {layers.size} layers
+          </button>
+        </nav>
+        <details className="map-legend">
+          <summary>Legend · {layers.size} layers shown</summary>
+          <div className="map-legend-content">
+            <p>{densitySummary}</p>
+            <ul>
+              {activeLegendGroups.map((group) => (
+                <li className={`legend-${group.id}`} key={group.id}>
+                  <i aria-hidden="true" /><span><b>{group.label}</b><small>{group.layers.join(" · ")}</small></span>
+                </li>
+              ))}
+            </ul>
+            <p>Solid air markers are measurements; rings are model estimates. Alert colours are reserved for official notices or unusual signals.</p>
+          </div>
+        </details>
         {mapNotice && (
           <aside className="map-notice" aria-live="polite">
             <span>Focused view</span>
@@ -2318,19 +2570,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <p>{mapNotice.detail}</p>
           </aside>
         )}
-        <nav className="map-presets" aria-label="Map views">
-          <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" />Weather</button>
-          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" />Movement</button>
-          <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" />Water</button>
-          <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}>All layers</button>
-        </nav>
         <div id="map-keyboard-instructions" className="sr-only">
           Use Left and Right or Up and Down to move between map markers. Home and End move to the first or last marker. Press Enter or Space to open marker details.
         </div>
         <p id="map-marker-announcement" className="sr-only" aria-live="polite" aria-atomic="true">{markerAnnouncement}</p>
+        <p className="map-feedback sr-only" role="status" aria-live="polite">{mapFeedback}</p>
+        <div className="map-canvas">
         <svg
           ref={mapRef}
-          className={mapView.scale > 1 ? "ireland-map is-zoomed" : "ireland-map"}
+          className={`ireland-map ${mapView.scale > 1 ? "is-zoomed" : ""} ${isDenseView ? "is-dense-map" : ""}`}
+          data-visible-markers={markerIds.length}
+          data-point-observations={rawPointMarkerCount}
           viewBox="0 0 1000 900"
           role="group"
           aria-labelledby="map-title map-description"
@@ -2425,10 +2675,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 const point = projection([station.longitude, station.latitude]);
                 return point ? <circle key={`rain-${station.id}`} className="rain-cloud" cx={point[0]} cy={point[1]} r={45 + Math.min(65, (station.rainfall ?? 0) * 18)} /> : null;
               })}
-            {layers.has("places") && PLACES.map((place) => {
+            {layers.has("places") && PLACES.map((place, index) => {
               const point = projection([place.lon, place.lat]);
               return point ? (
-                <g className="place" key={place.name} transform={`translate(${point[0]} ${point[1]})`}>
+                <g className={`place ${index < 3 ? "priority-major" : "priority-secondary"}`} key={place.name} transform={`translate(${point[0]} ${point[1]})`}>
                   <circle r="2.5" />
                   <text x="7" y="4">{place.name}</text>
                 </g>
@@ -2441,7 +2691,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <text x="10" y="4">My place</text>
               </g>
             )}
-            {layers.has("rivers") && snapshot.rivers.map((river) => {
+            {layers.has("rivers") && displayedRivers.map((river) => {
               const point = projection([river.longitude, river.latitude]);
               return point ? (
                 <MapMarker
@@ -2460,7 +2710,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("sea") && snapshot.marine.map((marineSite) => {
+            {layers.has("sea") && displayedMarine.map((marineSite) => {
               const point = projection([marineSite.longitude, marineSite.latitude]);
               return point ? (
                 <MapMarker
@@ -2481,7 +2731,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("tides") && snapshot.tides.map((tide) => {
+            {layers.has("tides") && displayedTides.map((tide) => {
               const point = projection([tide.longitude, tide.latitude]);
               return point ? (
                 <MapMarker
@@ -2502,7 +2752,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("bathing") && snapshot.bathingAlerts.map((alert) => {
+            {layers.has("bathing") && displayedBathingAlerts.map((alert) => {
               const point = projection([alert.longitude, alert.latitude]);
               return point ? (
                 <MapMarker
@@ -2523,7 +2773,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("weather") && snapshot.stations.map((station) => (
+            {layers.has("weather") && displayedStations.map((station) => (
               <StationMarker
                 key={station.id}
                 station={station}
@@ -2539,7 +2789,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 )}
               />
             ))}
-            {layers.has("wind") && snapshot.stations.map((station) => {
+            {layers.has("wind") && displayedStations.map((station) => {
               const point = projection([station.longitude, station.latitude]);
               if (!point || station.windSpeed === null) return null;
               const windLabel = `${station.name}, wind ${station.windSpeed} kilometres per hour from ${station.windDirection || "an unknown direction"}`;
@@ -2605,15 +2855,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               ) : null;
             })}
             {movementStacks.map((stack) => {
-              const first = stack.items[0];
+              const first = stack.items[0]!;
               const isStack = stack.items.length > 1;
               const isTrain = first.type === "train";
-              const openStack = () => setSelected(isStack
-                ? { type: "movement-stack", items: stack.items, index: 0 }
-                : first
-              );
+              const shouldZoom = stack.items.length > MOVEMENT_DRILL_THRESHOLD && mapView.scale < 4;
+              const openStack = () => isStack ? activateMovementStack(stack) : setSelected(first);
               const movementLabel = isStack
-                ? `${stack.items.length} rail and public transport items at this location; select to browse`
+                ? `${stack.items.length} rail and public transport positions in this area; ${shouldZoom ? "activate to zoom in" : "activate to open a searchable list"}`
                 : isTrain
                   ? `Train ${first.item.id}, ${first.item.direction}, ${first.item.status === "running" ? "running" : "due to start"}`
                   : `${first.item.route ? `Route ${first.item.route}` : first.item.label}, live public transport position`;
@@ -2630,6 +2878,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   focusRadius={15}
                   onActivate={openStack}
                   dataMovementMembers={stack.items.map(movementItemIdentity).join(",")}
+                  dataClusterSize={stack.items.length}
                 >
                   {isStack ? (
                     <>
@@ -2651,7 +2900,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               );
             })}
-            {layers.has("earthquakes") && snapshot.earthquakes.map((earthquake) => {
+            {layers.has("earthquakes") && displayedEarthquakes.map((earthquake) => {
               const point = projection([earthquake.longitude, earthquake.latitude]);
               return point ? (
                 <MapMarker
@@ -2687,6 +2936,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </button>
           <output aria-live="polite" aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
         </nav>
+        </div>
 
         {layers.has("radar") && (
           <div className="radar-control" role="group" aria-label="Rainfall radar timeline">
@@ -2727,11 +2977,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         )}
 
         {(layers.has("grid") || layers.has("aurora") || layers.has("iss")) && (
-          <div className="desktop-context-stack">
-            {layers.has("grid") && <GridPanel grid={snapshot.grid} />}
-            {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} />}
-            {layers.has("iss") && <IssPanel iss={snapshot.iss} />}
-          </div>
+          <details
+            className="map-context-disclosure"
+            open={activePreset === "custom" && [layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length === 1 ? true : undefined}
+          >
+            <summary>Whole-island context · {[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length} panel{[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length === 1 ? "" : "s"}</summary>
+            <div className="map-context-grid">
+              {layers.has("grid") && <GridPanel grid={snapshot.grid} />}
+              {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} />}
+              {layers.has("iss") && <IssPanel iss={snapshot.iss} />}
+            </div>
+          </details>
         )}
 
         <div className="map-caption">
@@ -2747,6 +3003,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
 
       </section>
+                {briefing}
+              </>
+            );
+          })()}
         </div>
       </section>
 
@@ -2768,10 +3028,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>,
         document.body
       )}
-
-      {layers.has("grid") && <GridPanel grid={snapshot.grid} className="mobile-context-panel" />}
-      {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="mobile-context-panel" />}
-      {layers.has("iss") && <IssPanel iss={snapshot.iss} className="mobile-context-panel" />}
 
       <section className="notable-now" aria-labelledby="notable-heading">
         <div>
@@ -2914,13 +3170,47 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <div><p className="eyebrow">Explore the moment</p><h2>Live layers</h2></div>
           <button ref={panelCloseRef} onClick={() => setPanelOpen(false)} aria-label="Close explore panel">×</button>
         </div>
+        <div className="panel-layer-state" role="status">
+          <strong>{activePreset === "custom"
+            ? `Custom · ${layers.size} layers`
+            : `${activePreset === "all" ? "All layers" : `${activePreset[0]!.toUpperCase()}${activePreset.slice(1)}`} preset · ${layers.size} layers`}</strong>
+          <small>Named presets reset the map. Individual switches create a shareable custom view.</small>
+        </div>
+        <nav className="panel-presets" aria-label="Layer panel presets">
+          {(["weather", "movement", "water", "all"] as const).map((preset) => (
+            <button
+              type="button"
+              key={preset}
+              className={activePreset === preset ? "active" : ""}
+              aria-pressed={activePreset === preset}
+              onClick={() => showPreset(preset)}
+            >
+              {preset === "all" ? "All layers" : `${preset[0]!.toUpperCase()}${preset.slice(1)}`}
+            </button>
+          ))}
+        </nav>
         <div className="layer-list" aria-label="Explore layer categories">
           {LAYER_GROUPS.map((group) => (
-            <section className="layer-group" data-layer-group={group.id} key={group.id} aria-labelledby={`layer-group-${group.id}`}>
-              <div className="layer-group-heading">
+            <details
+              className="layer-group"
+              data-layer-group={group.id}
+              key={group.id}
+              open={openLayerGroups.has(group.id)}
+              onToggle={(event) => {
+                const isOpen = event.currentTarget.open;
+                setOpenLayerGroups((current) => {
+                  if (current.has(group.id) === isOpen) return current;
+                  const next = new Set(current);
+                  if (isOpen) next.add(group.id);
+                  else next.delete(group.id);
+                  return next;
+                });
+              }}
+            >
+              <summary className="layer-group-heading">
                 <h3 id={`layer-group-${group.id}`}>{group.label}</h3>
                 <p>{group.detail}</p>
-              </div>
+              </summary>
               <div className="layer-group-controls">
                 {group.layers.map(([id, label, detail]) => (
                   <button
@@ -2934,7 +3224,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   </button>
                 ))}
               </div>
-            </section>
+            </details>
           ))}
         </div>
         <div className="source-note">
