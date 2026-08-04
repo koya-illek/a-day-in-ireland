@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function enableExploreLayer(page: Page, name: RegExp) {
   await page.getByRole("button", { name: "Explore", exact: true }).click();
@@ -183,18 +183,8 @@ async function installAccessibilityContentFixtures(page: Page) {
   }));
 }
 
-async function expectNotableMoreTarget(page: Page) {
-  const control = page.getByRole("button", { name: "View 2 more", exact: true });
-  await expect(control).toBeVisible();
-  await control.evaluate((element) => {
-    document.documentElement.style.scrollBehavior = "auto";
-    element.scrollIntoView({ block: "center", inline: "nearest" });
-  });
-  await expect.poll(() => control.evaluate((element) => {
-    const bounds = element.getBoundingClientRect();
-    return bounds.top >= 0 && bounds.bottom <= innerHeight;
-  })).toBe(true);
-  const metrics = await control.evaluate((element) => {
+async function notableTargetMetrics(control: Locator) {
+  return control.evaluate((element) => {
     const bounds = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     const visibleWidth = Math.max(0, Math.min(bounds.right, innerWidth) - Math.max(bounds.left, 0));
@@ -215,9 +205,79 @@ async function expectNotableMoreTarget(page: Page) {
       viewportHeight: innerHeight,
       visibleWidth,
       visibleHeight,
-      centreHit: centreElement === element || (centreElement !== null && element.contains(centreElement))
+      centreHit: centreElement === element || (centreElement !== null && element.contains(centreElement)),
+      centreOwner: centreElement
+        ? `${centreElement.tagName.toLowerCase()}.${String(centreElement.className).replace(/\s+/g, ".")}`
+        : "none"
     };
   });
+}
+
+async function waitForNotablePositionToSettle(control: Locator) {
+  return control.evaluate((element) => new Promise<boolean>((resolve) => {
+    let previousScroll = scrollY;
+    let previousBounds = element.getBoundingClientRect();
+    let stableFrames = 0;
+    let frameCount = 0;
+    const sample = () => {
+      const bounds = element.getBoundingClientRect();
+      const stable = Math.abs(scrollY - previousScroll) < 0.25 &&
+        Math.abs(bounds.top - previousBounds.top) < 0.25 &&
+        Math.abs(bounds.bottom - previousBounds.bottom) < 0.25;
+      stableFrames = stable ? stableFrames + 1 : 0;
+      previousScroll = scrollY;
+      previousBounds = bounds;
+      frameCount += 1;
+      if (stableFrames >= 6) {
+        resolve(true);
+      } else if (frameCount >= 240) {
+        resolve(false);
+      } else {
+        requestAnimationFrame(sample);
+      }
+    };
+    requestAnimationFrame(sample);
+  }));
+}
+
+async function revealNotableTargetWithKeyboard(page: Page, control: Locator) {
+  expect(await page.evaluate(() => ({
+    computed: getComputedStyle(document.documentElement).scrollBehavior,
+    inline: document.documentElement.style.scrollBehavior
+  }))).toEqual({ computed: "smooth", inline: "" });
+
+  await page.keyboard.press("Home");
+  expect(await waitForNotablePositionToSettle(control)).toBe(true);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const metrics = await notableTargetMetrics(control);
+    const fullyInsideViewport = metrics.top >= 0 &&
+      metrics.bottom <= metrics.viewportHeight &&
+      metrics.left >= 0 &&
+      metrics.right <= metrics.viewportWidth + 1;
+    if (fullyInsideViewport && metrics.centreHit) return metrics;
+
+    let key: "PageDown" | "PageUp" | "ArrowDown" | "ArrowUp";
+    if (metrics.top >= metrics.viewportHeight * 1.25) {
+      key = "PageDown";
+    } else if (metrics.bottom > metrics.viewportHeight) {
+      key = "ArrowDown";
+    } else if (metrics.bottom <= -metrics.viewportHeight * 0.25) {
+      key = "PageUp";
+    } else if (metrics.top < 0) {
+      key = "ArrowUp";
+    } else {
+      key = (metrics.top + metrics.bottom) / 2 < metrics.viewportHeight / 2 ? "ArrowUp" : "ArrowDown";
+    }
+    await page.keyboard.press(key);
+    expect(await waitForNotablePositionToSettle(control)).toBe(true);
+  }
+  throw new Error(`Natural keyboard scrolling did not reveal the notable control: ${JSON.stringify(await notableTargetMetrics(control))}`);
+}
+
+async function expectNotableMoreTarget(page: Page) {
+  const control = page.getByRole("button", { name: "View 2 more", exact: true });
+  await expect(control).toBeVisible();
+  const metrics = await revealNotableTargetWithKeyboard(page, control);
   expect(metrics.fontSize).toBeGreaterThanOrEqual(12);
   expect(metrics.width).toBeGreaterThanOrEqual(44);
   expect(metrics.height).toBeGreaterThanOrEqual(44);
