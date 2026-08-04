@@ -29,6 +29,8 @@ import type {
   TideReading,
   TrainPosition
 } from "../lib/types";
+import { maskRadarNoDataPixels } from "../lib/radar-tiles";
+import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
 import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
@@ -333,13 +335,18 @@ function solarProgress(now: Date) {
 function nationalNarrative(snapshot: LiveSnapshot, now: Date) {
   const hour = irelandHour(now);
   const period = hour < 6 ? "A quiet night across Ireland." : hour < 12 ? "Ireland is waking across the island." : hour < 18 ? "The day is in motion across Ireland." : hour < 22 ? "Evening is settling across Ireland." : "Ireland grows quieter across the island.";
+  const currentWeather = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
   const warm = snapshot.summary.warmest;
   const rain = snapshot.summary.wettest;
-  const detail = !warm && !rain
+  const detail = !currentWeather
+    ? snapshot.sourceStatus === "stale"
+      ? "The most recent weather snapshot is cached, so current national conditions are not stated."
+      : "Current weather observations are unavailable."
+    : !warm && !rain
     ? "Current weather observations are unavailable."
     : rain && (rain.rainfall ?? 0) > 0
     ? `Rain is being observed around ${rain.name}, while ${warm?.name ?? "the warmest station"} reports ${warm?.temperature ?? "—"}°.`
-    : `${warm?.name ?? "The warmest station"} is reporting ${warm?.temperature ?? "—"}°, with mostly dry observations across Ireland.`;
+    : `${warm?.name ?? "The warmest station"} is reporting ${warm?.temperature ?? "—"}°; no recent rain is represented among the reporting stations.`;
   return { period, detail };
 }
 
@@ -392,6 +399,14 @@ function formatAge(value: string | null | undefined, now: Date) {
   return `${ageHours}h ago`;
 }
 
+const newestTimestamp = (first: string | null | undefined, second: string | null | undefined) => {
+  const firstTime = Date.parse(first ?? "");
+  const secondTime = Date.parse(second ?? "");
+  if (!Number.isFinite(secondTime)) return first ?? null;
+  if (!Number.isFinite(firstTime) || secondTime > firstTime) return new Date(secondTime).toISOString();
+  return first ?? null;
+};
+
 const warningScopeText = (warning: LiveSnapshot["warnings"][number]) => (warning.regions ?? []).length
   ? `named regions ${(warning.regions ?? []).join(", ")}`
   : "scope not specified";
@@ -416,8 +431,8 @@ function statusText(status: "live" | "partial" | "stale" | "fallback" | "unavail
 
 const STALE_THRESHOLDS = {
   weather: WEATHER_OBSERVATION_MAX_AGE_MS,
-  transit: 60_000,
-  rivers: 15 * 60_000,
+  transit: 3 * 60_000,
+  rivers: 3 * 60 * 60_000,
   marine: 6 * 60 * 60_000,
   grid: 5 * 60_000,
 } as const;
@@ -543,6 +558,91 @@ const aqiLabel = (value: number | null) => {
 const tileLatitude = (y: number, zoom: number) =>
   Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2 ** zoom))) * 180 / Math.PI;
 
+function RadarTileImage({
+  href,
+  x,
+  y,
+  width,
+  height
+}: {
+  href: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  const [tile, setTile] = useState<{ href: string | null; status: "loading" | "ready" | "unavailable" }>({
+    href: null,
+    status: "loading"
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    setTile({ href: null, status: "loading" });
+
+    const prepare = async () => {
+      try {
+        const response = await fetch(href, {
+          cache: "force-cache",
+          mode: "cors",
+          signal: controller.signal
+        });
+        if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("image/png")) {
+          throw new Error(`Radar tile returned ${response.status}`);
+        }
+        const bitmap = await createImageBitmap(await response.blob());
+        try {
+          if (!bitmap.width || !bitmap.height || bitmap.width > 1024 || bitmap.height > 1024) {
+            throw new Error("Radar tile dimensions are invalid");
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const context = canvas.getContext("2d", { willReadFrequently: true });
+          if (!context) throw new Error("Radar tile canvas is unavailable");
+          context.drawImage(bitmap, 0, 0);
+          const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
+          maskRadarNoDataPixels(image.data);
+          context.putImageData(image, 0, 0);
+          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+          if (!blob) throw new Error("Radar tile could not be encoded");
+          objectUrl = URL.createObjectURL(blob);
+          if (controller.signal.aborted) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = null;
+            return;
+          }
+          setTile({ href: objectUrl, status: "ready" });
+        } finally {
+          bitmap.close();
+        }
+      } catch {
+        if (!controller.signal.aborted) setTile({ href: null, status: "unavailable" });
+      }
+    };
+    void prepare();
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [href]);
+
+  return (
+    <image
+      className="radar-tile"
+      data-radar-tile-state={tile.status}
+      href={tile.href ?? undefined}
+      x={x}
+      y={y}
+      width={width}
+      height={height}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    />
+  );
+}
+
 function RadarTiles({
   frame,
   projection
@@ -552,7 +652,7 @@ function RadarTiles({
 }) {
   const zoom = 6;
   return (
-    <g className="radar-tiles" aria-label={`Rainfall radar observed ${formatTime(new Date(frame.observedAt))}`}>
+    <g className="radar-tiles" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar observed ${formatTime(new Date(frame.observedAt))}`}>
       {[30, 31].flatMap((x) => [20, 21].map((y) => {
         const west = x / 2 ** zoom * 360 - 180;
         const east = (x + 1) / 2 ** zoom * 360 - 180;
@@ -561,20 +661,17 @@ function RadarTiles({
         const topLeft = projection([west, north]);
         const bottomRight = projection([east, south]);
         if (!topLeft || !bottomRight) return null;
-        return (
-          <image
-            key={`${x}-${y}`}
-            href={frame.tileTemplate
-              .replace("{x}", String(x))
-              .replace("{y}", String(y))
-              .replace("{z}", String(zoom))}
-            x={topLeft[0]}
-            y={topLeft[1]}
-            width={bottomRight[0] - topLeft[0]}
-            height={bottomRight[1] - topLeft[1]}
-            preserveAspectRatio="none"
-          />
-        );
+        return <RadarTileImage
+          key={`${x}-${y}`}
+          href={frame.tileTemplate
+            .replace("{x}", String(x))
+            .replace("{y}", String(y))
+            .replace("{z}", String(zoom))}
+          x={topLeft[0]}
+          y={topLeft[1]}
+          width={bottomRight[0] - topLeft[0]}
+          height={bottomRight[1] - topLeft[1]}
+        />;
       }))}
     </g>
   );
@@ -888,8 +985,8 @@ function GridPanel({ grid, className = "" }: { grid: LiveSnapshot["grid"]; class
       {grid ? (
         <>
           <div className="grid-hero">
-            <strong>{grid.windSharePercent?.toFixed(0) ?? "—"}%</strong>
-            <span>of current demand supplied by wind</span>
+            <strong>{grid.windSharePercent === null ? "—" : `${grid.windSharePercent.toFixed(0)}%`}</strong>
+            <span>{grid.windSharePercent === null ? "wind share is unavailable in this grid response" : "of current demand supplied by wind"}</span>
           </div>
           <dl>
             <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
@@ -989,8 +1086,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [panelOpen, setPanelOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<Preset>("weather");
   const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
+  const [initialRefreshComplete, setInitialRefreshComplete] = useState(() => initialSnapshot.lastSuccessAt !== null);
   const [showAllNotables, setShowAllNotables] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState(() => new Date(initialSnapshot.generatedAt));
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
   const [radarPlaying, setRadarPlaying] = useState(false);
@@ -1005,6 +1102,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
   const snapshotRef = useRef(initialSnapshot);
+  const refreshAllRef = useRef<() => Promise<void>>(async () => undefined);
   const mapRef = useRef<SVGSVGElement | null>(null);
   const markerOpenerRef = useRef<SVGElement | null>(null);
   const focusedMarkerRef = useRef<{ id: string; element: SVGGElement } | null>(null);
@@ -1065,6 +1163,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       commit((current) => ({
         ...current,
         generatedAt: next.generatedAt,
+        lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
         sourceStatus: next.sourceStatus,
         stations: next.stations,
         timeline: next.timeline,
@@ -1076,7 +1175,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           reporting: next.summary.reporting
         }
       }));
-      setLastUpdated(new Date(next.generatedAt));
     };
     const updateLivingLayers = async () => {
       const next = await refreshLivingLayers(snapshotRef.current);
@@ -1084,6 +1182,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         ...current,
         trains: next.trains,
         rivers: next.rivers,
+        lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
         sourceProvenance: next.sourceProvenance ?? current.sourceProvenance,
         summary: {
           ...current.summary,
@@ -1096,6 +1195,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       const next = await refreshCurrentContexts(snapshotRef.current);
       commit((current) => ({
         ...current,
+        lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
         marine: next.marine,
         radar: next.radar,
         grid: next.grid,
@@ -1116,16 +1216,24 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       const next = await refreshTransit(snapshotRef.current);
       commit((current) => ({
         ...current,
+        lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
         transit: next.transit,
         transitStatus: next.transitStatus
       }));
     };
-    const refreshInitial = async () => {
+    const refreshAll = async () => {
       setServicesRefreshing(true);
-      await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
-      setServicesRefreshing(false);
+      try {
+        if (navigator.onLine) {
+          await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
+        }
+      } finally {
+        setInitialRefreshComplete(true);
+        setServicesRefreshing(false);
+      }
     };
-    void refreshInitial();
+    refreshAllRef.current = refreshAll;
+    void refreshAll();
     const recoveryRefresh = window.setTimeout(() => {
       const current = snapshotRef.current;
       const missingCoreService =
@@ -1135,7 +1243,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         current.radar.length === 0 ||
         current.transitStatus !== "live";
       if (missingCoreService) {
-        void Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
+        void refreshAll();
       }
     }, 20_000);
     const refresh = window.setInterval(() => void update(), 5 * 60_000);
@@ -1149,6 +1257,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       window.clearInterval(contextRefresh);
       window.clearInterval(transitRefresh);
       window.clearTimeout(recoveryRefresh);
+      refreshAllRef.current = async () => undefined;
     };
   }, []);
 
@@ -1157,12 +1266,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [layers]);
 
   useEffect(() => {
-    if (prefersReducedMotion || !radarPlaying || !layers.has("radar") || snapshot.radar.length < 2) return;
+    if (prefersReducedMotion || !radarPlaying || !layers.has("radar") || snapshot.contextStatus.radar !== "live" || snapshot.radar.length < 2) return;
     const animation = window.setInterval(() => {
       setRadarFrameIndex((index) => (index + 1) % snapshot.radar.length);
     }, 850);
     return () => window.clearInterval(animation);
-  }, [layers, prefersReducedMotion, radarPlaying, snapshot.radar.length]);
+  }, [layers, prefersReducedMotion, radarPlaying, snapshot.contextStatus.radar, snapshot.radar.length]);
 
 
   useEffect(() => {
@@ -1221,6 +1330,28 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     return () => experience.removeAttribute("inert");
   }, [selected]);
 
+  useEffect(() => {
+    const sourceIsCurrent = (selection: Selection) => {
+      if (connectionStatus !== "online") return false;
+      if (selection.type === "station") return snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
+      if (selection.type === "train") return snapshot.sourceProvenance?.trains.status === "live";
+      if (selection.type === "river") return snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback";
+      if (selection.type === "buoy") return snapshot.contextStatus.marine === "live";
+      if (selection.type === "air") return selection.item.source === "measured"
+        ? snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback"
+        : snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback";
+      if (selection.type === "tide") return snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback";
+      if (selection.type === "bathing") return snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback";
+      if (selection.type === "earthquake") return snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback";
+      return snapshot.transitStatus === "live";
+    };
+    setSelected((current) => {
+      if (!current) return current;
+      const currentItems = current.type === "movement-stack" ? current.items : [current];
+      return currentItems.every(sourceIsCurrent) ? current : null;
+    });
+  }, [connectionStatus, snapshot.contextStatus, snapshot.sourceProvenance, snapshot.sourceStatus, snapshot.transitStatus]);
+
   const projection = useMemo(
     () => geoMercator().center([-8.05, 53.45]).scale(5350).translate([500, 462]),
     []
@@ -1238,20 +1369,26 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     }));
   }, [projection]);
   const displayedAirQuality = useMemo(() => {
-    const measured = snapshot.airQuality.filter((reading) => reading.source === "measured");
+    if (connectionStatus !== "online") return [];
+    const measured = snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback"
+      ? snapshot.airQuality.filter((reading) => reading.source === "measured")
+      : [];
     const cells = new Map<string, AirQualityReading>();
     for (const reading of measured) {
       const key = `${Math.round(reading.longitude * 3)}:${Math.round(reading.latitude * 3)}`;
       const current = cells.get(key);
       if (!current || (reading.europeanAqi ?? -1) > (current.europeanAqi ?? -1)) cells.set(key, reading);
     }
-    const modelled = snapshot.airQuality.filter((reading) =>
-      reading.source === "modelled" &&
-      !measured.some((station) => Math.hypot(station.longitude - reading.longitude, station.latitude - reading.latitude) < .42)
-    );
+    const modelled = snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback"
+      ? snapshot.airQuality.filter((reading) =>
+          reading.source === "modelled" &&
+          !measured.some((station) => Math.hypot(station.longitude - reading.longitude, station.latitude - reading.latitude) < .42)
+        )
+      : [];
     return [...cells.values(), ...modelled];
-  }, [snapshot.airQuality]);
+  }, [connectionStatus, snapshot.airQuality, snapshot.contextStatus.measuredAir, snapshot.contextStatus.modelledAir]);
   const transitClusters = useMemo(() => {
+    if (connectionStatus !== "online" || snapshot.transitStatus !== "live") return [];
     const cellSize = 22 / mapView.scale;
     const cells = new Map<string, { sumX: number; sumY: number; vehicles: LiveSnapshot["transit"] }>();
     const orderedTransit = deduplicateMovementRecords(snapshot.transit);
@@ -1278,7 +1415,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         vehicles: [...cell.vehicles].sort((first, second) => compareStableIds(first.id, second.id))
       }))
       .sort((first, second) => compareStableIds(first.vehicles[0]?.id ?? "", second.vehicles[0]?.id ?? ""));
-  }, [mapView.scale, projection, snapshot.transit]);
+  }, [connectionStatus, mapView.scale, projection, snapshot.transit, snapshot.transitStatus]);
   const movementStacks = useMemo(() => {
     const points: Array<{
       x: number;
@@ -1287,7 +1424,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       trainAnchor: boolean;
     }> = [];
 
-    if (layers.has("trains")) {
+    if (connectionStatus === "online" && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live") {
       const orderedTrains = deduplicateMovementRecords(snapshot.trains);
       for (const train of orderedTrains) {
         const point = projection([train.longitude, train.latitude]);
@@ -1358,36 +1495,37 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         trainAnchor: group.trainAnchor
       };
     });
-  }, [activeMarkerId, layers, mapView.scale, projection, snapshot.trains, transitClusters]);
+  }, [activeMarkerId, connectionStatus, layers, mapView.scale, projection, snapshot.sourceProvenance?.trains.status, snapshot.trains, transitClusters]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
+    if (connectionStatus !== "online") return ids;
     const isProjected = (longitude: number, latitude: number) => Boolean(projection([longitude, latitude]));
 
-    if (layers.has("rivers")) {
+    if (layers.has("rivers") && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback")) {
       snapshot.rivers.forEach((river) => {
         if (isProjected(river.longitude, river.latitude)) ids.push(`river:${river.id}`);
       });
     }
-    if (layers.has("sea")) {
+    if (layers.has("sea") && snapshot.contextStatus.marine === "live") {
       snapshot.marine.forEach((marineSite) => {
         if (isProjected(marineSite.longitude, marineSite.latitude)) ids.push(`buoy:${marineSite.id}`);
       });
     }
-    if (layers.has("tides")) {
+    if (layers.has("tides") && (snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback")) {
       snapshot.tides.forEach((tide) => {
         if (isProjected(tide.longitude, tide.latitude)) ids.push(`tide:${tide.id}`);
       });
     }
-    if (layers.has("bathing")) {
+    if (layers.has("bathing") && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback")) {
       snapshot.bathingAlerts.forEach((alert) => {
         if (isProjected(alert.longitude, alert.latitude)) ids.push(`bathing:${alert.id}`);
       });
     }
-    if (layers.has("weather")) {
+    if (layers.has("weather") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial")) {
       snapshot.stations.forEach((station) => {
         if (isProjected(station.longitude, station.latitude)) ids.push(`station:${station.id}`);
       });
-    } else if (layers.has("wind")) {
+    } else if (layers.has("wind") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial")) {
       snapshot.stations.forEach((station) => {
         if (station.windSpeed !== null && isProjected(station.longitude, station.latitude)) {
           ids.push(`station:${station.id}`);
@@ -1402,13 +1540,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     if (layers.has("trains") || layers.has("transit")) {
       movementStacks.forEach((stack) => ids.push(stack.key));
     }
-    if (layers.has("earthquakes")) {
+    if (layers.has("earthquakes") && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback")) {
       snapshot.earthquakes.forEach((earthquake) => {
         if (isProjected(earthquake.longitude, earthquake.latitude)) ids.push(`earthquake:${earthquake.id}`);
       });
     }
     return ids;
-  }, [displayedAirQuality, layers, movementStacks, projection, snapshot.bathingAlerts, snapshot.earthquakes, snapshot.marine, snapshot.rivers, snapshot.stations, snapshot.tides]);
+  }, [connectionStatus, displayedAirQuality, layers, movementStacks, projection, snapshot.bathingAlerts, snapshot.contextStatus.bathing, snapshot.contextStatus.earthquakes, snapshot.contextStatus.marine, snapshot.contextStatus.tides, snapshot.earthquakes, snapshot.marine, snapshot.rivers, snapshot.sourceProvenance?.rivers.status, snapshot.sourceStatus, snapshot.stations, snapshot.tides]);
   const rovingMarkerId = activeMarkerId && markerIds.includes(activeMarkerId)
     ? activeMarkerId
     : markerIds[0] ?? null;
@@ -1437,7 +1575,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const sunY = 145 - Math.sin(daylight * Math.PI) * 105;
   const currentHour = irelandHour(now);
   const isNight = currentHour < 6 || currentHour >= 21;
-  const isConnectingWithoutSnapshot = servicesRefreshing && snapshot.stations.length === 0;
   const selectedPlace = PLACE_OPTIONS.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
   const selectedPlacePoint = selectedPlace.id === "island"
     ? null
@@ -1445,33 +1582,37 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const localStation = selectedPlace.id === "island"
     ? null
     : nearestReadingWithinRadius(
-        snapshot.stations.filter((station) => station.fresh),
+        connectionStatus === "online" && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial")
+          ? snapshot.stations.filter((station) => station.fresh)
+          : [],
         selectedPlace,
         NEARBY_RADIUS_KM.weather
       );
   const localRiver = selectedPlace.id === "island"
     ? null
     : nearestReadingWithinRadius(
-        snapshot.rivers.filter((river) => river.fresh),
+        connectionStatus === "online" && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback")
+          ? snapshot.rivers.filter((river) => river.fresh)
+          : [],
         selectedPlace,
         NEARBY_RADIUS_KM.river
       );
   const localAir = selectedPlace.id === "island"
     ? null
     : nearestReadingWithinRadius(
-        snapshot.airQuality
+        (connectionStatus === "online" && (snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback") ? snapshot.airQuality : [])
           .filter((reading) => reading.source === "measured")
           .sort((first, second) => Date.parse(second.observedAt) - Date.parse(first.observedAt)),
         selectedPlace,
         NEARBY_RADIUS_KM.air
       ) ?? nearestReadingWithinRadius(
-        snapshot.airQuality
+        (connectionStatus === "online" && (snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback") ? snapshot.airQuality : [])
           .filter((reading) => reading.source === "modelled")
           .sort((first, second) => Date.parse(second.observedAt) - Date.parse(first.observedAt)),
         selectedPlace,
         NEARBY_RADIUS_KM.air
       );
-  const warningsUnavailable = snapshot.contextStatus.warnings === "unavailable";
+  const warningsUnavailable = connectionStatus !== "online" || snapshot.contextStatus.warnings !== "live";
   const guidancePlace: GuidancePlace = {
     id: selectedPlace.id,
     name: selectedPlace.name,
@@ -1489,34 +1630,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const largestEarthquake = [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null;
   const visibleIssPass = snapshot.iss?.passes.find((pass) => pass.visible) ?? null;
   const showRainNotable = layers.has("rain");
-  const showRailNotable = layers.has("trains") || layers.has("transit");
+  const showRailNotable = layers.has("trains");
   const showGridNotable = layers.has("grid");
-  const showSeaNotables = layers.has("sea") || layers.has("bathing") || layers.has("tides");
+  const showBathingNotables = layers.has("bathing");
+  const showTideNotable = layers.has("tides");
   const showEarthquakeNotable = layers.has("earthquakes");
   const showIssNotable = layers.has("iss");
-  const hasVisibleNotable =
-    Boolean(showRainNotable && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5) ||
-    Boolean(showRailNotable && snapshot.summary.runningTrains > 0) ||
-    Boolean(showGridNotable && snapshot.grid) ||
-    Boolean(showSeaNotables && snapshot.bathingAlerts.length) ||
-    Boolean(showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) ||
-    Boolean(showEarthquakeNotable && largestEarthquake) ||
-    Boolean(showIssNotable && visibleIssPass);
-  const notableItemCount =
-    (showRainNotable && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 ? 1 : 0) +
-    (showRailNotable && snapshot.summary.runningTrains > 0 ? 1 : 0) +
-    (showGridNotable && snapshot.grid ? 1 : 0) +
-    (showSeaNotables ? snapshot.bathingAlerts.length : 0) +
-    (showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
-    (showEarthquakeNotable && largestEarthquake ? 1 : 0) +
-    (showIssNotable && visibleIssPass ? 1 : 0);
-  const selectedNotableSourceStates = [
-    showSeaNotables ? snapshot.contextStatus.bathing : null,
-    showSeaNotables ? snapshot.contextStatus.tides : null,
-    showEarthquakeNotable ? snapshot.contextStatus.earthquakes : null,
-    showIssNotable ? snapshot.contextStatus.iss : null
-  ].filter((status): status is "live" | "fallback" | "unavailable" => status !== null);
-  const notableSourcesLive = selectedNotableSourceStates.every((status) => status === "live");
   const latestWeatherObs = snapshot.stations.length
     ? snapshot.stations.reduce((latest, station) => {
         const ts = Date.parse(station.observedAt ?? "");
@@ -1550,34 +1669,88 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     STALE_THRESHOLDS.rivers,
     now.getTime()
   );
-  const liveServiceCount = [
+  const online = connectionStatus === "online";
+  const weatherCached = snapshot.sourceStatus === "stale" || (!online && snapshot.stations.length > 0);
+  const trainsLive = online && snapshot.sourceProvenance?.trains.status === "live";
+  const trainsCached = snapshot.sourceProvenance?.trains.status === "stale" || (!online && snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0);
+  const riversLive = online && snapshot.sourceProvenance?.rivers.status === "live";
+  const riversCached = snapshot.sourceProvenance?.rivers.status === "stale" || (!online && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback") && snapshot.rivers.length > 0);
+  const riversFallback = online && snapshot.sourceProvenance?.rivers.status === "fallback";
+  const riversAvailable = riversLive || riversCached || riversFallback;
+  const weatherNotableCurrent = online && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && !weatherStale;
+  const railNotableCurrent = trainsLive && !transitStale;
+  const gridNotableCurrent = online && snapshot.contextStatus.grid === "live";
+  const gridSnapshotDisplayable = Boolean(
+    snapshot.grid && (gridNotableCurrent || snapshot.contextStatus.grid === "stale" || !online)
+  );
+  const gridWindShare = gridSnapshotDisplayable ? snapshot.grid?.windSharePercent ?? null : null;
+  const bathingNotableCurrent = online && snapshot.contextStatus.bathing === "live";
+  const tideNotableCurrent = online && snapshot.contextStatus.tides === "live";
+  const earthquakeNotableCurrent = online && snapshot.contextStatus.earthquakes === "live";
+  const issNotableCurrent = online && snapshot.contextStatus.iss === "live";
+  const hasVisibleNotable =
+    Boolean(showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5) ||
+    Boolean(showRailNotable && railNotableCurrent && snapshot.summary.runningTrains > 0) ||
+    Boolean(showGridNotable && gridNotableCurrent && snapshot.grid) ||
+    Boolean(showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.length) ||
+    Boolean(showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) ||
+    Boolean(showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake) ||
+    Boolean(showIssNotable && issNotableCurrent && visibleIssPass);
+  const notableItemCount =
+    (showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 ? 1 : 0) +
+    (showRailNotable && railNotableCurrent && snapshot.summary.runningTrains > 0 ? 1 : 0) +
+    (showGridNotable && gridNotableCurrent && snapshot.grid ? 1 : 0) +
+    (showBathingNotables && bathingNotableCurrent ? snapshot.bathingAlerts.length : 0) +
+    (showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
+    (showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake ? 1 : 0) +
+    (showIssNotable && issNotableCurrent && visibleIssPass ? 1 : 0);
+  const assessedSources = getSelectedSourceAssessment(snapshot, layers, now.getTime());
+  const selectedSourceAssessment = online ? assessedSources : {
+    ...assessedSources,
+    fullyAssessed: false,
+    unavailableSources: ["offline connection", ...assessedSources.unavailableSources]
+  };
+  const liveServiceCount = online ? [
     snapshot.sourceStatus === "live" && snapshot.stations.length > 0 && !weatherStale,
     snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0 && !transitStale,
     snapshot.sourceProvenance?.rivers.status === "live" && snapshot.rivers.length > 0 && !riverDataStale,
     snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0,
-    snapshot.radar.length > 0,
-    Boolean(snapshot.grid),
-    snapshot.airQuality.length > 0,
+    snapshot.contextStatus.radar === "live" && snapshot.radar.length > 0,
+    snapshot.contextStatus.grid === "live" && Boolean(snapshot.grid),
+    snapshot.contextStatus.modelledAir === "live" && snapshot.airQuality.some((reading) => reading.source === "modelled"),
     snapshot.contextStatus.tides === "live",
     snapshot.contextStatus.bathing === "live",
     snapshot.contextStatus.satellite === "live",
     snapshot.contextStatus.earthquakes === "live",
     snapshot.contextStatus.iss === "live",
     snapshot.transitStatus === "live",
-    Boolean(snapshot.aurora)
-  ].filter(Boolean).length;
+    snapshot.contextStatus.aurora === "live" && Boolean(snapshot.aurora)
+  ].filter(Boolean).length : 0;
   const weatherBuoyCount = snapshot.marine.filter((reading) => reading.kind === "weather-buoy").length;
   const coastalObservatoryCount = snapshot.marine.length - weatherBuoyCount;
-  const trainsLive = snapshot.sourceProvenance?.trains.status === "live";
-  const riversLive = snapshot.sourceProvenance?.rivers.status === "live";
-  const riversStale = snapshot.sourceProvenance?.rivers.status === "stale";
-  const riversAvailable = riversLive || riversStale;
-  const radarFrame = snapshot.radar[Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))] ?? null;
-  const connectionLabel = connectionStatus === "offline"
-    ? "Offline · refresh unavailable"
-    : servicesRefreshing
-      ? "Online · refreshing"
-      : "Online";
+  const radarFrames = online && snapshot.contextStatus.radar === "live" ? snapshot.radar : [];
+  const radarFrame = radarFrames[Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))] ?? null;
+  const serviceDisplayState = getServiceDisplayState(snapshot, {
+    initialRefreshComplete,
+    refreshing: servicesRefreshing,
+    online: connectionStatus === "online",
+    now: now.getTime()
+  });
+  const isConnectingWithoutSnapshot = serviceDisplayState === "connecting";
+  const weatherDisplayStatus = online ? snapshot.sourceStatus : snapshot.stations.length ? "stale" : "unavailable";
+  const trainDisplayStatus = online ? snapshot.sourceProvenance?.trains.status ?? "unavailable" : snapshot.trains.length ? "stale" : "unavailable";
+  const riverDisplayStatus = online ? snapshot.sourceProvenance?.rivers.status ?? "unavailable" : snapshot.rivers.length ? "stale" : "unavailable";
+  const lastSuccessLabel = snapshot.lastSuccessAt ? formatAge(snapshot.lastSuccessAt, now) : "not yet";
+  const connectionLabel = ({
+    connecting: "Connecting to live services",
+    refreshing: "Loading live updates",
+    offline: snapshot.lastSuccessAt ? "Offline · saved snapshot" : "Offline · no saved snapshot",
+    cached: "Online · cached data shown",
+    stale: "Online · observations stale",
+    unavailable: "Online · services unavailable",
+    degraded: "Online · partial service",
+    live: "Online · live"
+  } as const)[serviceDisplayState];
   const constrainMapView = useCallback((scale: number, x: number, y: number) => {
     const nextScale = Math.min(4, Math.max(1, scale));
     return {
@@ -1835,29 +2008,45 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     const notices: Record<ContextFocus, { title: string; detail: string }> = {
       weather: {
         title: "Weather observations",
-        detail: `${snapshot.summary.reporting} fresh Met Éireann stations. Select a temperature marker for its latest reading.`
+        detail: weatherNotableCurrent
+          ? `${snapshot.summary.reporting} fresh Met Éireann stations. Select a temperature marker for its latest reading.`
+          : snapshot.sourceStatus === "stale"
+            ? `${snapshot.summary.reporting} cached Met Éireann station records are retained from the last successful refresh; they are not current observations.`
+            : "Met Éireann weather observations are unavailable, so current conditions cannot be assessed."
       },
       wind: {
         title: "Observed wind",
-        detail: `${snapshot.summary.reporting} Met Éireann stations with wind direction and speed in km/h. Select an arrow for the complete observation.`
+        detail: weatherNotableCurrent
+          ? `${snapshot.summary.reporting} Met Éireann stations with current wind direction and speed in km/h. Select an arrow for the complete observation.`
+          : snapshot.sourceStatus === "stale"
+            ? "Cached wind records are retained from the last successful refresh and are not presented as current wind."
+            : "Met Éireann wind observations are unavailable, so current wind cannot be assessed."
       },
       trains: {
-        title: "Live rail positions",
-        detail: snapshot.trains.length
+        title: railNotableCurrent ? "Live rail positions" : trainsCached ? "Cached rail positions" : "Rail positions unavailable",
+        detail: railNotableCurrent
           ? `${snapshot.summary.runningTrains} running trains and ${snapshot.trains.length - snapshot.summary.runningTrains} due to start. Select a train for its direction and status.`
-          : "Iarnród Éireann is not reporting any train positions right now. The map will refresh automatically."
+          : trainsCached
+            ? `${snapshot.trains.length} positions are retained from the last successful refresh; current rail movement cannot be assessed.`
+            : "Iarnród Éireann positions are unavailable, so this view cannot determine how many trains are currently moving."
       },
       rivers: {
-        title: "Fresh river readings",
-        detail: `${snapshot.summary.riverStations} OPW gauges observed within the last three hours. These are local levels, not flood warnings.`
+        title: riversLive && !riverDataStale ? "Fresh river readings" : riversCached ? "Cached river readings" : riversFallback ? "Fallback river readings" : "River readings unavailable",
+        detail: riversLive && !riverDataStale
+          ? `${snapshot.summary.riverStations} OPW gauges observed within the last three hours. These are local levels, not flood warnings.`
+          : riversCached
+            ? `${snapshot.summary.riverStations} gauge readings are retained from the last successful refresh; they are not current levels.`
+            : riversFallback
+              ? `${snapshot.summary.riverStations} readings come from the labelled fallback source; they are local levels, not flood warnings.`
+              : "OPW river readings are unavailable, so current levels cannot be assessed."
       },
       sea: {
         title: "Marine conditions",
-        detail: snapshot.marine.length
+        detail: snapshot.contextStatus.marine === "live" && snapshot.marine.length
           ? `${weatherBuoyCount} Marine Institute weather buoy${weatherBuoyCount === 1 ? "" : "s"} and ${coastalObservatoryCount} coastal observator${coastalObservatoryCount === 1 ? "y" : "ies"} have recent observations. Select a marine site for details.`
-          : snapshot.contextStatus.marine === "unavailable"
-            ? "Marine Institute observations are temporarily unavailable."
-            : "No Marine Institute observation is fresh enough to display right now."
+          : snapshot.contextStatus.marine === "stale"
+            ? "Cached Marine Institute observations are retained from the last successful refresh; current sea conditions cannot be assessed."
+            : "Marine Institute observations are unavailable, so current sea conditions cannot be assessed."
       },
       warnings: {
         title: activeWarning
@@ -1871,41 +2060,51 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       },
       radar: {
         title: "Rainfall radar",
-        detail: snapshot.radar.length
+        detail: snapshot.contextStatus.radar === "live" && snapshot.radar.length
           ? `${snapshot.radar.length} Met Éireann frames at five-minute intervals. Use the timeline to replay the latest half hour.`
-          : "Met Éireann radar imagery is temporarily unavailable."
+          : snapshot.contextStatus.radar === "stale" && snapshot.radar.length
+            ? `${snapshot.radar.length} cached radar frames are retained from the last successful refresh; they are not current precipitation imagery.`
+            : "Met Éireann radar imagery is unavailable, so current precipitation cannot be assessed."
       },
       grid: {
         title: "The all-island grid now",
-        detail: snapshot.grid
+        detail: snapshot.contextStatus.grid === "live" && snapshot.grid
           ? `Demand, wind, carbon and system frequency from EirGrid, with all displayed series available through ${snapshot.grid.observedAt ? formatTime(new Date(snapshot.grid.observedAt)) : "an unavailable time"}.`
-          : "EirGrid operational data is temporarily unavailable."
+          : snapshot.contextStatus.grid === "stale" && snapshot.grid
+            ? `Cached EirGrid values from ${formatAge(snapshot.grid.observedAt, now)} are retained, but current grid conditions cannot be assessed.`
+            : "EirGrid operational data is unavailable, so current demand and wind share cannot be assessed."
       },
       air: {
         title: "Measured and modelled air",
-        detail: snapshot.airQuality.length
+        detail: (snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback") && snapshot.airQuality.length
           ? `${snapshot.airQuality.filter((item) => item.source === "measured").length} EEA monitoring stations alongside ${snapshot.airQuality.filter((item) => item.source === "modelled").length} regional CAMS model points. Nearby stations are grouped to the highest local index; solid markers are measurements and rings are model estimates.`
-          : "Air-quality observations and model output are temporarily unavailable."
+          : snapshot.contextStatus.measuredAir === "stale" || snapshot.contextStatus.modelledAir === "stale"
+            ? "Cached air-quality records are retained from the last successful refresh; current air quality cannot be assessed."
+            : "Air-quality observations and model output are unavailable, so current air quality cannot be assessed."
       },
       aurora: {
         title: "Aurora overhead probability",
-        detail: snapshot.aurora
+        detail: (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") && snapshot.aurora
           ? `NOAA OVATION currently estimates a ${snapshot.aurora.probability}% maximum probability directly over Ireland. Visibility also depends on darkness, cloud and light pollution.`
-          : "NOAA aurora guidance is temporarily unavailable."
+          : snapshot.contextStatus.aurora === "stale" && snapshot.aurora
+            ? "A cached NOAA aurora estimate is retained, but current aurora probability cannot be assessed."
+            : "NOAA aurora guidance is unavailable, so current aurora probability cannot be assessed."
       },
       tides: {
         title: "Tides and coastal anomaly",
-        detail: snapshot.contextStatus.tides === "unavailable"
-          ? "Marine Institute tide-gauge data is temporarily unavailable."
-          : snapshot.tides.length
+        detail: snapshot.contextStatus.tides === "live" && snapshot.tides.length
           ? `${snapshot.tides.length} fresh Marine Institute gauges, compared with predicted tide and storm-surge guidance. Select a gauge for the next high and low water.`
-          : "No tide-gauge observation is fresh enough to display."
+          : snapshot.contextStatus.tides === "stale" && snapshot.tides.length
+            ? `${snapshot.tides.length} cached tide-gauge records are retained; current coastal anomaly cannot be assessed.`
+            : "Marine Institute tide-gauge data is unavailable, so current coastal anomaly cannot be assessed."
       },
       bathing: {
-        title: snapshot.contextStatus.bathing === "unavailable"
+        title: snapshot.contextStatus.bathing === "unavailable" || snapshot.contextStatus.bathing === "stale"
           ? "Bathing-water feed unavailable"
           : snapshot.bathingAlerts.length ? "Active bathing-water alerts" : "No active bathing-water alerts",
-        detail: snapshot.contextStatus.bathing === "unavailable"
+        detail: snapshot.contextStatus.bathing === "stale"
+          ? "Cached EPA alert records are retained, but current restrictions cannot be assessed."
+          : snapshot.contextStatus.bathing === "unavailable"
           ? "The EPA bathing-water alert feed is temporarily unavailable, so no claim about current restrictions can be made."
           : snapshot.bathingAlerts.length
           ? `${snapshot.bathingAlerts.length} current EPA restrictions or advisories. Select an alert for the official reason and notice.`
@@ -1913,9 +2112,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       },
       iss: {
         title: "The ISS over Ireland",
-        detail: snapshot.iss?.passes[0]
+        detail: (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") && snapshot.iss?.passes[0]
           ? `The next pass over central Ireland begins ${formatDate(new Date(snapshot.iss.passes[0].startsAt))} at ${formatTime(new Date(snapshot.iss.passes[0].startsAt))}, peaking at ${snapshot.iss.passes[0].maxElevation.toFixed(0)}°.`
-          : "Current ISS elements or a pass prediction are temporarily unavailable."
+          : snapshot.contextStatus.iss === "stale"
+            ? "Cached orbital elements are retained, but the current ISS position and pass prediction are not confirmed."
+            : "Current ISS elements or a pass prediction are unavailable."
       },
       satellite: {
         title: "Ireland from space",
@@ -1926,19 +2127,23 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           : "NASA satellite imagery is temporarily unavailable."
       },
       earthquakes: {
-        title: snapshot.contextStatus.earthquakes === "unavailable"
+        title: snapshot.contextStatus.earthquakes === "unavailable" || snapshot.contextStatus.earthquakes === "stale"
           ? "Earthquake feed unavailable"
           : snapshot.earthquakes.length ? "Recent seismic detections" : "No nearby earthquakes detected",
-        detail: snapshot.contextStatus.earthquakes === "unavailable"
-          ? "The USGS earthquake feed is temporarily unavailable, so no claim about recent events can be made."
-          : snapshot.earthquakes.length
+        detail: snapshot.contextStatus.earthquakes === "live" && snapshot.earthquakes.length
           ? `${snapshot.earthquakes.length} USGS event${snapshot.earthquakes.length === 1 ? "" : "s"} detected around Ireland in the past seven days.`
-          : "The USGS feed contains no detected events in the Ireland region during the past seven days."
+          : snapshot.contextStatus.earthquakes === "live"
+            ? "The USGS feed contains no detected events in the Ireland region during the past seven days."
+            : snapshot.contextStatus.earthquakes === "stale"
+              ? "Cached USGS detections are retained, but the current seven-day window cannot be assessed."
+              : "The USGS earthquake feed is unavailable, so no claim about recent events can be made."
       },
       transit: {
-        title: snapshot.transitStatus === "live" ? "Live public transport" : "Public transport feed awaiting access",
+        title: snapshot.transitStatus === "live" ? "Live public transport" : snapshot.transitStatus === "stale" ? "Cached public transport" : "Public transport feed awaiting access",
         detail: snapshot.transitStatus === "live"
           ? `${snapshot.transit.length} current TFI vehicle positions, capped and clustered into a readable island view.`
+          : snapshot.transitStatus === "stale"
+            ? `${snapshot.transit.length} positions are retained from the last successful refresh; current vehicle movement cannot be assessed.`
           : snapshot.transitStatus === "credential-required"
             ? "The integration is ready, but the NTA requires a free developer API key before live vehicle positions can be displayed."
             : "The NTA live vehicle feed is temporarily unavailable."
@@ -1947,14 +2152,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     setLayers(new Set(contextLayers[focus]));
     setActivePreset("custom");
     setSelected(null);
-    setMapNotice(notices[focus]);
-    setRadarPlaying(focus === "radar" && snapshot.radar.length > 1 && !prefersReducedMotion);
+    setMapNotice(online ? notices[focus] : {
+      title: "Offline · source not current",
+      detail: `${notices[focus].title} cannot be refreshed while offline. Last successful refresh ${lastSuccessLabel}; saved values are not presented as current map signals.`
+    });
+    setRadarPlaying(online && focus === "radar" && snapshot.contextStatus.radar === "live" && snapshot.radar.length > 1 && !prefersReducedMotion);
     if (focus === "radar") setRadarFrameIndex(0);
     window.requestAnimationFrame(() => {
       document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
         ?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
     });
-  }, [activeWarning, coastalObservatoryCount, prefersReducedMotion, snapshot, warningsUnavailable, weatherBuoyCount]);
+  }, [activeWarning, coastalObservatoryCount, lastSuccessLabel, now, online, prefersReducedMotion, railNotableCurrent, riverDataStale, riversCached, riversFallback, riversLive, snapshot, trainsCached, warningsUnavailable, weatherBuoyCount, weatherNotableCurrent]);
 
   const toggleLayer = useCallback((layer: Layer) => {
     setActivePreset("custom");
@@ -2068,12 +2276,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div
           className="live-state"
           data-connection-status={connectionStatus}
-          title={`${connectionLabel}. ${isConnectingWithoutSnapshot ? "Connecting to live services" : `Snapshot generated ${lastUpdated.toLocaleString("en-IE", { timeZone: "Europe/Dublin" })}`}`}
+          data-service-state={serviceDisplayState}
+          title={`${connectionLabel}. Last successful refresh ${lastSuccessLabel}.`}
         >
-          <span className={`live-dot ${connectionStatus === "offline" ? "offline" : snapshot.sourceStatus}`} />
+          <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} />
           <span className="network-state">{connectionLabel}</span>
-          <span>{isConnectingWithoutSnapshot ? "Connecting" : snapshot.sourceStatus === "live" ? "Live observations" : "Partial observations"}</span>
-          <time>{isConnectingWithoutSnapshot ? "Now" : formatTime(lastUpdated)}</time>
+          <span>{serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
+          <time>{snapshot.lastSuccessAt ? formatTime(new Date(snapshot.lastSuccessAt)) : "—"}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
           <button
@@ -2105,8 +2314,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <section className="dashboard-shell">
         <aside className="section-rail" aria-label="Live view across Ireland">
           <div className="rail-status">
-            <span className={`live-dot ${connectionStatus === "offline" ? "offline" : snapshot.sourceStatus}`} />
-            <span><b>Live systems</b><small>{connectionLabel}</small><small>{servicesRefreshing ? "Refreshing services…" : `${liveServiceCount} services connected`}</small></span>
+            <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} />
+            <span><b>Live systems</b><small>{connectionLabel}</small><small>{isConnectingWithoutSnapshot ? "Connecting…" : `${liveServiceCount} live · last success ${lastSuccessLabel}`}</small></span>
           </div>
           <nav aria-label="Map view shortcuts">
             <button className={activePreset === "weather" ? "active" : ""} onClick={() => showPreset("weather")}><span>☁</span>Weather</button>
@@ -2119,10 +2328,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <button className={activePreset === "all" ? "active" : ""} onClick={() => showPreset("all")}><span>⌘</span>All layers</button>
           </nav>
           <div className="rail-metrics">
-            <p><span>Warmest</span><strong>{snapshot.summary.warmest?.temperature ?? "—"}°</strong><small>{snapshot.summary.warmest?.name ?? "No report"}</small></p>
-            <p><span>Strongest wind</span><strong>{snapshot.summary.windiest?.windSpeed ?? "—"}</strong><small>km/h · {snapshot.summary.windiest?.name ?? "No report"}</small></p>
-            <p><span>Trains moving</span><strong>{trainsLive ? snapshot.summary.runningTrains : "—"}</strong><small>{trainsLive ? "Current positions" : "Provider unavailable"}</small></p>
-            <p><span>River gauges</span><strong>{riversAvailable ? snapshot.summary.riverStations : "—"}</strong><small>{riversLive ? "Fresh readings" : riversStale ? "Cached readings" : "Provider unavailable"}</small></p>
+            <p><span>Warmest</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? `${snapshot.summary.warmest?.temperature ?? "—"}°` : "—"}</strong><small>{isConnectingWithoutSnapshot ? "Connecting" : weatherNotableCurrent ? snapshot.summary.warmest?.name ?? "No usable report" : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
+            <p><span>Strongest wind</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? snapshot.summary.windiest?.windSpeed ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? "Connecting" : weatherNotableCurrent ? `km/h · ${snapshot.summary.windiest?.name ?? "No usable report"}` : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
+            <p><span>Trains moving</span><strong>{isConnectingWithoutSnapshot ? "…" : trainsLive || trainsCached ? snapshot.summary.runningTrains : "—"}</strong><small>{isConnectingWithoutSnapshot ? "Connecting" : trainsLive ? "Current positions" : trainsCached ? "Cached positions" : "Provider unavailable"}</small></p>
+            <p><span>River gauges</span><strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? snapshot.summary.riverStations : "—"}</strong><small>{isConnectingWithoutSnapshot ? "Connecting" : riversLive ? "Fresh readings" : riversCached ? "Cached readings" : riversFallback ? "Fallback source" : "Provider unavailable"}</small></p>
           </div>
         </aside>
 
@@ -2131,12 +2340,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <div>
               <p className="eyebrow">Across Ireland · {formatDate(now)} · {formatTime(now)} IST</p>
               <h1 id="moment-heading">See Ireland happening.</h1>
-              <p>{isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Updating live observations across the island…" : `${narrative.period} ${narrative.detail}`}</p>
+              <p>{isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Loading fresh observations across the island…" : serviceDisplayState === "offline" ? `Offline. Showing the last saved observations where available; last success ${lastSuccessLabel}.` : serviceDisplayState === "cached" ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.` : serviceDisplayState === "unavailable" ? "Live services are unavailable, so national conditions cannot be assessed." : `${narrative.period} ${narrative.detail}`}</p>
             </div>
             <div className="workspace-facts" aria-label="Current national highlights across Ireland">
-              <button onClick={() => focusContext("grid")}><b>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</b><small>demand met by wind</small></button>
-              <button onClick={() => focusContext("sea")}><b>{snapshot.contextStatus.marine === "live" ? snapshot.marine.length : "—"}</b><small>marine sites reporting</small></button>
-              <button onClick={() => focusContext("radar")}><b>{snapshot.summary.wettest?.rainfall ?? "—"} mm</b><small>recent observed rain</small></button>
+              <button onClick={() => focusContext("grid")}><b>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? `${snapshot.grid.windSharePercent.toFixed(0)}%` : "—"}</b><small>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? "demand met by wind" : "grid wind share unavailable"}</small></button>
+              <button onClick={() => focusContext("sea")}><b>{online && snapshot.contextStatus.marine === "live" ? snapshot.marine.length : "—"}</b><small>{online && snapshot.contextStatus.marine === "live" ? "marine sites reporting" : "marine observations unavailable"}</small></button>
+              <button onClick={() => focusContext("radar")}><b>{weatherNotableCurrent && snapshot.summary.wettest?.rainfall !== null && snapshot.summary.wettest?.rainfall !== undefined ? `${snapshot.summary.wettest.rainfall} mm` : "—"}</b><small>{weatherNotableCurrent ? "recent observed rain" : "rain observations unavailable"}</small></button>
             </div>
           </div>
 
@@ -2174,28 +2383,28 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   <dd>{localStation?.item.temperature ?? "—"}°</dd>
                   <small>{localStation
                     ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now)
-                    : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
+                    : isConnectingWithoutSnapshot ? "Connecting to weather observations…" : !online ? "Offline; saved weather is not used as a current nearby condition." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
                 </div>
                 <div>
                   <dt>Rain</dt>
                   <dd>{localStation?.item.rainfall == null ? "—" : `${localStation.item.rainfall} mm`}</dd>
                   <small>{localStation
                     ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now)
-                    : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.`}</small>
+                    : isConnectingWithoutSnapshot ? "Connecting to rain observations…" : !online ? "Offline; saved rain observations are not used as current nearby rainfall." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.` : "Rain observations are unavailable; nearby rainfall cannot be assessed."}</small>
                 </div>
                 <div>
                   <dt>River</dt>
                   <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "—"}</dd>
                   <small>{localRiver
                     ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now)
-                    : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.`}</small>
+                    : isConnectingWithoutSnapshot ? "Connecting to river gauges…" : riversLive || riversFallback ? `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.` : riversCached ? "The river feed is unavailable; cached readings are not used as current local conditions." : "River readings are unavailable; nearby levels cannot be assessed."}</small>
                 </div>
                 <div>
                   <dt>Air</dt>
                   <dd>{localAir?.item.europeanAqi == null ? "—" : `AQI ${localAir.item.europeanAqi}`}</dd>
                   <small>{localAir
                     ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now)
-                    : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.`}</small>
+                    : isConnectingWithoutSnapshot ? "Connecting to air-quality sources…" : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback" ? `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>
                 </div>
               </dl>
             </div>
@@ -2211,26 +2420,34 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             >
               Data details <span aria-hidden="true">→</span>
             </button>
-            <span className={`freshness-chip connection-chip ${connectionStatus}`} data-connection-status={connectionStatus} aria-live="polite">
-              <i aria-hidden="true" /><b>Connection</b><small>{connectionLabel}</small>
+            <button
+              type="button"
+              className="retry-live-data"
+              onClick={() => void refreshAllRef.current()}
+              disabled={connectionStatus === "offline" || servicesRefreshing}
+            >
+              {servicesRefreshing ? "Loading…" : "Retry live data"}
+            </button>
+            <span className={`freshness-chip connection-chip ${serviceDisplayState}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState} aria-live="polite">
+              <i aria-hidden="true" /><b>Connection</b><small>{connectionLabel} · Last success {lastSuccessLabel}</small>
             </span>
             <span
-              className={`freshness-chip ${snapshot.sourceStatus}`}
-              aria-label={`Weather provider ${statusText(snapshot.sourceStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}
+              className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : weatherDisplayStatus}`}
+              aria-label={isConnectingWithoutSnapshot ? "Weather provider connecting" : `Weather provider ${statusText(weatherDisplayStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${!online ? "; offline saved snapshot" : weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}
             >
-              <i aria-hidden="true" /><b>Weather provider</b><small>Provider: {statusText(snapshot.sourceStatus)} · Observation: {formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}{weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}</small>
+              <i aria-hidden="true" /><b>Weather provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(weatherDisplayStatus)}${!online ? " (offline)" : ""} · Observation: ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${online && weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}`}</small>
             </span>
             <span
-              className={`freshness-chip ${snapshot.sourceProvenance?.trains.status ?? "unavailable"}`}
-              aria-label={`Rail provider ${statusText(snapshot.sourceProvenance?.trains.status ?? "unavailable")}; latest observation ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${transitStale && snapshot.trains.length > 0 ? "; positions are stale" : ""}`}
+              className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : trainDisplayStatus}`}
+              aria-label={isConnectingWithoutSnapshot ? "Rail provider connecting" : `Rail provider ${statusText(trainDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${!online ? "; offline saved snapshot" : transitStale && snapshot.trains.length > 0 ? "; positions are stale" : ""}`}
             >
-              <i aria-hidden="true" /><b>Rail provider</b><small>Provider: {statusText(snapshot.sourceProvenance?.trains.status ?? "unavailable")} · Observation: {formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}{transitStale && snapshot.trains.length > 0 ? " · stale" : ""}</small>
+              <i aria-hidden="true" /><b>Rail provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(trainDisplayStatus)}${!online ? " (offline)" : ""} · Observation: ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${online && transitStale && snapshot.trains.length > 0 ? " · stale" : ""}`}</small>
             </span>
             <span
-              className={`freshness-chip ${snapshot.sourceProvenance?.rivers.status ?? "unavailable"}`}
-              aria-label={`River provider ${statusText(snapshot.sourceProvenance?.rivers.status ?? "unavailable")}; latest observation ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${riverDataStale && snapshot.rivers.length > 0 ? "; readings are stale" : ""}`}
+              className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : riverDisplayStatus}`}
+              aria-label={isConnectingWithoutSnapshot ? "River provider connecting" : `River provider ${statusText(riverDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${!online ? "; offline saved snapshot" : riverDataStale && snapshot.rivers.length > 0 ? "; readings are stale" : ""}`}
             >
-              <i aria-hidden="true" /><b>River provider</b><small>Provider: {statusText(snapshot.sourceProvenance?.rivers.status ?? "unavailable")} · Observation: {formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}{riverDataStale && snapshot.rivers.length > 0 ? " · stale" : ""}</small>
+              <i aria-hidden="true" /><b>River provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(riverDisplayStatus)}${!online ? " (offline)" : ""} · Observation: ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${online && riverDataStale && snapshot.rivers.length > 0 ? " · stale" : ""}`}</small>
             </span>
           </div>
 
@@ -2242,7 +2459,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               </div>
               <p>Met Éireann notices are shown with their named scope and timing. Regional notices do not describe the whole island.</p>
             </div>
-            {layers.has("warnings") ? visibleWarnings.length ? (
+            {layers.has("warnings") ? isConnectingWithoutSnapshot ? (
+              <p className="official-notices-empty">Connecting to the Met Éireann notice feed…</p>
+            ) : visibleWarnings.length ? (
               visibleWarnings.map((warning, warningIndex) => {
                 const timing = warningTiming(warning, now.getTime());
                 const isActive = timing === "active";
@@ -2270,7 +2489,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 );
               })
             ) : warningsUnavailable ? (
-              <p className="official-notices-empty">The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed.</p>
+              <p className="official-notices-empty">{!online ? `Offline. The notice feed cannot be refreshed; last success ${lastSuccessLabel}, so current warnings cannot be confirmed.` : snapshot.contextStatus.warnings === "stale" ? `The last notice check is cached from ${lastSuccessLabel}; current warnings cannot be confirmed.` : "The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed."}</p>
             ) : (
               <p className="official-notices-empty">No current or upcoming Met Éireann notices are represented in the current horizon.</p>
             ) : (
@@ -2287,7 +2506,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <p>Observed conditions, official notices and feed coverage grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>
             </div>
             <div className="guidance-list">
-              {activityGuidance.map((item) => (
+              {isConnectingWithoutSnapshot ? activityGuidance.map((item) => (
+                <button
+                  type="button"
+                  className="guidance-card connecting"
+                  data-activity-id={item.id}
+                  key={item.id}
+                  disabled
+                >
+                  <span className="guidance-status" data-guidance-mode="status">Connecting</span>
+                  <strong>{item.title}</strong>
+                  <span className="guidance-reason" data-guidance-mode="reason">Loading live observations and provider coverage…</span>
+                  <span className="guidance-caveat" data-guidance-mode="caveat">No current condition is stated until the first refresh settles.</span>
+                </button>
+              )) : serviceDisplayState === "offline" ? activityGuidance.map((item) => (
+                <button
+                  type="button"
+                  className="guidance-card unavailable"
+                  data-activity-id={item.id}
+                  key={item.id}
+                  disabled
+                >
+                  <span className="guidance-status" data-guidance-mode="status">Offline</span>
+                  <strong>{item.title}</strong>
+                  <span className="guidance-reason" data-guidance-mode="reason">Live sources cannot be refreshed while this device is offline.</span>
+                  <span className="guidance-caveat" data-guidance-mode="caveat">Saved observations are not used as current activity context.</span>
+                </button>
+              )) : activityGuidance.map((item) => (
                 <button
                   type="button"
                   className={`guidance-card ${item.status}`}
@@ -2388,7 +2633,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <path className="day-arc" d="M120 145 Q500 -65 880 145" />
             <circle cx={sunX} cy={sunY} r="82" fill="url(#sunGlow)" className="sun-glow" />
             <circle cx={sunX} cy={sunY} r="7" className="sun-core" />
-            {layers.has("aurora") && (
+            {online && layers.has("aurora") && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") && snapshot.aurora && (
               <path
                 className="aurora-curtain"
                 style={{ opacity: Math.max(.12, (snapshot.aurora?.probability ?? 0) / 100) }}
@@ -2404,7 +2649,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <g className="island-shape" filter="url(#landShadow)">
               {islandPaths.map((path, index) => <path key={index} d={path} />)}
             </g>
-            {layers.has("satellite") && snapshot.satellite && <SatelliteTiles frame={snapshot.satellite} projection={projection} />}
+            {online && layers.has("satellite") && (snapshot.contextStatus.satellite === "live" || snapshot.contextStatus.satellite === "fallback") && snapshot.satellite && <SatelliteTiles frame={snapshot.satellite} projection={projection} />}
             {layers.has("radar") && radarFrame && <RadarTiles frame={radarFrame} projection={projection} />}
             <g className="road-network" role="img" aria-label="Major roads from OpenStreetMap">
               {roadPaths.map((road, index) => (
@@ -2412,14 +2657,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               ))}
             </g>
             <rect className="night-shade" x={isNight ? 0 : Math.max(0, sunX - 700)} width={isNight ? 1000 : 460} height="900" />
-            {layers.has("wind") && (
+            {online && layers.has("wind") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && (
               <g className="wind-field" aria-hidden="true">
                 {Array.from({ length: 12 }, (_, index) => (
                   <path key={index} style={{ animationDelay: `${index * -0.45}s` }} d={`M ${75 + (index % 4) * 215} ${180 + Math.floor(index / 4) * 235} q 55 -22 115 0`} />
                 ))}
               </g>
             )}
-            {layers.has("rain") && snapshot.stations
+            {online && layers.has("rain") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && snapshot.stations
               .filter((station) => (station.rainfall ?? 0) > 0)
               .map((station) => {
                 const point = projection([station.longitude, station.latitude]);
@@ -2441,7 +2686,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <text x="10" y="4">My place</text>
               </g>
             )}
-            {layers.has("rivers") && snapshot.rivers.map((river) => {
+            {online && layers.has("rivers") && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback") && snapshot.rivers.map((river) => {
               const point = projection([river.longitude, river.latitude]);
               return point ? (
                 <MapMarker
@@ -2460,7 +2705,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("sea") && snapshot.marine.map((marineSite) => {
+            {online && layers.has("sea") && snapshot.contextStatus.marine === "live" && snapshot.marine.map((marineSite) => {
               const point = projection([marineSite.longitude, marineSite.latitude]);
               return point ? (
                 <MapMarker
@@ -2481,7 +2726,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("tides") && snapshot.tides.map((tide) => {
+            {online && layers.has("tides") && (snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback") && snapshot.tides.map((tide) => {
               const point = projection([tide.longitude, tide.latitude]);
               return point ? (
                 <MapMarker
@@ -2502,7 +2747,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("bathing") && snapshot.bathingAlerts.map((alert) => {
+            {online && layers.has("bathing") && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback") && snapshot.bathingAlerts.map((alert) => {
               const point = projection([alert.longitude, alert.latitude]);
               return point ? (
                 <MapMarker
@@ -2523,7 +2768,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            {layers.has("weather") && snapshot.stations.map((station) => (
+            {online && layers.has("weather") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && snapshot.stations.map((station) => (
               <StationMarker
                 key={station.id}
                 station={station}
@@ -2539,7 +2784,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 )}
               />
             ))}
-            {layers.has("wind") && snapshot.stations.map((station) => {
+            {online && layers.has("wind") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && snapshot.stations.map((station) => {
               const point = projection([station.longitude, station.latitude]);
               if (!point || station.windSpeed === null) return null;
               const windLabel = `${station.name}, wind ${station.windSpeed} kilometres per hour from ${station.windDirection || "an unknown direction"}`;
@@ -2651,7 +2896,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               );
             })}
-            {layers.has("earthquakes") && snapshot.earthquakes.map((earthquake) => {
+            {online && layers.has("earthquakes") && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback") && snapshot.earthquakes.map((earthquake) => {
               const point = projection([earthquake.longitude, earthquake.latitude]);
               return point ? (
                 <MapMarker
@@ -2695,7 +2940,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               onClick={() => {
                 if (!prefersReducedMotion) setRadarPlaying((playing) => !playing);
               }}
-              disabled={snapshot.radar.length < 2 || prefersReducedMotion}
+              disabled={radarFrames.length < 2 || prefersReducedMotion}
               aria-pressed={radarPlaying}
               aria-label={prefersReducedMotion ? "Replay radar timeline disabled because reduced motion is enabled" : radarPlaying ? "Pause radar replay" : "Replay radar timeline"}
               aria-describedby="radar-motion-note"
@@ -2707,9 +2952,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <input
                 type="range"
                 min="0"
-                max={Math.max(0, snapshot.radar.length - 1)}
-                value={Math.min(radarFrameIndex, Math.max(0, snapshot.radar.length - 1))}
-                disabled={!snapshot.radar.length}
+                max={Math.max(0, radarFrames.length - 1)}
+                value={Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))}
+                disabled={!radarFrames.length}
                 onChange={(event) => {
                   setRadarPlaying(false);
                   setRadarFrameIndex(Number(event.target.value));
@@ -2719,7 +2964,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               />
               <small id="radar-motion-note">{prefersReducedMotion
                 ? "Replay disabled for reduced motion · select a frame manually"
-                : snapshot.radar.length
+                : radarFrames.length
                   ? "Observed precipitation · 5-minute frames"
                   : "Radar temporarily unavailable"}</small>
             </label>
@@ -2728,9 +2973,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
         {(layers.has("grid") || layers.has("aurora") || layers.has("iss")) && (
           <div className="desktop-context-stack">
-            {layers.has("grid") && <GridPanel grid={snapshot.grid} />}
-            {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} />}
-            {layers.has("iss") && <IssPanel iss={snapshot.iss} />}
+            {layers.has("grid") && <GridPanel grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} />}
+            {layers.has("aurora") && <AuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} />}
+            {layers.has("iss") && <IssPanel iss={online && (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") ? snapshot.iss : null} />}
           </div>
         )}
 
@@ -2739,11 +2984,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span>Observed, operational, and clearly labelled model data · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
-        <div className="live-signal-dock" aria-label="Current provider signals across Ireland">
-          <strong><span className={`live-dot ${liveServiceCount ? "live" : "partial"}`} />Current feeds</strong>
-          <span><time>{snapshot.summary.reporting ? formatTime(lastUpdated) : "—"}</time>{snapshot.summary.reporting && !weatherStale ? `${snapshot.summary.reporting} weather stations reporting` : snapshot.summary.reporting ? `${snapshot.summary.reporting} stations (data stale)` : "Weather observations unavailable"}</span>
-          <span><time>{trainsLive && snapshot.sourceProvenance?.trains.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.trains.latestObservedAt)) : "—"}</time>{trainsLive && !transitStale ? `${snapshot.summary.runningTrains} trains sharing positions` : trainsLive ? `${snapshot.summary.runningTrains} trains (positions stale)` : "Rail positions unavailable"}</span>
-          <span><time>{riversAvailable && snapshot.sourceProvenance?.rivers.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.rivers.latestObservedAt)) : "—"}</time>{riversLive && !riverDataStale ? `${snapshot.summary.riverStations} fresh river gauges` : riversLive ? `${snapshot.summary.riverStations} gauges (data stale)` : riversStale ? `${snapshot.summary.riverStations} cached river gauges` : "River readings unavailable"}</span>
+        <div className="live-signal-dock" aria-label="Provider signal status across Ireland">
+          <strong><span className={`live-dot ${liveServiceCount ? "live" : "partial"}`} />Provider feeds</strong>
+          <span><time>{latestWeatherObs > 0 ? formatTime(new Date(latestWeatherObs)) : "—"}</time>{isConnectingWithoutSnapshot ? "Connecting to weather observations" : weatherNotableCurrent ? `${snapshot.summary.reporting} weather stations reporting` : weatherCached ? `${snapshot.summary.reporting} saved weather stations` : "Weather observations unavailable"}</span>
+          <span><time>{snapshot.sourceProvenance?.trains.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.trains.latestObservedAt)) : "—"}</time>{isConnectingWithoutSnapshot ? "Connecting to rail positions" : railNotableCurrent ? `${snapshot.summary.runningTrains} trains sharing current positions` : trainsCached ? `${snapshot.summary.runningTrains} trains in cached positions` : "Rail positions unavailable"}</span>
+          <span><time>{snapshot.sourceProvenance?.rivers.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.rivers.latestObservedAt)) : "—"}</time>{isConnectingWithoutSnapshot ? "Connecting to river gauges" : riversLive && !riverDataStale ? `${snapshot.summary.riverStations} fresh river gauges` : riversCached ? `${snapshot.summary.riverStations} cached river gauges` : riversFallback ? `${snapshot.summary.riverStations} fallback-source river gauges` : "River readings unavailable"}</span>
         </div>
 
       </section>
@@ -2769,9 +3014,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         document.body
       )}
 
-      {layers.has("grid") && <GridPanel grid={snapshot.grid} className="mobile-context-panel" />}
-      {layers.has("aurora") && <AuroraPanel aurora={snapshot.aurora} className="mobile-context-panel" />}
-      {layers.has("iss") && <IssPanel iss={snapshot.iss} className="mobile-context-panel" />}
+      {layers.has("grid") && <GridPanel grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} className="mobile-context-panel" />}
+      {layers.has("aurora") && <AuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} className="mobile-context-panel" />}
+      {layers.has("iss") && <IssPanel iss={online && (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") ? snapshot.iss : null} className="mobile-context-panel" />}
 
       <section className="notable-now" aria-labelledby="notable-heading">
         <div>
@@ -2779,46 +3024,52 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <h2 id="notable-heading">Signals that matter to this view.</h2>
         </div>
         <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`}>
-          {showRainNotable && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
+          {showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
             <button className="signal-item" onClick={() => focusContext("radar")}>
               <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall?.toFixed(1) ?? "—"} mm recently observed</small>
             </button>
           )}
-          {showRailNotable && snapshot.summary.runningTrains > 0 && (
+          {showRailNotable && railNotableCurrent && snapshot.summary.runningTrains > 0 && (
             <button className="signal-item" onClick={() => focusContext("trains")}>
               <span>Movement</span><b>{snapshot.summary.runningTrains} trains moving</b><small>{snapshot.trains.length} rail positions in the current snapshot</small>
             </button>
           )}
-          {showGridNotable && snapshot.grid && (
+          {showGridNotable && gridNotableCurrent && snapshot.grid && (
             <button className="signal-item" onClick={() => focusContext("grid")}>
-              <span>Energy</span><b>{snapshot.grid.windSharePercent?.toFixed(0) ?? "—"}% wind share</b><small>{snapshot.grid.demandMW?.toFixed(0) ?? "—"} MW current demand</small>
+              <span>Energy</span><b>{snapshot.grid.windSharePercent === null ? "Wind share unavailable" : `${snapshot.grid.windSharePercent.toFixed(0)}% wind share`}</b><small>{snapshot.grid.demandMW === null ? "Current demand unavailable" : `${snapshot.grid.demandMW.toFixed(0)} MW current demand`}</small>
             </button>
           )}
-          {showSeaNotables && snapshot.bathingAlerts.map((alert) => (
+          {showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.map((alert) => (
             <button className="signal-item" key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
               <span>Bathing water</span><b>{alert.name}</b><small>{alert.restriction}</small>
             </button>
           ))}
-          {showSeaNotables && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
+          {showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
             <button className="signal-item" onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
               <span>Sea-level anomaly</span><b>{unusualTide.name}</b><small>{Math.abs(unusualTide.surge ?? 0).toFixed(2)} m {Number(unusualTide.surge) >= 0 ? "above" : "below"} modelled tide</small>
             </button>
           )}
-          {showEarthquakeNotable && largestEarthquake && (
+          {showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake && (
             <button className="signal-item" onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
               <span>Seismic detection</span><b>M {largestEarthquake.magnitude.toFixed(1)} · {largestEarthquake.place}</b><small>{formatDate(new Date(largestEarthquake.observedAt))}</small>
             </button>
           )}
-          {showIssNotable && visibleIssPass && (
+          {showIssNotable && issNotableCurrent && visibleIssPass && (
             <button className="signal-item" onClick={() => focusContext("iss")}>
               <span>Night sky</span><b>ISS pass at {formatTime(new Date(visibleIssPass.startsAt))}</b><small>{formatDate(new Date(visibleIssPass.startsAt))} · up to {visibleIssPass.maxElevation.toFixed(0)}°</small>
             </button>
           )}
-          {!hasVisibleNotable && notableSourcesLive && (
-            <p className="all-quiet"><span className="live-dot live" />No unusual signals match the selected layers.</p>
+          {!hasVisibleNotable && isConnectingWithoutSnapshot && (
+            <p className="all-quiet"><span className="live-dot partial" />Connecting to the selected signal sources…</p>
           )}
-          {!hasVisibleNotable && !notableSourcesLive && (
-            <p className="all-quiet"><span className="live-dot partial" />Some selected signal sources are temporarily unavailable.</p>
+          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.assessedSourceCount === 0 && (
+            <p className="all-quiet"><span className="live-dot partial" />No automated highlight rule applies to the selected orientation layers.</p>
+          )}
+          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.fullyAssessed && (
+            <p className="all-quiet"><span className="live-dot live" />Provider checks completed; no highlighted signal matches the selected layers.</p>
+          )}
+          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.assessedSourceCount > 0 && !selectedSourceAssessment.fullyAssessed && (
+            <p className="all-quiet"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
           )}
           {notableItemCount > 3 && (
             <button className="notable-more" onClick={() => setShowAllNotables((current) => !current)}>
@@ -2836,22 +3087,32 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
         <button className="pulse-card grid" onClick={() => focusContext("grid")}>
           <span><i>ϟ</i> All-island electricity</span>
-          <strong>{snapshot.grid?.windSharePercent?.toFixed(0) ?? "—"}%</strong>
-          <small>of current demand across Ireland supplied by wind, from EirGrid operational data</small>
+          <strong>{isConnectingWithoutSnapshot ? "…" : gridWindShare === null ? "—" : `${gridWindShare.toFixed(0)}%`}</strong>
+          <small>{isConnectingWithoutSnapshot
+            ? "Connecting to EirGrid operational data"
+            : gridNotableCurrent && gridWindShare !== null
+              ? "of current all-island demand supplied by wind, from EirGrid operational data"
+              : gridNotableCurrent
+                ? "The current EirGrid response has no wind-share value, so wind share cannot be assessed"
+                : gridWindShare !== null
+                  ? "saved wind share from the last successful refresh; current grid conditions are unconfirmed"
+                  : gridSnapshotDisplayable
+                    ? "The saved grid response has no wind-share value; current grid conditions are unconfirmed"
+                    : "EirGrid data unavailable; current wind share cannot be assessed"}</small>
           <div className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
           <b>Open the grid now →</b>
         </button>
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
-          <strong>{snapshot.summary.runningTrains}</strong>
-          <small>trains currently reporting a position across Ireland</small>
+          <strong>{isConnectingWithoutSnapshot ? "…" : railNotableCurrent || trainsCached ? snapshot.summary.runningTrains : "—"}</strong>
+          <small>{isConnectingWithoutSnapshot ? "Connecting to Iarnród Éireann positions" : railNotableCurrent ? "trains currently reporting a position across Ireland" : trainsCached ? "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
           <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
         <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
-          <strong>{snapshot.summary.riverStations}</strong>
-          <small>fresh OPW gauges distilled into a readable view across Ireland</small>
+          <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? snapshot.summary.riverStations : "—"}</strong>
+          <small>{isConnectingWithoutSnapshot ? "Connecting to OPW river gauges" : riversLive && !riverDataStale ? "fresh OPW gauges distilled into a readable view across Ireland" : riversCached ? "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? "gauges supplied by the labelled fallback source" : "river readings unavailable; current levels cannot be assessed"}</small>
           <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
         </button>
@@ -2866,9 +3127,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span><i className="temperature" />Average temperature</span>
           <span><i className="rain" />Observed rain</span>
         </div>
-        <div className="timeline-chart" role="group" aria-label="Hourly average temperature and observed rainfall across reporting Met Éireann stations">
+        {(snapshot.sourceStatus === "stale" || serviceDisplayState === "offline") && snapshot.timeline.length > 0 && (
+          <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
+        )}
+        <div className="timeline-chart" role="group" aria-label={`${snapshot.sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature and observed rainfall across reporting Met Éireann stations`}>
           {snapshot.timeline.length === 0 && (
-            <p className="timeline-empty">The day is just beginning. Hourly observations will gather here as stations report.</p>
+            <p className="timeline-empty">{isConnectingWithoutSnapshot
+              ? "Connecting to hourly weather observations…"
+              : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"
+                ? "The current provider response contains no hourly observations yet."
+                : snapshot.sourceStatus === "stale"
+                  ? "No saved hourly observations remain within the retention window."
+                  : "Hourly weather observations are unavailable."}</p>
           )}
           {snapshot.timeline.map((point) => {
             const height = point.temperature === null ? 4 : Math.max(10, Math.min(96, (point.temperature + 4) * 3.2));

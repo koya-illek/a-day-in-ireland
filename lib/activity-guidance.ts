@@ -107,8 +107,9 @@ const warningAppliesToPlace = (warning: WeatherWarning, place: GuidancePlace) =>
   return isIsland(place) || warningScope(warning, place) === "place";
 };
 
-const activeWarnings = (snapshot: LiveSnapshot, now: number) => snapshot.warnings
-  .filter((warning) => warningTiming(warning, now) === "active");
+const activeWarnings = (snapshot: LiveSnapshot, now: number) => snapshot.contextStatus.warnings === "live"
+  ? snapshot.warnings.filter((warning) => warningTiming(warning, now) === "active")
+  : [];
 
 const activeRelevantWarnings = (snapshot: LiveSnapshot, now: number, place: GuidancePlace) =>
   activeWarnings(snapshot, now)
@@ -133,9 +134,10 @@ const warningStatus = (warnings: WeatherWarning[], place: GuidancePlace): Activi
 };
 
 function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePlace): ActivityGuidance {
-  const allStations = snapshot.sourceStatus === "fallback" ? [] : snapshot.stations.filter((station) =>
+  const weatherUsable = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
+  const allStations = weatherUsable ? snapshot.stations.filter((station) =>
     station.fresh && recent(station.observedAt, now, 3 * 60 * 60 * 1000)
-  );
+  ) : [];
   const stations = nearby(allStations, place, WEATHER_NEARBY_RADIUS_KM);
   const temperatures = stations.flatMap((station) => station.temperature === null ? [] : [station.temperature]);
   const rainfall = stations.flatMap((station) => station.rainfall === null ? [] : [station.rainfall]);
@@ -147,7 +149,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
       "Outdoor walk",
       place.name,
       `No recent weather observation with a usable temperature, rainfall, or wind value is available ${location}.`,
-      snapshot.contextStatus.warnings === "unavailable"
+      snapshot.contextStatus.warnings !== "live"
         ? "The Met Éireann notice feed is unavailable, and local observations cannot support a fuller context."
         : "The walk card reports observations only; it cannot assess conditions without a nearby usable record."
     );
@@ -180,7 +182,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
     unknownWarnings.length
       ? `${unknownWarnings.length} active official notice${unknownWarnings.length === 1 ? " is" : "s are"} displayed separately; its category does not change this observation state.`
       : null,
-    snapshot.contextStatus.warnings === "unavailable"
+    snapshot.contextStatus.warnings !== "live"
       ? "The Met Éireann notice feed is unavailable, so official notices cannot be assessed here."
       : null,
     highestAqi?.source === "modelled" ? `The strongest air-quality value ${aqiLocation} is modelled rather than measured.` : null,
@@ -197,7 +199,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
     caveat: caveats.join(" "),
     status: relevantWarnings.length
       ? warningStatus(relevantWarnings, place)
-      : snapshot.contextStatus.warnings === "unavailable" ? "limited-context" : "live-observations"
+      : snapshot.contextStatus.warnings !== "live" ? "limited-context" : "live-observations"
   };
 }
 
@@ -210,12 +212,12 @@ function describeCoast(snapshot: LiveSnapshot, now: number, place: GuidancePlace
     ? nearby(snapshot.tides.filter((tide) => recent(tide.observedAt, now, MARINE_MAX_AGE_MS)), place, COAST_NEARBY_RADIUS_KM)
       .sort((a, b) => `${a.name}\u0000${a.id}`.localeCompare(`${b.name}\u0000${b.id}`))
     : [];
-  const alerts = snapshot.contextStatus.bathing === "unavailable"
-    ? []
-    : nearby(snapshot.bathingAlerts.filter((alert) => {
+  const alerts = snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback"
+    ? nearby(snapshot.bathingAlerts.filter((alert) => {
       const startedAt = validDate(alert.startedAt);
       return startedAt === null || startedAt <= now;
-    }), place, COAST_NEARBY_RADIUS_KM);
+    }), place, COAST_NEARBY_RADIUS_KM)
+    : [];
   const relevantWarnings = activeRelevantWarnings(snapshot, now, place);
   if (!marine.length && !tides.length && !alerts.length && !relevantWarnings.length) {
     return unavailable(
@@ -225,7 +227,7 @@ function describeCoast(snapshot: LiveSnapshot, now: number, place: GuidancePlace
       isIsland(place)
         ? "No recent marine, tide, or bathing-alert record is available for a coastal view."
         : `No recent marine, tide, or bathing-alert record is available near ${place.name}.`,
-      snapshot.contextStatus.bathing === "unavailable"
+      snapshot.contextStatus.bathing !== "live" && snapshot.contextStatus.bathing !== "fallback"
         ? "The bathing-alert feed is unavailable, so current restrictions cannot be assessed."
         : "The coast card reports measurements at named locations; it does not fill gaps by assuming the whole coast is alike."
     );
@@ -250,7 +252,7 @@ function describeCoast(snapshot: LiveSnapshot, now: number, place: GuidancePlace
     relevantWarnings.length
       ? `${relevantWarnings.length} active activity-relevant weather notice${relevantWarnings.length === 1 ? "" : "s"} is represented for this scope.`
       : null,
-    snapshot.contextStatus.bathing === "unavailable"
+    snapshot.contextStatus.bathing !== "live" && snapshot.contextStatus.bathing !== "fallback"
       ? "The bathing-alert feed is unavailable, so current restrictions cannot be assessed."
       : snapshot.contextStatus.bathing === "live" && !alerts.length
         ? "No current bathing-water alert is represented for the selected scope."
@@ -267,15 +269,17 @@ function describeCoast(snapshot: LiveSnapshot, now: number, place: GuidancePlace
       ? "localized-notice"
       : relevantWarnings.length
         ? warningStatus(relevantWarnings, place)
-        : snapshot.contextStatus.bathing === "unavailable"
+        : snapshot.contextStatus.bathing !== "live" && snapshot.contextStatus.bathing !== "fallback"
           ? "limited-context"
           : "live-observations"
   };
 }
 
 function describeStargazing(snapshot: LiveSnapshot, now: number, place: GuidancePlace): ActivityGuidance {
-  const aurora = snapshot.aurora;
-  const passes = snapshot.contextStatus.iss === "unavailable" || !snapshot.iss
+  const aurora = snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback"
+    ? snapshot.aurora
+    : null;
+  const passes = (snapshot.contextStatus.iss !== "live" && snapshot.contextStatus.iss !== "fallback") || !snapshot.iss
     ? []
     : snapshot.iss.passes
       .filter((pass) => {
@@ -290,7 +294,7 @@ function describeStargazing(snapshot: LiveSnapshot, now: number, place: Guidance
       "Stargazing",
       place.name,
       "No aurora signal or upcoming visible ISS pass is available in the supplied snapshot.",
-      snapshot.contextStatus.iss === "unavailable"
+      snapshot.contextStatus.iss !== "live" && snapshot.contextStatus.iss !== "fallback"
         ? "ISS data is unavailable, and no aurora signal is present. Cloud, darkness, and light-pollution context is also not supplied."
         : "Cloud, darkness, and light-pollution conditions are not supplied."
     );
@@ -320,9 +324,9 @@ function describeStargazing(snapshot: LiveSnapshot, now: number, place: Guidance
 }
 
 function describeTravel(snapshot: LiveSnapshot, now: number, place: GuidancePlace): ActivityGuidance {
-  const trains = snapshot.sourceProvenance?.trains.status === "unavailable"
-    ? []
-    : snapshot.trains.filter((train) => recent(train.observedAt, now, MOVEMENT_MAX_AGE_MS));
+  const trains = snapshot.sourceProvenance?.trains.status === "live"
+    ? snapshot.trains.filter((train) => recent(train.observedAt, now, MOVEMENT_MAX_AGE_MS))
+    : [];
   const transit = snapshot.transitStatus === "live"
     ? snapshot.transit.filter((vehicle) => recent(vehicle.observedAt, now, MOVEMENT_MAX_AGE_MS))
     : [];
