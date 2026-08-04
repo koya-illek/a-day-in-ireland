@@ -955,7 +955,33 @@ test("shared view state round-trips constrained map pan coordinates", async () =
     layers: ["weather", "transit"],
     zoom: 2,
     panX: -320,
-    panY: -180
+    panY: -180,
+    at: null
   });
   assert.equal(new URL(url).searchParams.has("ignored"), false);
+});
+
+test("shared view state round-trips only explicit RFC3339 history instants", async () => {
+  const source = await readFile(new URL("../lib/view-state.ts", import.meta.url), "utf8");
+  const output = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
+  }).outputText;
+  const viewState = await import(`data:text/javascript,${encodeURIComponent(output)}`);
+  const historicalUrl = viewState.serializeViewState("https://day.illek.ie/?at=discard-me", {
+    placeId: "island",
+    view: "water",
+    layers: [],
+    at: "2026-08-04T18:45:00+01:00"
+  });
+  const parsed = viewState.parseViewState(new URL(historicalUrl).search, ["island"]);
+
+  assert.equal(parsed.at, "2026-08-04T17:45:00.000Z");
+  assert.equal(new URL(historicalUrl).searchParams.get("at"), "2026-08-04T17:45:00.000Z");
+  assert.equal(viewState.parseViewState("?at=2026-08-04T17:45", ["island"]).at, null);
+  assert.equal(new URL(viewState.serializeViewState(historicalUrl, {
+    placeId: "island",
+    view: "weather",
+    layers: [],
+    at: "not-a-date"
+  })).searchParams.has("at"), false);
 });

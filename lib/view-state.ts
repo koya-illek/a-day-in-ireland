@@ -34,6 +34,7 @@ export type ParsedViewState = {
   zoom: number | null;
   panX: number | null;
   panY: number | null;
+  at: string | null;
 };
 
 export type SerializableViewState = {
@@ -43,6 +44,7 @@ export type SerializableViewState = {
   zoom?: number;
   panX?: number;
   panY?: number;
+  at?: string | null;
 };
 
 const isPreset = (value: string | null): value is PresetId =>
@@ -50,6 +52,17 @@ const isPreset = (value: string | null): value is PresetId =>
 
 const validLayer = (value: string): value is ShareableLayer =>
   LAYER_ORDER.includes(value as ShareableLayer);
+
+// Keep URL parsing self-contained: this module is also exercised as a small,
+// standalone share-state utility outside the application bundle.
+const canonicalHistoryAt = (value: unknown): string | null => {
+  if (typeof value !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value.trim())) {
+    return null;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+};
 
 export function orderedLayers(layers: Iterable<string>): ShareableLayer[] {
   const selected = new Set(layers);
@@ -82,8 +95,9 @@ export function parseViewState(
   const panY = zoom !== null && zoom > 1 && Number.isFinite(requestedPanY)
     ? Math.min(0, Math.max(900 * (1 - zoom), requestedPanY))
     : null;
+  const at = canonicalHistoryAt(params.get("at"));
 
-  return { placeId, view, layers, zoom, panX, panY };
+  return { placeId, view, layers, zoom, panX, panY, at };
 }
 
 export function serializeViewState(
@@ -96,8 +110,9 @@ export function serializeViewState(
   const params = new URLSearchParams();
   const view = isPreset(state.view) ? state.view : "weather";
 
-  // Only these view controls are shareable. In particular, never carry an
-  // existing query string containing observations, timestamps, or coordinates.
+  // Only these explicit view controls are shareable. Never carry arbitrary
+  // observations or coordinates from the existing query string. `at` is the
+  // one explicit timestamp supported by the historical share format.
   params.set("place", state.placeId || DEFAULT_PLACE_ID);
   params.set("view", view);
   if (view === "custom") params.set("layers", orderedLayers(state.layers).join(","));
@@ -106,6 +121,8 @@ export function serializeViewState(
     if (state.panX !== undefined && Number.isFinite(state.panX)) params.set("x", state.panX.toFixed(1));
     if (state.panY !== undefined && Number.isFinite(state.panY)) params.set("y", state.panY.toFixed(1));
   }
+  const at = canonicalHistoryAt(state.at);
+  if (at) params.set("at", at);
 
   url.search = params.toString();
   url.hash = "";
