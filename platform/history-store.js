@@ -426,11 +426,11 @@ export const summarizeDailyRepresentatives = (payloads) => {
 };
 
 const uniqueGaps = (gaps) => [...new Map(gaps.map((gap) => [
-  `${gap.source}\u0000${gap.scope}\u0000${gap.reason}`,
+  `${gap.source}\u0000${gap.scope}\u0000${gap.reason}\u0000${gap.detail}`,
   gap
 ])).values()].sort((first, second) =>
-  `${first.source}\u0000${first.scope}\u0000${first.reason}`.localeCompare(
-    `${second.source}\u0000${second.scope}\u0000${second.reason}`
+  `${first.source}\u0000${first.scope}\u0000${first.reason}\u0000${first.detail}`.localeCompare(
+    `${second.source}\u0000${second.scope}\u0000${second.reason}\u0000${second.detail}`
   )
 );
 

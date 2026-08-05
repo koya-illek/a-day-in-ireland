@@ -161,6 +161,45 @@ test("tide auxiliary feed failures remain explicit partial gaps", async () => {
   assert.equal(result.gaps.length, 2);
   assert.ok(result.gaps.every((item) => item.reason === "upstream-http-503"));
   assert.match(result.gaps.map((item) => item.detail).join(" "), /surge.*high\/low/i);
+
+  const payload = {
+    snapshot: { generatedAt: new Date(now).toISOString(), tides: result.envelope.data },
+    movementSummary: { rail: null, transit: null },
+    gaps: result.gaps
+  };
+  const encoded = await gzipJson(payload);
+  const rawRows = [{
+    resolution_minutes: 15,
+    bucket_start_ms: now,
+    period_end_ms: now + 15 * 60_000,
+    representative_at_ms: now,
+    payload: encoded.compressed,
+    source_status_json: JSON.stringify({ tides: { status: "partial" } }),
+    gaps_json: JSON.stringify(result.gaps)
+  }];
+  const db = {
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async all() { return { results: rawRows }; },
+        async run() {
+          assert.match(sql, /INSERT INTO history_snapshots/);
+          return { success: true };
+        }
+      };
+    }
+  };
+  const hourly = await rollupPeriod(db, {
+    fromResolutionMinutes: 15,
+    resolutionMinutes: 60,
+    startMs: now,
+    endMs: now + 60 * 60_000,
+    expectedSamples: 4,
+    sourceKeys: ["tides"],
+    emptyPayload: () => ({})
+  });
+  const retained = await gunzipJson(hourly.payload);
+  assert.equal(retained.gaps.filter((item) => item.source === "tides").length, 2);
 });
 
 test("bathing alerts without authoritative coordinates are omitted and gapped", async () => {
