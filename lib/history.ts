@@ -2,8 +2,8 @@ import type { LiveSnapshot } from "./types";
 
 export type HistoryGap = {
   source: string;
-  scope: "entire-source" | "positions" | "imagery";
-  reason: "provider-unavailable" | "not-collected" | "not-retained" | "outside-retention";
+  scope: string;
+  reason: string;
   detail: string;
 };
 
@@ -54,6 +54,8 @@ export type HistoryEnvelope = HistoryRange & {
   schemaVersion: number;
   requestedAt: string;
   resolvedAt: string | null;
+  periodStartAt: string | null;
+  periodEndAt: string | null;
   previousAt: string | null;
   nextAt: string | null;
   snapshot: LiveSnapshot | null;
@@ -138,10 +140,8 @@ const normalizeRange = (value: unknown): HistoryRange => {
 const normalizeGap = (value: unknown): HistoryGap | null => {
   if (!value || typeof value !== "object") return null;
   const gap = value as Record<string, unknown>;
-  const scope = gap.scope === "positions" || gap.scope === "imagery" ? gap.scope : "entire-source";
-  const reason = ["provider-unavailable", "not-collected", "not-retained", "outside-retention"].includes(String(gap.reason))
-    ? gap.reason as HistoryGap["reason"]
-    : "not-collected";
+  const scope = typeof gap.scope === "string" && gap.scope.trim() ? gap.scope.trim() : "entire-source";
+  const reason = typeof gap.reason === "string" && gap.reason.trim() ? gap.reason.trim() : "not-collected";
   const source = String(gap.source ?? "Unknown source").trim() || "Unknown source";
   const detail = String(gap.detail ?? `${source} is unavailable for this stored snapshot.`).trim();
   return { source, scope, reason, detail };
@@ -222,6 +222,8 @@ export function normalizeHistoryEnvelope(value: unknown, fallbackRequestedAt: st
   const requestedAt = validIso(record.requestedAt) ?? canonicalHistoryAt(fallbackRequestedAt);
   if (!requestedAt) throw new Error("History response has no valid requested time");
   const resolvedAt = validIso(record.resolvedAt ?? record.capturedAt ?? record.snapshotAt);
+  const periodStartAt = validIso(record.periodStartAt) ?? resolvedAt;
+  const periodEndAt = validIso(record.periodEndAt);
   const movement = record.movementSummary && typeof record.movementSummary === "object"
     ? record.movementSummary as Record<string, unknown>
     : record.summaries && typeof record.summaries === "object"
@@ -240,6 +242,8 @@ export function normalizeHistoryEnvelope(value: unknown, fallbackRequestedAt: st
     schemaVersion: finiteNonNegative(record.schemaVersion) ?? 1,
     requestedAt,
     resolvedAt,
+    periodStartAt,
+    periodEndAt,
     previousAt: validIso(record.previousAt),
     nextAt: validIso(record.nextAt),
     snapshot,

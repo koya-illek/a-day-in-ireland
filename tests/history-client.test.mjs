@@ -49,6 +49,8 @@ test("history range and envelope preserve resolution, nullable movement, and pro
     schemaVersion: 1,
     requestedAt: "2026-07-01T12:00:00Z",
     resolvedAt: "2026-07-01T00:00:00Z",
+    periodStartAt: "2026-07-01T00:00:00Z",
+    periodEndAt: "2026-07-02T00:00:00Z",
     availableFrom: "2026-07-01T00:00:00Z",
     availableTo: "2026-08-04T23:45:00Z",
     resolutionMinutes: 1440,
@@ -70,11 +72,25 @@ test("history range and envelope preserve resolution, nullable movement, and pro
         scope: "imagery",
         reason: "not-collected",
         detail: "Satellite pixels were not archived."
+      },
+      {
+        source: "history",
+        scope: "collector",
+        reason: "collector-gap",
+        detail: "One scheduled capture was missing."
+      },
+      {
+        source: "marine",
+        scope: "history-v1",
+        reason: "partial-provider-coverage",
+        detail: "Only offshore weather buoys were retained."
       }
     ]
   }, "2026-07-01T12:00:00Z");
 
   assert.equal(envelope.resolvedAt, "2026-07-01T00:00:00.000Z");
+  assert.equal(envelope.periodStartAt, "2026-07-01T00:00:00.000Z");
+  assert.equal(envelope.periodEndAt, "2026-07-02T00:00:00.000Z");
   assert.equal(envelope.resolutionMinutes, 1440);
   assert.equal(envelope.snapshotCount, null);
   assert.equal(envelope.snapshot, null);
@@ -82,6 +98,10 @@ test("history range and envelope preserve resolution, nullable movement, and pro
   assert.deepEqual(envelope.movementSummary.transit, { vehicles: 810, routes: 96 });
   assert.equal(envelope.gaps[0].detail, "Rail history is not retained — permission pending.");
   assert.equal(envelope.gaps[1].scope, "imagery");
+  assert.deepEqual(envelope.gaps.slice(2).map(({ scope, reason }) => ({ scope, reason })), [
+    { scope: "collector", reason: "collector-gap" },
+    { scope: "history-v1", reason: "partial-provider-coverage" }
+  ]);
 });
 
 test("history accepts backend transit total/byRoute aliases without inventing missing aggregates", async () => {

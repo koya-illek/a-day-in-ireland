@@ -175,13 +175,48 @@ test("deep-linked Past mode stays separate from live refresh, shares at, compare
   expect(new URL(page.url()).searchParams.has("at")).toBe(false);
 });
 
+test("a failed scrubber point can be retried without moving to another time", async ({ page }) => {
+  await installUnavailableLiveRoutes(page);
+  let selectedCalls = 0;
+  await installHistoryRoutes(page, (route) => {
+    const requestedAt = new URL(route.request().url()).searchParams.get("at");
+    if (requestedAt === selectedAt) {
+      selectedCalls += 1;
+      if (selectedCalls === 1) return route.fulfill({ status: 503, body: "temporary history failure" });
+    }
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(envelope({
+        requestedAt,
+        resolvedAt: requestedAt,
+        snapshot: { ...storedSnapshot(), generatedAt: requestedAt, lastSuccessAt: requestedAt }
+      }))
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Past", exact: true }).click();
+  await expect(page.locator(".history-result.ready")).toContainText("Showing Wed 5 Aug 2026");
+
+  const scrubber = page.locator(".history-scrubber input[type=range]");
+  await scrubber.fill(String(Math.floor(Date.parse(selectedAt) / 1000)));
+  await scrubber.dispatchEvent("pointerup");
+  await expect(page.locator(".history-result.error")).toContainText("temporary history failure");
+
+  await scrubber.dispatchEvent("pointerup");
+  await expect(page.locator(".history-result.ready")).toContainText("Showing Tue 4 Aug 2026");
+  expect(selectedCalls).toBe(2);
+});
+
 test("daily history is summary-only, preserves gaps, and never falls back to live map evidence", async ({ page }) => {
   const liveCalls = await installUnavailableLiveRoutes(page);
   await installHistoryRoutes(page, (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify(envelope({
       requestedAt: "2026-07-01T12:00:00.000Z",
-      resolvedAt: "2026-07-01T00:00:00.000Z",
+      resolvedAt: "2026-06-30T23:00:00.000Z",
+      periodStartAt: "2026-06-30T23:00:00.000Z",
+      periodEndAt: "2026-07-01T23:00:00.000Z",
       resolutionMinutes: 1440,
       snapshot: null,
       movementSummary: { rail: null, transit: null },
@@ -207,6 +242,9 @@ test("daily history is summary-only, preserves gaps, and never falls back to liv
 
   await page.goto(`/?at=${encodeURIComponent("2026-07-01T12:00:00.000Z")}`);
   await expect(page.locator(".history-result")).toContainText("daily summary");
+  await expect(page.locator(".history-result")).toContainText("full retained period");
+  await expect(page.locator(".history-result")).toContainText("not conditions at the selected clock time");
+  await expect(page.locator(".history-result")).not.toContainText("nearest stored record at or before");
   await expect(page.locator(".history-result")).toContainText("do not reconstruct a point-by-point map");
   await expect(page.locator(".history-map-gap")).toContainText("Point map unavailable for this daily summary");
   await expect(page.locator(".history-period-summary")).toContainText("Across 20 retained hourly representatives");

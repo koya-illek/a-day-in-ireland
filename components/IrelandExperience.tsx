@@ -1414,6 +1414,10 @@ function HistoryControls({
     setScrubberSeconds(Math.floor(Date.parse(selectedAt) / 1000));
   }, [selectedAt]);
 
+  useEffect(() => {
+    if (history.status !== "loading") submittedScrubberRef.current = null;
+  }, [history.status, selectedAt]);
+
   const submitWallTime = () => {
     const candidates = irelandWallTimeCandidates(dateInput, timeInput);
     if (!candidates.length) {
@@ -1453,6 +1457,8 @@ function HistoryControls({
   const pickerResolutionMinutes = range?.resolutionMinutes ?? resolutionMinutes;
   const gaps = history.envelope?.gaps ?? [];
   const periodSummary = history.envelope?.periodSummary ?? null;
+  const periodStartAt = history.envelope?.periodStartAt ?? history.envelope?.resolvedAt ?? null;
+  const periodEndAt = history.envelope?.periodEndAt ?? null;
   const comparisonEligible = history.status === "ready" && resolutionMinutes < 1440;
 
   return (
@@ -1507,8 +1513,11 @@ function HistoryControls({
             {history.status === "loading" && <p>Loading the stored snapshot for {history.requestedAt ? formatIrelandHistoryTime(history.requestedAt) : "the selected time"}…</p>}
             {history.status === "error" && <p>Historical conditions could not be loaded. {history.error}</p>}
             {history.status === "gap" && <p>No stored snapshot exists at or before that time within the available resolution. Missing history remains missing.</p>}
-            {history.status === "ready" && history.envelope?.resolvedAt && (
-              <p><b>Showing {formatIrelandHistoryTime(history.envelope.resolvedAt)}</b> · {historyResolutionLabel(history.envelope.resolutionMinutes)}{history.envelope.requestedAt !== history.envelope.resolvedAt ? ` · nearest stored record at or before ${formatIrelandHistoryTime(history.envelope.requestedAt)}` : ""}.{history.envelope.resolutionMinutes >= 1440 ? " Daily summaries do not reconstruct a point-by-point map." : ""}</p>
+            {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes < 1440 && (
+              <p><b>Showing {formatIrelandHistoryTime(history.envelope.resolvedAt)}</b> · {historyResolutionLabel(history.envelope.resolutionMinutes)}{history.envelope.requestedAt !== history.envelope.resolvedAt ? ` · nearest stored record at or before ${formatIrelandHistoryTime(history.envelope.requestedAt)}` : ""}.</p>
+            )}
+            {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes >= 1440 && (
+              <p><b>Showing the retained daily summary for {formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt, false)}</b>{periodEndAt ? ` · full retained period ${formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt)} to ${formatIrelandHistoryTime(periodEndAt)}` : ""}. This is a whole-day summary, not conditions at the selected clock time, and it can include representatives later than that time. Daily summaries do not reconstruct a point-by-point map.</p>
             )}
             {gaps.length > 0 && <p><b>Recorded gaps:</b> {gaps.map((gap) => gap.detail).join(" ")}</p>}
             {history.status === "ready" && <p><Link href="/data">Review sources, retention and attribution</Link>.</p>}
