@@ -114,16 +114,22 @@ export const isDublinHour = (timestamp, hour) => Number(dublinParts(timestamp).h
 const asRows = (result) => result?.results ?? [];
 
 const snapshotSelect = `
-  SELECT resolution_minutes, bucket_start_ms, period_end_ms, collected_at_ms,
+  SELECT resolution_minutes, bucket_start_ms, period_end_ms, representative_at_ms, collected_at_ms,
          schema_version, codec, payload, payload_bytes, uncompressed_bytes,
          content_sha256, expected_samples, collected_samples,
          source_status_json, gaps_json
   FROM history_snapshots`;
 
+const effectiveAtSql = `CASE
+  WHEN resolution_minutes = ${DAY_RESOLUTION_MINUTES} THEN bucket_start_ms
+  ELSE COALESCE(representative_at_ms, bucket_start_ms)
+END`;
+
 export async function encodeSnapshotRow({
   resolutionMinutes,
   bucketStartMs,
   periodEndMs,
+  representativeAtMs = resolutionMinutes === DAY_RESOLUTION_MINUTES ? null : bucketStartMs,
   collectedAtMs,
   payload,
   expectedSamples,
@@ -136,6 +142,7 @@ export async function encodeSnapshotRow({
     resolutionMinutes,
     bucketStartMs,
     periodEndMs,
+    representativeAtMs,
     collectedAtMs,
     codec: HISTORY_CODEC,
     payload: encoded.compressed,
@@ -153,6 +160,7 @@ export async function writeSnapshot(db, row, { replace = false } = {}) {
   const conflict = replace
     ? `ON CONFLICT(resolution_minutes, bucket_start_ms) DO UPDATE SET
          period_end_ms=excluded.period_end_ms,
+         representative_at_ms=excluded.representative_at_ms,
          collected_at_ms=excluded.collected_at_ms,
          codec=excluded.codec,
          payload=excluded.payload,
@@ -166,15 +174,16 @@ export async function writeSnapshot(db, row, { replace = false } = {}) {
     : "ON CONFLICT(resolution_minutes, bucket_start_ms) DO NOTHING";
   return db.prepare(`
     INSERT INTO history_snapshots (
-      resolution_minutes, bucket_start_ms, period_end_ms, collected_at_ms,
+      resolution_minutes, bucket_start_ms, period_end_ms, representative_at_ms, collected_at_ms,
       schema_version, codec, payload, payload_bytes, uncompressed_bytes,
       content_sha256, expected_samples, collected_samples, source_status_json, gaps_json
-    ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ${conflict}
   `).bind(
     row.resolutionMinutes,
     row.bucketStartMs,
     row.periodEndMs,
+    row.representativeAtMs,
     row.collectedAtMs,
     row.codec,
     row.payload,
@@ -191,8 +200,8 @@ export async function writeSnapshot(db, row, { replace = false } = {}) {
 export async function historyRange(db) {
   const rows = asRows(await db.prepare(`
     SELECT resolution_minutes,
-           MIN(bucket_start_ms) AS available_from_ms,
-           MAX(bucket_start_ms) AS available_to_ms,
+           MIN(${effectiveAtSql}) AS available_from_ms,
+           MAX(${effectiveAtSql}) AS available_to_ms,
            COUNT(*) AS snapshot_count
     FROM history_snapshots
     GROUP BY resolution_minutes
@@ -233,18 +242,18 @@ const allowedResolutions = (requestedAt, now) => {
 
 const nearestAtOrBefore = async (db, resolutionMinutes, requestedAt) =>
   db.prepare(`${snapshotSelect}
-    WHERE resolution_minutes = ? AND bucket_start_ms <= ?
-    ORDER BY bucket_start_ms DESC LIMIT 1
+    WHERE resolution_minutes = ? AND ${effectiveAtSql} <= ?
+    ORDER BY ${effectiveAtSql} DESC LIMIT 1
   `).bind(resolutionMinutes, requestedAt).first();
 
 const adjacentTimestamp = async (db, resolutionMinutes, resolvedAt, direction) => {
   const before = direction === "previous";
   const row = await db.prepare(`
-    SELECT bucket_start_ms FROM history_snapshots
-    WHERE resolution_minutes = ? AND bucket_start_ms ${before ? "<" : ">"} ?
-    ORDER BY bucket_start_ms ${before ? "DESC" : "ASC"} LIMIT 1
+    SELECT ${effectiveAtSql} AS effective_at_ms FROM history_snapshots
+    WHERE resolution_minutes = ? AND ${effectiveAtSql} ${before ? "<" : ">"} ?
+    ORDER BY ${effectiveAtSql} ${before ? "DESC" : "ASC"} LIMIT 1
   `).bind(resolutionMinutes, resolvedAt).first();
-  return row ? new Date(Number(row.bucket_start_ms)).toISOString() : null;
+  return row ? new Date(Number(row.effective_at_ms)).toISOString() : null;
 };
 
 export async function resolveHistory(db, requestedAt, now = Date.now()) {
@@ -255,7 +264,10 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
     const candidate = await nearestAtOrBefore(db, resolution, requestedAt);
     resolutionMinutes = resolution;
     if (!candidate) continue;
-    if (requestedAt - Number(candidate.bucket_start_ms) <= HISTORY_TOLERANCE_MS.get(resolution)) {
+    const candidateAt = resolution === DAY_RESOLUTION_MINUTES
+      ? Number(candidate.bucket_start_ms)
+      : Number(candidate.representative_at_ms ?? candidate.bucket_start_ms);
+    if (requestedAt - candidateAt <= HISTORY_TOLERANCE_MS.get(resolution)) {
       selected = candidate;
       break;
     }
@@ -265,6 +277,8 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
       schemaVersion: 1,
       requestedAt: new Date(requestedAt).toISOString(),
       resolvedAt: null,
+      periodStartAt: null,
+      periodEndAt: null,
       availableFrom: range.availableFrom,
       availableTo: range.availableTo,
       previousAt: null,
@@ -281,7 +295,10 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
       }]
     };
   }
-  const resolvedAtMs = Number(selected.bucket_start_ms);
+  const selectedResolution = Number(selected.resolution_minutes);
+  const resolvedAtMs = selectedResolution === DAY_RESOLUTION_MINUTES
+    ? Number(selected.bucket_start_ms)
+    : Number(selected.representative_at_ms ?? selected.bucket_start_ms);
   const stored = await gunzipJson(selected.payload);
   const [previousAt, nextAt] = await Promise.all([
     adjacentTimestamp(db, Number(selected.resolution_minutes), resolvedAtMs, "previous"),
@@ -291,11 +308,13 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
     schemaVersion: 1,
     requestedAt: new Date(requestedAt).toISOString(),
     resolvedAt: new Date(resolvedAtMs).toISOString(),
+    periodStartAt: new Date(Number(selected.bucket_start_ms)).toISOString(),
+    periodEndAt: new Date(Number(selected.period_end_ms)).toISOString(),
     availableFrom: range.availableFrom,
     availableTo: range.availableTo,
     previousAt,
     nextAt,
-    resolutionMinutes: Number(selected.resolution_minutes),
+    resolutionMinutes: selectedResolution,
     snapshot: stored.snapshot ?? null,
     movementSummary: stored.movementSummary ?? { rail: null, transit: null },
     periodSummary: stored.periodSummary ?? null,
@@ -327,13 +346,8 @@ export const mergeSourceStatus = (rows, sourceKeys, expectedSamples) => {
         merged[source].counts.unavailable += 1;
         continue;
       }
-      if (current.counts) {
-        for (const [status, count] of Object.entries(current.counts)) {
-          if (status in merged[source].counts) merged[source].counts[status] += Number(count) || 0;
-        }
-      } else if (current.status in merged[source].counts) {
-        merged[source].counts[current.status] += 1;
-      }
+      const status = current.status in merged[source].counts ? current.status : "unavailable";
+      merged[source].counts[status] += 1;
     }
   }
   const missing = Math.max(0, expectedSamples - rows.length);
@@ -438,6 +452,9 @@ export async function rollupPeriod(db, {
     ? await Promise.all(rows.map((row) => gunzipJson(row.payload)))
     : rows.length ? [await gunzipJson(rows[0].payload)] : [];
   const representative = decoded[0] ?? emptyPayload(startMs);
+  const representativeAtMs = summaryOnly || !rows.length
+    ? null
+    : Number(rows[0].representative_at_ms ?? rows[0].bucket_start_ms);
   const sourceStatus = mergeSourceStatus(rows, sourceKeys, expectedSamples);
   const gaps = uniqueGaps([
     ...rows.flatMap((row) => JSON.parse(row.gaps_json)),
@@ -457,7 +474,9 @@ export async function rollupPeriod(db, {
   const payload = {
     ...representative,
     schemaVersion: 1,
-    capturedAt: new Date(startMs).toISOString(),
+    capturedAt: summaryOnly || representativeAtMs === null
+      ? new Date(startMs).toISOString()
+      : new Date(representativeAtMs).toISOString(),
     resolutionMinutes,
     snapshot: summaryOnly ? null : representative.snapshot ?? null,
     movementSummary: summaryOnly ? { rail: null, transit: null } : representative.movementSummary ?? { rail: null, transit: null },
@@ -468,6 +487,7 @@ export async function rollupPeriod(db, {
     resolutionMinutes,
     bucketStartMs: startMs,
     periodEndMs: endMs,
+    representativeAtMs,
     collectedAtMs: Date.now(),
     payload,
     expectedSamples,

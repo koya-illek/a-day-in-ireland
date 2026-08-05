@@ -18,6 +18,7 @@ import { buildHistoryCapture, handleHistoryRequest } from "../platform/history.j
 import {
   collectBathing,
   collectMarine,
+  collectTides,
   collectWeather,
   summarizeTransit
 } from "../platform/history-sources.js";
@@ -147,6 +148,21 @@ test("marine history is explicitly partial while coastal sources are excluded", 
   assert.ok(result.gaps.some((item) => item.reason === "partial-provider-coverage"));
 });
 
+test("tide auxiliary feed failures remain explicit partial gaps", async () => {
+  const now = Date.parse("2026-08-05T00:00:00.000Z");
+  const result = await collectTides(async (input) => String(input).includes("IrishNationalTideGaugeNetwork")
+    ? Response.json({ table: { rows: [["Dublin", -6.2, 53.3, "2026-08-04T23:30:00.000Z", 1.1]] } })
+    : new Response("unavailable", { status: 503 }), now);
+  assert.equal(result.envelope.status, "partial");
+  assert.equal(result.envelope.data.length, 1);
+  assert.equal(result.envelope.data[0].waterLevel, 1.1);
+  assert.equal(result.envelope.data[0].surge, null);
+  assert.equal(result.envelope.data[0].nextHighAt, null);
+  assert.equal(result.gaps.length, 2);
+  assert.ok(result.gaps.every((item) => item.reason === "upstream-http-503"));
+  assert.match(result.gaps.map((item) => item.detail).join(" "), /surge.*high\/low/i);
+});
+
 test("bathing alerts without authoritative coordinates are omitted and gapped", async () => {
   const now = Date.parse("2026-08-05T00:00:00.000Z");
   const fetcher = async (input) => String(input).includes("/alerts")
@@ -181,6 +197,10 @@ test("default history living loader does not call Irish Rail", async () => {
   assert.deepEqual(result.rivers, [{ id: "river-1" }]);
 });
 
+const effectiveAt = (row) => row.resolution_minutes === 1440
+  ? row.bucket_start_ms
+  : row.representative_at_ms ?? row.bucket_start_ms;
+
 const makeReadDb = (rows) => ({
   prepare(sql) {
     return {
@@ -192,8 +212,8 @@ const makeReadDb = (rows) => ({
           for (const row of rows) grouped.set(row.resolution_minutes, [...(grouped.get(row.resolution_minutes) ?? []), row]);
           return { results: [...grouped].map(([resolution, items]) => ({
             resolution_minutes: resolution,
-            available_from_ms: Math.min(...items.map((item) => item.bucket_start_ms)),
-            available_to_ms: Math.max(...items.map((item) => item.bucket_start_ms)),
+            available_from_ms: Math.min(...items.map(effectiveAt)),
+            available_to_ms: Math.max(...items.map(effectiveAt)),
             snapshot_count: items.length
           })).sort((a, b) => a.resolution_minutes - b.resolution_minutes) };
         }
@@ -202,16 +222,16 @@ const makeReadDb = (rows) => ({
       async first() {
         const [resolution, at] = this.values;
         const candidates = rows.filter((row) => row.resolution_minutes === resolution);
-        if (sql.includes("bucket_start_ms <=")) {
-          return candidates.filter((row) => row.bucket_start_ms <= at).sort((a, b) => b.bucket_start_ms - a.bucket_start_ms)[0] ?? null;
+        if (sql.includes("<= ?")) {
+          return candidates.filter((row) => effectiveAt(row) <= at).sort((a, b) => effectiveAt(b) - effectiveAt(a))[0] ?? null;
         }
-        if (sql.includes("bucket_start_ms <")) {
-          const row = candidates.filter((item) => item.bucket_start_ms < at).sort((a, b) => b.bucket_start_ms - a.bucket_start_ms)[0];
-          return row ? { bucket_start_ms: row.bucket_start_ms } : null;
+        if (sql.includes("< ?")) {
+          const row = candidates.filter((item) => effectiveAt(item) < at).sort((a, b) => effectiveAt(b) - effectiveAt(a))[0];
+          return row ? { effective_at_ms: effectiveAt(row) } : null;
         }
-        if (sql.includes("bucket_start_ms >")) {
-          const row = candidates.filter((item) => item.bucket_start_ms > at).sort((a, b) => a.bucket_start_ms - b.bucket_start_ms)[0];
-          return row ? { bucket_start_ms: row.bucket_start_ms } : null;
+        if (sql.includes("> ?")) {
+          const row = candidates.filter((item) => effectiveAt(item) > at).sort((a, b) => effectiveAt(a) - effectiveAt(b))[0];
+          return row ? { effective_at_ms: effectiveAt(row) } : null;
         }
         throw new Error(`Unexpected first query: ${sql}`);
       }
@@ -247,6 +267,84 @@ test("nearest history lookup is strictly at-or-before and exposes navigation", a
   assert.equal(result.nextAt, new Date(base + 15 * 60_000).toISOString());
 });
 
+test("hourly rollups preserve their actual representative time and never return future evidence", async () => {
+  const hourStart = Date.parse("2026-06-01T10:00:00.000Z");
+  const representativeAt = hourStart + 45 * 60_000;
+  const encoded = await gzipJson({
+    snapshot: { generatedAt: new Date(representativeAt).toISOString(), label: "10:45 observation" },
+    movementSummary: { rail: null, transit: null },
+    gaps: []
+  });
+  const rawRows = [{
+    resolution_minutes: 15,
+    bucket_start_ms: representativeAt,
+    period_end_ms: representativeAt + 15 * 60_000,
+    representative_at_ms: representativeAt,
+    collected_at_ms: representativeAt,
+    schema_version: 1,
+    codec: "gzip-json-v1",
+    payload: encoded.compressed,
+    payload_bytes: encoded.compressed.byteLength,
+    uncompressed_bytes: encoded.uncompressedBytes,
+    content_sha256: "raw-hash",
+    expected_samples: 1,
+    collected_samples: 1,
+    source_status_json: JSON.stringify({ weather: { status: "live" } }),
+    gaps_json: "[]"
+  }];
+  const rollupDb = {
+    prepare(sql) {
+      return {
+        bind() { return this; },
+        async all() {
+          assert.match(sql, /FROM history_snapshots/);
+          return { results: rawRows };
+        },
+        async run() {
+          assert.match(sql, /INSERT INTO history_snapshots/);
+          return { success: true };
+        }
+      };
+    }
+  };
+  const row = await rollupPeriod(rollupDb, {
+    fromResolutionMinutes: 15,
+    resolutionMinutes: 60,
+    startMs: hourStart,
+    endMs: hourStart + 60 * 60_000,
+    expectedSamples: 4,
+    sourceKeys: ["weather"],
+    emptyPayload: () => ({})
+  });
+  assert.equal(row.bucketStartMs, hourStart);
+  assert.equal(row.representativeAtMs, representativeAt);
+  const storedRow = {
+    resolution_minutes: 60,
+    bucket_start_ms: row.bucketStartMs,
+    period_end_ms: row.periodEndMs,
+    representative_at_ms: row.representativeAtMs,
+    collected_at_ms: row.collectedAtMs,
+    schema_version: 1,
+    codec: row.codec,
+    payload: row.payload,
+    payload_bytes: row.payloadBytes,
+    uncompressed_bytes: row.uncompressedBytes,
+    content_sha256: row.contentSha256,
+    expected_samples: row.expectedSamples,
+    collected_samples: row.collectedSamples,
+    source_status_json: row.sourceStatusJson,
+    gaps_json: row.gapsJson
+  };
+  const afterRawRetention = hourStart + 31 * 86_400_000;
+  const tooEarly = await resolveHistory(makeReadDb([storedRow]), hourStart + 10 * 60_000, afterRawRetention);
+  assert.equal(tooEarly.resolvedAt, null);
+  const afterRepresentative = await resolveHistory(makeReadDb([storedRow]), hourStart + 50 * 60_000, afterRawRetention);
+  assert.equal(afterRepresentative.resolvedAt, new Date(representativeAt).toISOString());
+  assert.equal(afterRepresentative.periodStartAt, new Date(hourStart).toISOString());
+  assert.equal(afterRepresentative.periodEndAt, new Date(hourStart + 60 * 60_000).toISOString());
+  assert.equal(afterRepresentative.snapshot.generatedAt, new Date(representativeAt).toISOString());
+});
+
 test("history range reports the finest tier at the freshest available instant", async () => {
   const latest = Date.parse("2026-08-05T12:00:00.000Z");
   const range = await historyRange(makeReadDb([
@@ -270,6 +368,22 @@ test("source coverage merging preserves unavailable samples rather than zero-fil
   assert.deepEqual(merged.weather.counts, {
     live: 2, partial: 0, fallback: 0, stale: 0, unavailable: 2, "credential-required": 0
   });
+});
+
+test("daily coverage counts each hourly input once instead of re-summing raw counts", () => {
+  const rows = Array.from({ length: 24 }, () => ({
+    source_status_json: JSON.stringify({
+      weather: {
+        status: "live",
+        expectedSamples: 4,
+        collectedSamples: 4,
+        counts: { live: 4, partial: 0, fallback: 0, stale: 0, unavailable: 0, "credential-required": 0 }
+      }
+    })
+  }));
+  const merged = mergeSourceStatus(rows, ["weather"], 24);
+  assert.equal(merged.weather.status, "live");
+  assert.equal(merged.weather.counts.live, 24);
 });
 
 test("Europe/Dublin daily rollup boundaries preserve DST day lengths", () => {
@@ -378,6 +492,8 @@ test("daily rollups are summary-only and never clone a point-in-time map", async
   };
   const api = await resolveHistory(makeReadDb([storedRow]), start, start + 400 * 86_400_000);
   assert.deepEqual(api.periodSummary, payload.periodSummary);
+  assert.equal(api.periodStartAt, new Date(start).toISOString());
+  assert.equal(api.periodEndAt, new Date(start + 24 * 3_600_000).toISOString());
 });
 
 test("daily representative summaries keep every unobserved metric null", () => {
@@ -439,6 +555,7 @@ test("migration and Wrangler configs enforce aggregate BLOB storage and safe pro
   const local = await readFile(new URL("../wrangler.history.local.toml", import.meta.url), "utf8");
   assert.match(migration, /payload BLOB NOT NULL/);
   assert.match(migration, /codec TEXT NOT NULL/);
+  assert.match(migration, /representative_at_ms INTEGER/);
   assert.doesNotMatch(migration, /history_observations/);
   assert.match(production, /crons = \["\*\/15 \* \* \* \*", "7 \* \* \* \*"\]/);
   assert.doesNotMatch(production, /^\s*\[\[d1_databases\]\]/m);

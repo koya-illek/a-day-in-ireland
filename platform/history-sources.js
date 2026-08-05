@@ -251,16 +251,32 @@ async function collectModelledAir(fetcher, now) {
   }, fetchedAt);
 }
 
-async function collectTides(fetcher, now) {
+export async function collectTides(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
   return collect("tides", async () => {
     const { since, until } = tideQueryWindow(now);
     const base = "https://erddap.marine.ie/erddap/tabledap/";
-    const [levels, surges, predictions] = await Promise.all([
+    const [levelsResult, surgesResult, predictionsResult] = await Promise.allSettled([
       fetchJson(fetcher, `${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, 900),
-      fetchJson(fetcher, `${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, 900).catch(() => ({ table: { rows: [] } })),
-      fetchJson(fetcher, `${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, 3600).catch(() => ({ table: { rows: [] } }))
+      fetchJson(fetcher, `${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, 900),
+      fetchJson(fetcher, `${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, 3600)
     ]);
+    if (levelsResult.status === "rejected") throw levelsResult.reason;
+    const auxiliaryGaps = [
+      ...(surgesResult.status === "rejected" ? [gap(
+        "tides",
+        cleanErrorCode(surgesResult.reason),
+        "Storm-surge comparison data was unavailable at capture time. Tide-gauge levels remain retained."
+      )] : []),
+      ...(predictionsResult.status === "rejected" ? [gap(
+        "tides",
+        cleanErrorCode(predictionsResult.reason),
+        "High/low tide predictions were unavailable at capture time. Tide-gauge levels remain retained."
+      )] : [])
+    ];
+    const levels = levelsResult.value;
+    const surges = surgesResult.status === "fulfilled" ? surgesResult.value : { table: { rows: [] } };
+    const predictions = predictionsResult.status === "fulfilled" ? predictionsResult.value : { table: { rows: [] } };
     const levelRows = levels.table?.rows ?? [];
     const surgeRows = surges.table?.rows ?? [];
     const predictionRows = predictions.table?.rows ?? [];
@@ -286,7 +302,16 @@ async function collectTides(fetcher, now) {
       }];
     }).sort((a, b) => a.id.localeCompare(b.id));
     if (!readings.length) throw new Error("no-fresh-observations");
-    return { envelope: source({ status: "live", data: readings, fetchedAt, latestObservedAt: latestObservedAt(readings) }), gaps: [] };
+    return {
+      envelope: source({
+        status: auxiliaryGaps.length ? "partial" : "live",
+        data: readings,
+        fetchedAt,
+        latestObservedAt: latestObservedAt(readings),
+        errorCode: auxiliaryGaps.length ? "partial-provider-coverage" : null
+      }),
+      gaps: auxiliaryGaps
+    };
   }, fetchedAt);
 }
 

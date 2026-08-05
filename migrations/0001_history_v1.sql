@@ -12,6 +12,7 @@ CREATE TABLE history_snapshots (
   resolution_minutes INTEGER NOT NULL CHECK (resolution_minutes IN (15, 60, 1440)),
   bucket_start_ms INTEGER NOT NULL,
   period_end_ms INTEGER NOT NULL,
+  representative_at_ms INTEGER,
   collected_at_ms INTEGER NOT NULL,
   schema_version INTEGER NOT NULL CHECK (schema_version = 1),
   codec TEXT NOT NULL CHECK (codec = 'gzip-json-v1'),
@@ -24,7 +25,9 @@ CREATE TABLE history_snapshots (
   source_status_json TEXT NOT NULL CHECK (json_valid(source_status_json)),
   gaps_json TEXT NOT NULL CHECK (json_valid(gaps_json)),
   PRIMARY KEY (resolution_minutes, bucket_start_ms),
-  CHECK (period_end_ms > bucket_start_ms)
+  CHECK (period_end_ms > bucket_start_ms),
+  CHECK (representative_at_ms IS NULL OR
+    (representative_at_ms >= bucket_start_ms AND representative_at_ms < period_end_ms))
 ) WITHOUT ROWID;
 
 CREATE INDEX history_snapshots_time
