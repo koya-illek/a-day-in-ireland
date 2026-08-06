@@ -74,7 +74,8 @@ const parseDublinWallTime = (
   day: number,
   hour: number,
   minute: number,
-  second: number
+  second: number,
+  notAfter: number | null = null
 ) => {
   if (![year, month, day, hour, minute, second].every(Number.isInteger)) return null;
   if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null;
@@ -102,10 +103,13 @@ const parseDublinWallTime = (
         parts.hour === hour && parts.minute === minute && parts.second === second;
     })
     .sort((first, secondValue) => first - secondValue);
-  return candidates.length ? new Date(candidates[0]).toISOString() : null;
+  const selected = Number.isFinite(notAfter)
+    ? candidates.filter((candidate) => candidate <= notAfter!).at(-1)
+    : candidates[0];
+  return selected === undefined ? null : new Date(selected).toISOString();
 };
 
-export function parseIrelandLocalTimestamp(date: string, time: string): string | null {
+export function parseIrelandLocalTimestamp(date: string, time: string, notAfter: number | null = null): string | null {
   const dateMatch = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(date ?? "").trim());
   const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(time ?? "").trim());
   if (!dateMatch || !timeMatch) return null;
@@ -115,7 +119,8 @@ export function parseIrelandLocalTimestamp(date: string, time: string): string |
     Number(dateMatch[1]),
     Number(timeMatch[1]),
     Number(timeMatch[2]),
-    Number(timeMatch[3] ?? "0")
+    Number(timeMatch[3] ?? "0"),
+    notAfter
   );
 }
 
@@ -124,13 +129,13 @@ const EIRGRID_MONTHS: Record<string, number> = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
 };
 
-export function parseEirGridLocalTimestamp(value: string): string | null {
+export function parseEirGridLocalTimestamp(value: string, notAfter: number | null = null): string | null {
   const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(value ?? "").trim());
   if (!match) return null;
   const monthName = match[2][0].toUpperCase() + match[2].slice(1).toLowerCase();
   const month = EIRGRID_MONTHS[monthName];
   return month
-    ? parseDublinWallTime(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]))
+    ? parseDublinWallTime(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]), notAfter)
     : null;
 }
 

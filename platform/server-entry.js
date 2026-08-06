@@ -1,5 +1,6 @@
 import {
   RIVER_ENDPOINT,
+  buildEirGridReading,
   latestEirGridValue,
   latestObservedAt,
   makeRiverProvenance,
@@ -7,8 +8,12 @@ import {
   normalizeBathingAlerts,
   normalizeOfficialWeatherWarnings,
   normalizeProviderTimestamp,
-  parseRiverGeoJson
+  parseRiverGeoJson,
+  readBoundedJsonResponse,
+  readBoundedTextResponse
 } from "./river-source.js";
+
+export const COORDINATOR_RAW_BODY_LIMIT = 900_000;
 
 const json = (body, status = 200, cacheSeconds = 60, staleSeconds = 0) =>
   new Response(JSON.stringify(body), {
@@ -37,7 +42,7 @@ export const fetchTrains = async () => {
     { cf: { cacheEverything: true, cacheTtl: 60 } }
   );
   if (!response.ok) throw new Error(`Irish Rail returned ${response.status}`);
-  const xml = await response.text();
+  const xml = await readBoundedTextResponse(response, "irish-rail", COORDINATOR_RAW_BODY_LIMIT);
   const observedAt = new Date().toISOString();
   return [...xml.matchAll(/<objTrainPositions>([\s\S]*?)<\/objTrainPositions>/g)]
     .map((match) => {
@@ -92,7 +97,7 @@ const fetchRiversThroughBrowser = async (env) => {
     rejectResourceTypes: ["image", "stylesheet", "font", "media"]
   });
   if (!response.ok) throw new Error(`Browser Run returned ${response.status}`);
-  const rendered = await response.text();
+  const rendered = await readBoundedTextResponse(response, "opw-browser", COORDINATOR_RAW_BODY_LIMIT);
   const pre = /<pre[^>]*>([\s\S]*?)<\/pre>/i.exec(rendered)?.[1];
   const decoded = decodeHtml(pre ?? rendered);
   const normalized = decoded.startsWith("{\\\"") ? decoded.replaceAll("\\\"", "\"") : decoded;
@@ -103,58 +108,69 @@ const fetchRiversThroughBrowser = async (env) => {
   }
 };
 
-export const fetchRiversResult = async (env) => {
+export const acquireRiverRaw = async (env, fetcher = fetch) => {
   const fetchedAt = new Date().toISOString();
-  const response = await fetch(RIVER_ENDPOINT, {
+  const response = await fetcher(RIVER_ENDPOINT, {
     headers: {
-      "accept": "application/json",
-      "referer": "https://waterlevel.ie/",
+      "accept": "application/json", "referer": "https://waterlevel.ie/",
       "user-agent": "A-Day-in-Ireland/2.0 (+https://day.illek.ie)"
     }
   });
-  let body;
-  let fallback = null;
-  let status = "live";
-  if (!response.ok) {
-    const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 240);
-    if (env?.EDGE_RUNTIME === "cloudflare") {
-      try {
-        body = await fetchRiversThroughBrowser(env);
-        fallback = "Cloudflare Browser Run";
-      } catch (browserError) {
-        throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`);
-      }
-    }
-    if (!body) {
-      const bridge = await fetch("https://a-day-in-ireland.koya-illek.chatgpt.site/api/living?source=opw-bridge", {
-        cf: { cacheEverything: true, cacheTtl: 900 }
-      });
-      if (bridge.ok) {
-        const bridged = await bridge.json();
-        if (Array.isArray(bridged.rivers) && bridged.rivers.length) {
-          const rivers = normalizeRiverReadings(bridged.rivers);
-          if (rivers.length) {
-            return {
-              rivers,
-              provenance: makeRiverProvenance({
-                status: "fallback",
-                fetchedAt,
-                readings: rivers,
-                fallback: "OpenAI-hosted river bridge"
-              })
-            };
-          }
-        }
-      }
-      throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
-    }
+  if (response.ok) {
+    const bounded = await readBoundedJsonResponse(response, "opw", COORDINATOR_RAW_BODY_LIMIT);
+    const features = Array.isArray(bounded.body?.features) ? bounded.body.features : [];
+    return {
+      ...bounded,
+      body: features.length ? { ...bounded.body, features: features.slice(0, 1200) } : bounded.body,
+      sourceFeatureCount: features.length,
+      truncated: features.length > 1200,
+      fetchedAt, status: features.length > 1200 ? "partial" : "live", fallback: null
+    };
   }
-  body ??= await response.json();
-  const rivers = parseRiverGeoJson(body);
+  let detail;
+  try {
+    detail = (await readBoundedTextResponse(response, "opw-error", 32_000)).replace(/\s+/g, " ").slice(0, 240);
+  } catch (error) {
+    detail = String(error?.message ?? "OPW error response was unreadable");
+  }
+  if (env?.EDGE_RUNTIME === "cloudflare") {
+    try {
+      const body = await fetchRiversThroughBrowser(env);
+      const features = Array.isArray(body?.features) ? body.features : [];
+      return { body: features.length ? { ...body, features: features.slice(0, 1200) } : body,
+        bodyBytes: null, sourceFeatureCount: features.length, truncated: features.length > 1200,
+        fetchedAt, status: features.length > 1200 ? "partial" : "fallback", fallback: "Cloudflare Browser Run" };
+    }
+    catch (browserError) { throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`); }
+  }
+  const bridge = await fetcher("https://a-day-in-ireland.koya-illek.chatgpt.site/api/living?source=opw-bridge", {
+    cf: { cacheEverything: true, cacheTtl: 900 }
+  });
+  if (bridge.ok) {
+    const bounded = await readBoundedJsonResponse(bridge, "opw-bridge", COORDINATOR_RAW_BODY_LIMIT);
+    if (Array.isArray(bounded.body?.rivers)) return {
+      body: { normalizedRivers: bounded.body.rivers.slice(0, 1200) }, bodyBytes: bounded.bodyBytes,
+      sourceFeatureCount: bounded.body.rivers.length, truncated: bounded.body.rivers.length > 1200,
+      fetchedAt, status: bounded.body.rivers.length > 1200 ? "partial" : "fallback", fallback: "OpenAI-hosted river bridge"
+    };
+  }
+  throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
+};
+
+export const normalizeRiverRaw = (raw, captureNow = Date.now()) => {
+  if (Array.isArray(raw?.body?.normalizedRivers)) {
+    return normalizeRiverReadings(raw.body.normalizedRivers, captureNow);
+  }
+  return parseRiverGeoJson(raw?.body, captureNow);
+};
+
+export const fetchRiversResult = async (env, fetcher = fetch, captureNow = Date.now()) => {
+  const raw = await acquireRiverRaw(env, fetcher);
+  const rivers = normalizeRiverRaw(raw, captureNow);
   if (!rivers.length) throw new Error("OPW returned no fresh river gauges");
   return {
     rivers,
-    provenance: makeRiverProvenance({ status, fetchedAt, readings: rivers, fallback })
+    provenance: makeRiverProvenance({ status: raw.status, fetchedAt: raw.fetchedAt, readings: rivers, fallback: raw.fallback })
   };
 };
 
@@ -242,7 +258,7 @@ const fetchCoastalBuoy = async (source) => {
   return { id: source.dataset, name: source.name, kind: "coastal-observatory", ...reading };
 };
 
-const fetchMarine = async () => {
+export const fetchMarine = async () => {
   const results = await Promise.allSettled([
     fetchWeatherBuoys(),
     ...coastalSources.map(fetchCoastalBuoy)
@@ -251,10 +267,13 @@ const fetchMarine = async () => {
   const coastal = results.slice(1).flatMap((result) =>
     result.status === "fulfilled" && result.value ? [result.value] : []
   );
-  if (!results.some((result) => result.status === "fulfilled")) {
-    throw new Error("Marine Institute providers are unavailable");
-  }
-  return [...weather, ...coastal];
+  const readings = [...weather, ...coastal];
+  const completeCoverage = results.every((result) => result.status === "fulfilled") &&
+    weather.length > 0 && coastal.length === coastalSources.length;
+  return {
+    readings,
+    status: readings.length ? completeCoverage ? "live" : "partial" : "unavailable"
+  };
 };
 
 const parseRadarTime = (id) => {
@@ -296,30 +315,40 @@ const fetchRadar = async () => {
   return normalizeRadarFrames(await response.json());
 };
 
-const fetchGridRows = async (chartType, areas) => {
-  const day = new Date().toISOString().slice(0, 10);
+export const EIRGRID_BODY_LIMIT = 256_000;
+
+export const fetchGridRows = async (chartType, areas, fetcher = fetch, now = Date.now()) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const hour = `${day}T${parts.hour}`;
   const url = new URL("https://www.smartgriddashboard.com/api/chart/");
   url.search = new URLSearchParams({
-    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day", dateFrom: day, dateTo: day, areas
+    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day",
+    dateFrom: chartType === "frequency" ? `${hour}:00:00` : day,
+    dateTo: chartType === "frequency" ? `${hour}:59:59` : day, areas
   }).toString();
-  const response = await fetch(url, {
+  const response = await fetcher(url, {
     cf: { cacheEverything: true, cacheTtl: chartType === "frequency" ? 60 : 300 }
   });
   if (!response.ok) throw new Error(`EirGrid ${chartType} returned ${response.status}`);
-  return (await response.json()).Rows ?? [];
+  const bounded = await readBoundedJsonResponse(response, `eirgrid-${chartType}`, EIRGRID_BODY_LIMIT);
+  return bounded.body.Rows ?? [];
 };
 
-const fetchGrid = async () => {
-  const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
-    await Promise.all([
-      fetchGridRows("demand", "demandactual"),
-      fetchGridRows("generation", "generationactual"),
-      fetchGridRows("wind", "windactual"),
-      fetchGridRows("co2", "co2intensity,co2emission"),
-      fetchGridRows("frequency", "frequency"),
-      fetchGridRows("interconnection", "interconnection")
+export const fetchGrid = async (fetcher = fetch, now = Date.now()) => {
+  const settled = await Promise.allSettled([
+      fetchGridRows("demand", "demandactual", fetcher, now),
+      fetchGridRows("generation", "generationactual", fetcher, now),
+      fetchGridRows("wind", "windactual", fetcher, now),
+      fetchGridRows("co2", "co2intensity,co2emission", fetcher, now),
+      fetchGridRows("frequency", "frequency", fetcher, now),
+      fetchGridRows("interconnection", "interconnection", fetcher, now)
     ]);
-  const now = Date.now();
+  const rows = (index) => settled[index].status === "fulfilled" ? settled[index].value : [];
+  const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] = [0, 1, 2, 3, 4, 5].map(rows);
   const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
   const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
   const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
@@ -327,20 +356,13 @@ const fetchGrid = async () => {
   const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
   const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
   const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
-  const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
-    .map((item) => item?.observedAt).filter(Boolean).sort();
-  if (!timestamps.length) return null;
-  return {
-    observedAt: timestamps[0] ?? null,
-    demandMW: demand?.value ?? null,
-    generationMW: generation?.value ?? null,
-    windMW: wind?.value ?? null,
-    windSharePercent: wind && demand && demand.value > 0 ? wind.value / demand.value * 100 : null,
-    carbonIntensity: intensity?.value ?? null,
-    carbonEmissions: emissions?.value ?? null,
-    frequencyHz: frequency?.value ?? null,
-    interconnectorMW: interconnector?.value ?? null
-  };
+  const reading = buildEirGridReading({
+    demand, generation, wind, carbonIntensity: intensity, carbonEmissions: emissions,
+    frequency, interconnection: interconnector
+  });
+  if (!reading) return { reading: null, status: "unavailable" };
+  const metricCount = [demand, generation, wind, intensity, emissions, frequency, interconnector].filter(Boolean).length;
+  return { reading, status: metricCount === 7 ? "live" : "partial" };
 };
 
 const airLocations = [
@@ -353,7 +375,7 @@ const airLocations = [
   ["derry-air", "Derry", 55.00, -7.31]
 ];
 
-const fetchAirQuality = async () => {
+export const fetchAirQuality = async () => {
   const url = new URL("https://air-quality-api.open-meteo.com/v1/air-quality");
   url.search = new URLSearchParams({
     latitude: airLocations.map((item) => item[2]).join(","),
@@ -364,7 +386,7 @@ const fetchAirQuality = async () => {
   const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 1800 } });
   if (!response.ok) throw new Error(`Open-Meteo air quality returned ${response.status}`);
   const bodies = await response.json();
-  return airLocations.flatMap(([id, name, latitude, longitude], index) => {
+  const readings = airLocations.flatMap(([id, name, latitude, longitude], index) => {
     const current = bodies[index]?.current;
     if (!current?.time) return [];
     return [{
@@ -376,6 +398,10 @@ const fetchAirQuality = async () => {
       stationClassification: null
     }];
   });
+  return {
+    readings,
+    status: readings.length === airLocations.length ? "live" : readings.length ? "partial" : "unavailable"
+  };
 };
 
 const webMercatorToLonLat = (x, y) => ({
@@ -415,7 +441,7 @@ const fetchMeasuredAirQuality = async () => {
       { cf: { cacheEverything: true, cacheTtl: 1800 } }
     );
     if (!response.ok) throw new Error(`EEA ${pollutant} returned ${response.status}`);
-    return [field, await response.text()];
+    return [field, await readBoundedTextResponse(response, `eea-${pollutant}`, 512_000)];
   }));
   const responses = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
   if (!responses.length) {
@@ -465,7 +491,10 @@ export const tideQueryWindow = (now = Date.now()) => {
   const bucketMilliseconds = 15 * 60 * 1000;
   const bucket = Math.floor(now / bucketMilliseconds) * bucketMilliseconds;
   return {
-    since: new Date(bucket - 24 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    // The trend algorithm only compares the last 30 minutes. A 45-minute
+    // window preserves a complete pair across a 15-minute bucket boundary
+    // without downloading a full day of gauge levels.
+    since: new Date(bucket - 45 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
     until: new Date(bucket + 36 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z")
   };
 };
@@ -507,18 +536,22 @@ export const classifyTideTrend = (samples) => {
   return "steady";
 };
 
-const fetchTides = async () => {
+export const fetchTides = async () => {
   const { since, until } = tideQueryWindow();
   const base = "https://erddap.marine.ie/erddap/tabledap/";
-  const [levelsResponse, surgeResponse, predictionResponse] = await Promise.all([
+  const [levelsResult, surgeResult, predictionResult] = await Promise.allSettled([
     fetch(`${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
     fetch(`${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
     fetch(`${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, { cf: { cacheEverything: true, cacheTtl: 3600 } })
   ]);
+  if (levelsResult.status === "rejected") throw levelsResult.reason;
+  const levelsResponse = levelsResult.value;
+  const surgeResponse = surgeResult.status === "fulfilled" ? surgeResult.value : null;
+  const predictionResponse = predictionResult.status === "fulfilled" ? predictionResult.value : null;
   if (!levelsResponse.ok) throw new Error(`Tide gauges returned ${levelsResponse.status}`);
   const levelRows = (await levelsResponse.json()).table?.rows ?? [];
-  const surges = surgeResponse.ok ? (await surgeResponse.json()).table?.rows ?? [] : [];
-  const predictions = predictionResponse.ok ? (await predictionResponse.json()).table?.rows ?? [] : [];
+  const surges = surgeResponse?.ok ? (await surgeResponse.json()).table?.rows ?? [] : [];
+  const predictions = predictionResponse?.ok ? (await predictionResponse.json()).table?.rows ?? [] : [];
   const distance = (a, b) => Math.hypot(Number(a[1]) - Number(b[1]), Number(a[2]) - Number(b[2]));
   const now = Date.now();
   const stationRows = new Map();
@@ -527,7 +560,7 @@ const fetchTides = async () => {
     rows.push(row);
     stationRows.set(String(row[0]), rows);
   }
-  return [...stationRows.values()].flatMap((rows) => {
+  const readings = [...stationRows.values()].flatMap((rows) => {
     rows.sort((a, b) => new Date(a[3]) - new Date(b[3]));
     const row = rows.at(-1);
     const observedAt = String(row[3]);
@@ -558,6 +591,12 @@ const fetchTides = async () => {
       nextLowLevel: nextLow ? numeric(nextLow[5]) : null
     }];
   });
+  return {
+    readings,
+    status: readings.length
+      ? surgeResponse?.ok && predictionResponse?.ok ? "live" : "partial"
+      : "unavailable"
+  };
 };
 
 export const irishGridToLonLat = (east, north) => {
@@ -593,19 +632,19 @@ export const irishGridToLonLat = (east, north) => {
   };
 };
 
-const fetchBathingAlerts = async () => {
+export const fetchBathingAlerts = async () => {
   const alertsResponse = await fetch("https://data.epa.ie/bw/api/v1/alerts?per_page=100", {
     cf: { cacheEverything: true, cacheTtl: 900 }
   });
   if (!alertsResponse.ok) throw new Error(`EPA bathing alerts returned ${alertsResponse.status}`);
   const alerts = normalizeBathingAlerts((await alertsResponse.json()).list ?? []);
-  if (!alerts.length) return [];
+  if (!alerts.length) return { alerts: [], status: "live" };
   const locationsResponse = await fetch("https://data.epa.ie/bw/api/v1/locations?per_page=500", {
     cf: { cacheEverything: true, cacheTtl: 86400 }
   });
   if (!locationsResponse.ok) throw new Error(`EPA bathing locations returned ${locationsResponse.status}`);
   const locations = new Map(((await locationsResponse.json()).list ?? []).map((item) => [item.beach_id, item]));
-  return alerts.flatMap((alert) => {
+  const archived = alerts.flatMap((alert) => {
     const location = locations.get(alert.beach_id);
     const east = numeric(location?.easting);
     const north = numeric(location?.northing);
@@ -632,6 +671,10 @@ const fetchBathingAlerts = async () => {
       noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
     }];
   });
+  return {
+    alerts: archived,
+    status: archived.length === alerts.length ? "live" : "partial"
+  };
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -825,14 +868,14 @@ const fetchIssTle = async () => {
     { cf: { cacheEverything: true, cacheTtl: 21600 } }
   );
   if (!response.ok) throw new Error(`CelesTrak returned ${response.status}`);
-  const lines = (await response.text()).trim().split(/\r?\n/);
+  const lines = (await readBoundedTextResponse(response, "celestrak", 32_000)).trim().split(/\r?\n/);
   if (lines.length < 3) throw new Error("CelesTrak returned an invalid ISS element set");
   return { line1: lines.at(-2), line2: lines.at(-1), observedAt: new Date().toISOString() };
 };
 
-export const fetchTransit = async (env) => {
+export const acquireTransitRaw = async (env, fetcher = fetch) => {
   if (!env.NTA_API_KEY) return { vehicles: [], status: "credential-required" };
-  const response = await fetch("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
+  const response = await fetcher("https://api.nationaltransport.ie/gtfsr/v2/Vehicles?format=json", {
     headers: { "x-api-key": env.NTA_API_KEY },
     // NTA permits each token to call the GTFS-R API at most once per 60 seconds.
     cf: {
@@ -842,9 +885,20 @@ export const fetchTransit = async (env) => {
     }
   });
   if (!response.ok) throw new Error(`NTA vehicles returned ${response.status}`);
-  const body = await response.json();
-  const entities = body.entity ?? body.Entity ?? body.entities ?? [];
-  const vehicles = entities.flatMap((entity) => {
+  const bounded = await readBoundedJsonResponse(response, "nta", COORDINATOR_RAW_BODY_LIMIT);
+  const entities = bounded.body.entity ?? bounded.body.Entity ?? bounded.body.entities ?? [];
+  const sourceEntityCount = Array.isArray(entities) ? entities.length : 0;
+  return {
+    entities: Array.isArray(entities) ? entities.slice(0, 1200) : [],
+    status: sourceEntityCount > 1200 ? "partial" : "acquired",
+    sourceEntityCount,
+    truncated: sourceEntityCount > 1200,
+    bodyBytes: bounded.bodyBytes,
+    acquiredAt: Date.now()
+  };
+};
+
+export const normalizeTransitEntities = (entities, now = Date.now()) => (Array.isArray(entities) ? entities : []).flatMap((entity) => {
     const vehicle = entity.vehicle ?? entity.Vehicle ?? entity;
     const position = vehicle.position ?? vehicle.Position;
     const latitude = numeric(position?.latitude ?? position?.Latitude);
@@ -853,10 +907,22 @@ export const fetchTransit = async (env) => {
     const timestamp = numeric(vehicle.timestamp ?? vehicle.Timestamp);
     if (timestamp === null) return [];
     const observedAt = new Date(timestamp * 1000);
-    const age = Date.now() - observedAt.getTime();
+    const age = now - observedAt.getTime();
     if (!Number.isFinite(observedAt.getTime()) || age < 0 || age >= 30 * 60_000) return [];
+    const stableFallbackId = () => {
+      const seed = JSON.stringify([
+        entity.id ?? null, vehicle.trip?.tripId ?? vehicle.trip?.trip_id ?? null,
+        vehicle.trip?.routeId ?? vehicle.trip?.route_id ?? null, timestamp, latitude, longitude
+      ]);
+      let hash = 2166136261;
+      for (let index = 0; index < seed.length; index += 1) {
+        hash ^= seed.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return `nta-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+    };
     return [{
-      id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? crypto.randomUUID()),
+      id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? stableFallbackId()),
       latitude, longitude,
       route: String(vehicle.trip?.routeId ?? vehicle.trip?.route_id ?? ""),
       label: String(vehicle.vehicle?.label ?? vehicle.vehicle?.id ?? "Public transport"),
@@ -866,7 +932,15 @@ export const fetchTransit = async (env) => {
       observedAt: observedAt.toISOString()
     }];
   }).slice(0, 1200);
-  return { vehicles, status: vehicles.length ? "live" : "unavailable" };
+
+export const fetchTransit = async (env, fetcher = fetch, captureNow = Date.now()) => {
+  const raw = await acquireTransitRaw(env, fetcher);
+  if (raw.status === "credential-required") return raw;
+  const vehicles = normalizeTransitEntities(raw.entities, captureNow);
+  if (!vehicles.length) return { vehicles: [], status: "unavailable" };
+  return raw.truncated
+    ? { vehicles, status: "partial", truncated: true, sourceEntityCount: raw.sourceEntityCount }
+    : { vehicles, status: "live" };
 };
 
 const fetchAurora = async () => {
@@ -953,17 +1027,17 @@ const currentContexts = async (env) => {
   })) {
     if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
   }
-  const modelled = modelledAir.status === "fulfilled" ? modelledAir.value : [];
+  const modelled = modelledAir.status === "fulfilled" ? modelledAir.value.readings : [];
   const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
   const contextStatus = {
-    marine: marine.status === "fulfilled" ? "live" : "unavailable",
+    marine: marine.status === "fulfilled" ? marine.value.status : "unavailable",
     radar: radar.status === "fulfilled" && radar.value.length ? "live" : "unavailable",
-    grid: grid.status === "fulfilled" && grid.value ? "live" : "unavailable",
+    grid: grid.status === "fulfilled" ? grid.value.status : "unavailable",
     measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
-    modelledAir: modelledAir.status === "fulfilled" && modelled.length ? "live" : "unavailable",
+    modelledAir: modelledAir.status === "fulfilled" ? modelledAir.value.status : "unavailable",
     aurora: aurora.status === "fulfilled" && aurora.value ? "live" : "unavailable",
-    tides: tides.status === "fulfilled" ? "live" : "unavailable",
-    bathing: bathingAlerts.status === "fulfilled" ? "live" : "unavailable",
+    tides: tides.status === "fulfilled" ? tides.value.status : "unavailable",
+    bathing: bathingAlerts.status === "fulfilled" ? bathingAlerts.value.status : "unavailable",
     satellite: satellite.status === "fulfilled" ? "fallback" : "unavailable",
     earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
     iss: issTle.status === "fulfilled" ? "live" : "unavailable",
@@ -971,20 +1045,20 @@ const currentContexts = async (env) => {
   };
   return json({
     generatedAt: new Date().toISOString(),
-    marine: marine.status === "fulfilled" ? marine.value : [],
+    marine: marine.status === "fulfilled" ? marine.value.readings : [],
     radar: radar.status === "fulfilled" ? radar.value : [],
-    grid: grid.status === "fulfilled" ? grid.value : null,
+    grid: grid.status === "fulfilled" ? grid.value.reading : null,
     airQuality: [...measured, ...modelled],
     aurora: aurora.status === "fulfilled" ? aurora.value : null,
-    tides: tides.status === "fulfilled" ? tides.value : [],
-    bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value : [],
+    tides: tides.status === "fulfilled" ? tides.value.readings : [],
+    bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value.alerts : [],
     warnings: warnings.status === "fulfilled" ? warnings.value : [],
     warningsStatus: warnings.status === "fulfilled" ? "live" : "unavailable",
     satellite: satellite.status === "fulfilled" ? satellite.value : null,
     earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
     issTle: issTle.status === "fulfilled" ? issTle.value : null,
     contextStatus
-  }, 200, Object.values(contextStatus).includes("unavailable") ? 0 : 60, 0);
+  }, 200, Object.values(contextStatus).some((status) => status !== "live" && status !== "fallback") ? 0 : 60, 0);
 };
 
 const transitContext = async (env) => {

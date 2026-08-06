@@ -327,7 +327,7 @@ function describeTravel(snapshot: LiveSnapshot, now: number, place: GuidancePlac
   const trains = snapshot.sourceProvenance?.trains.status === "live"
     ? snapshot.trains.filter((train) => recent(train.observedAt, now, MOVEMENT_MAX_AGE_MS))
     : [];
-  const transit = snapshot.transitStatus === "live"
+  const transit = (snapshot.transitStatus === "live" || snapshot.transitStatus === "partial")
     ? snapshot.transit.filter((vehicle) => recent(vehicle.observedAt, now, MOVEMENT_MAX_AGE_MS))
     : [];
   if (!trains.length && !transit.length) {
@@ -344,7 +344,8 @@ function describeTravel(snapshot: LiveSnapshot, now: number, place: GuidancePlac
 
   const relevantWarnings = activeRelevantWarnings(snapshot, now, place);
   const caveats = [
-    snapshot.transitStatus !== "live" ? "TFI vehicle positions are not live in this snapshot." : null,
+    snapshot.transitStatus === "partial" ? "TFI vehicle positions are only partially available in this snapshot."
+      : snapshot.transitStatus !== "live" ? "TFI vehicle positions are not live in this snapshot." : null,
     snapshot.sourceProvenance?.trains.status !== "live" ? "Irish Rail position coverage is not live in this snapshot." : null,
     relevantWarnings.length
       ? `${relevantWarnings.length} active activity-relevant weather notice${relevantWarnings.length === 1 ? " is" : "s are"} represented for this scope; review the official notice above.`

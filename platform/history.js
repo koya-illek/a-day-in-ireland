@@ -16,12 +16,12 @@ import {
 import {
   HISTORY_SOURCE_KEYS,
   collectScopedSources,
-  summarizeRail,
   summarizeTransit
 } from "./history-sources.js";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
+const COLLECTION_LEASE_MS = 20 * MINUTE_MS;
 
 const responseHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -49,7 +49,9 @@ const statusMetadata = (sources) => Object.fromEntries(HISTORY_SOURCE_KEYS.map((
 
 const usable = (status) => status === "live" || status === "partial" || status === "fallback";
 
-const contextStatus = (sourceStatus) => usable(sourceStatus) ? "live" : sourceStatus === "stale" ? "stale" : "unavailable";
+const contextStatus = (sourceStatus) => [
+  "live", "partial", "fallback", "stale", "unavailable", "credential-required"
+].includes(sourceStatus) ? sourceStatus : "unavailable";
 
 const unavailableProvenance = (provider, endpoint, capturedAt, status = "unavailable") => ({
   provider, endpoint, status, fetchedAt: capturedAt, latestObservedAt: null, fallback: null
@@ -106,49 +108,76 @@ export async function buildHistoryCapture({
   capturedAtMs,
   fetcher = fetch,
   loadLiving,
-  loadTransit
+  loadTransit,
+  scoped: scopedInput
 }) {
   const capturedAt = new Date(capturedAtMs).toISOString();
   const [scoped, living, transit] = await Promise.all([
-    collectScopedSources(fetcher, capturedAtMs),
-    safeBody(loadLiving, {
+    scopedInput ?? collectScopedSources(fetcher, capturedAtMs),
+    safeBody(() => loadLiving(capturedAtMs), {
       trains: [], rivers: [],
       sourceStatus: { trains: "unavailable", rivers: "unavailable" },
       sourceProvenance: {}
     }),
-    safeBody(loadTransit, { transit: [], transitStatus: env.NTA_API_KEY ? "unavailable" : "credential-required" })
+    safeBody(() => loadTransit(capturedAtMs), { transit: [], transitStatus: env.NTA_API_KEY ? "unavailable" : "credential-required" })
   ]);
-  const includeRail = env.HISTORY_INCLUDE_IRISH_RAIL === "true";
-  const railStatus = includeRail ? living.sourceStatus?.trains ?? "unavailable" : "unavailable";
-  const railSummary = summarizeRail(living.trains, railStatus, capturedAt, includeRail);
-  const transitStatus = transit.transitStatus ?? "unavailable";
-  const transitSummary = summarizeTransit(transit.transit, transitStatus, capturedAt);
-  const riverStatus = living.sourceStatus?.rivers ?? "unavailable";
-  const rivers = Array.isArray(living.rivers) ? living.rivers : [];
+  const observedAtOrBeforeCapture = (item) => {
+    const timestamp = Date.parse(item?.observedAt ?? "");
+    return Number.isFinite(timestamp) && timestamp <= capturedAtMs;
+  };
+  const railStatus = "unavailable";
+  const railSummary = null;
+  const transitVehicles = (Array.isArray(transit.transit) ? transit.transit : []).filter(observedAtOrBeforeCapture);
+  const aggregateObservedAt = Date.parse(transit.latestObservedAt ?? "");
+  const suppliedTransitAggregate = transit.aggregate && Number.isFinite(aggregateObservedAt) && aggregateObservedAt <= capturedAtMs
+    ? transit.aggregate
+    : null;
+  const requestedTransitStatus = transit.transitStatus ?? "unavailable";
+  const transitErrorCode = transit.errorCode ?? null;
+  const transitStatus = suppliedTransitAggregate || transitVehicles.length
+    ? requestedTransitStatus
+    : requestedTransitStatus === "credential-required" ? "credential-required" : "unavailable";
+  const transitSummary = suppliedTransitAggregate ?? summarizeTransit(transitVehicles, transitStatus, capturedAt);
+  const rivers = (Array.isArray(living.rivers) ? living.rivers : []).filter(observedAtOrBeforeCapture);
+  const requestedRiverStatus = living.sourceStatus?.rivers ?? "unavailable";
+  const riverStatus = usable(requestedRiverStatus) && rivers.length ? requestedRiverStatus : "unavailable";
+  const boundedProvenance = (provenance, fallback) => ({
+    ...fallback,
+    ...(provenance ?? {}),
+    fetchedAt: (() => {
+      const timestamp = Date.parse(provenance?.fetchedAt ?? "");
+      return Number.isFinite(timestamp) && timestamp <= capturedAtMs
+        ? new Date(timestamp).toISOString()
+        : capturedAt;
+    })(),
+    status: fallback.status,
+    latestObservedAt: fallback.latestObservedAt
+  });
+  const riverLatestObservedAt = rivers.map((river) => river.observedAt).sort().at(-1) ?? null;
   const sources = {
     ...scoped.sources,
     rivers: {
       status: riverStatus,
-      fetchedAt: living.sourceProvenance?.rivers?.fetchedAt ?? capturedAt,
-      latestObservedAt: living.sourceProvenance?.rivers?.latestObservedAt ?? null,
+      fetchedAt: capturedAt,
+      latestObservedAt: riverLatestObservedAt,
       itemCount: rivers.length,
       errorCode: riverStatus === "unavailable" ? "upstream-unavailable" : null,
       data: rivers
     },
     rail: {
       status: railStatus, fetchedAt: capturedAt,
-      latestObservedAt: includeRail ? living.sourceProvenance?.trains?.latestObservedAt ?? null : null,
-      itemCount: railSummary?.total ?? null,
-      errorCode: includeRail ? null : "not-retained",
-      data: railSummary
+      latestObservedAt: null,
+      itemCount: null,
+      errorCode: "not-retained",
+      data: null
     },
     transit: {
       status: transitStatus, fetchedAt: capturedAt,
-      latestObservedAt: Array.isArray(transit.transit)
-        ? transit.transit.map((vehicle) => vehicle.observedAt).filter(Boolean).sort().at(-1) ?? null
-        : null,
+      latestObservedAt: suppliedTransitAggregate
+        ? new Date(aggregateObservedAt).toISOString()
+        : transitVehicles.map((vehicle) => vehicle.observedAt).sort().at(-1) ?? null,
       itemCount: transitSummary?.total ?? null,
-      errorCode: transitStatus === "live" ? null : transitStatus,
+      errorCode: transitStatus === "live" ? null : (transitErrorCode ?? transitStatus),
       data: transitSummary
     }
   };
@@ -160,6 +189,7 @@ export async function buildHistoryCapture({
     sourceStatus: sources.weather?.status ?? "unavailable",
     stations: weather.stations ?? [],
     warnings,
+    warningsStatus: contextStatus(sources.warnings?.status),
     marine: Array.isArray(sources.marine?.data) ? sources.marine.data : [],
     rivers,
     grid: sources.grid?.data ?? null,
@@ -168,10 +198,11 @@ export async function buildHistoryCapture({
     bathingAlerts: Array.isArray(sources.bathing?.data) ? sources.bathing.data : [],
     earthquakes: Array.isArray(sources.earthquakes?.data) ? sources.earthquakes.data : [],
     sourceProvenance: {
-      trains: includeRail
-        ? living.sourceProvenance?.trains ?? unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt, railStatus)
-        : unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
-      rivers: living.sourceProvenance?.rivers ?? unavailableProvenance("OPW waterlevel.ie", "https://waterlevel.ie/geojson/latest/", capturedAt, riverStatus)
+      trains: unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
+      rivers: boundedProvenance(living.sourceProvenance?.rivers, {
+        ...unavailableProvenance("OPW waterlevel.ie", "https://waterlevel.ie/geojson/latest/", capturedAt, riverStatus),
+        latestObservedAt: riverLatestObservedAt
+      })
     },
     contextStatus: {
       marine: contextStatus(sources.marine?.status), radar: "unavailable", grid: contextStatus(sources.grid?.status),
@@ -196,13 +227,10 @@ export async function buildHistoryCapture({
       source: "rivers", scope: "provider", reason: riverStatus,
       detail: "River observations were unavailable or stale at capture time."
     }]),
-    ...(!includeRail ? [{
+    ...[{
       source: "rail", scope: "history-v1", reason: "not-retained",
-      detail: "Irish Rail historical retention pending permission"
-    }] : railStatus === "live" ? [{
-      source: "rail", scope: "history-v1", reason: "summary-only",
-      detail: "Only aggregate Irish Rail counts are retained; positions, IDs and messages are excluded."
-    }] : [{ source: "rail", scope: "provider", reason: railStatus, detail: "Irish Rail was unavailable at capture time." }]),
+      detail: "Irish Rail historical retention is disabled until an explicitly permitted collection path is implemented."
+    }],
     {
       source: "transit", scope: "history-v1", reason: "summary-only",
       detail: "Only NTA route-level aggregate counts are retained; vehicle IDs, positions and labels are excluded."
@@ -231,11 +259,36 @@ export async function captureHistory(env, scheduledTime, loaders) {
   if (!env.HISTORY_DB) return { skipped: true, reason: "missing-binding" };
   const bucketStartMs = rawBucketStart(scheduledTime);
   const startedAtMs = Date.now();
-  await env.HISTORY_DB.prepare(`
+  const inserted = await env.HISTORY_DB.prepare(`
     INSERT INTO history_collection_runs (bucket_start_ms, started_at_ms, outcome)
     VALUES (?, ?, 'running')
     ON CONFLICT(bucket_start_ms) DO NOTHING
   `).bind(bucketStartMs, startedAtMs).run();
+  let acquired = Number(inserted?.meta?.changes ?? inserted?.changes ?? 0) > 0;
+  if (!acquired) {
+    const reclaimed = await env.HISTORY_DB.prepare(`
+      UPDATE history_collection_runs
+      SET started_at_ms = ?, completed_at_ms = NULL, outcome = 'running', error_code = NULL
+      WHERE bucket_start_ms = ?
+        AND (outcome = 'failed' OR (outcome = 'running' AND started_at_ms < ?))
+    `).bind(startedAtMs, bucketStartMs, startedAtMs - COLLECTION_LEASE_MS).run();
+    acquired = Number(reclaimed?.meta?.changes ?? reclaimed?.changes ?? 0) > 0;
+  }
+  if (!acquired) return { skipped: true, reason: "duplicate-bucket", bucketStartMs };
+
+  const existing = await env.HISTORY_DB.prepare(`
+    SELECT content_sha256, gaps_json FROM history_snapshots
+    WHERE resolution_minutes = ? AND bucket_start_ms = ?
+  `).bind(RAW_RESOLUTION_MINUTES, bucketStartMs).first();
+  if (existing) {
+    const gaps = JSON.parse(existing.gaps_json);
+    const outcome = gaps.some((item) => item.scope === "provider") ? "partial" : "complete";
+    await env.HISTORY_DB.prepare(`
+      UPDATE history_collection_runs SET completed_at_ms = ?, outcome = ?, error_code = NULL
+      WHERE bucket_start_ms = ? AND started_at_ms = ? AND outcome = 'running'
+    `).bind(Date.now(), outcome, bucketStartMs, startedAtMs).run();
+    return { skipped: false, recovered: true, bucketStartMs, outcome, contentSha256: existing.content_sha256 };
+  }
   try {
     const capture = await buildHistoryCapture({ env, capturedAtMs: bucketStartMs, ...loaders });
     const row = await encodeSnapshotRow({
@@ -253,14 +306,14 @@ export async function captureHistory(env, scheduledTime, loaders) {
     const outcome = capture.gaps.some((item) => item.scope === "provider") ? "partial" : "complete";
     await env.HISTORY_DB.prepare(`
       UPDATE history_collection_runs SET completed_at_ms = ?, outcome = ?, error_code = NULL
-      WHERE bucket_start_ms = ?
-    `).bind(Date.now(), outcome, bucketStartMs).run();
+      WHERE bucket_start_ms = ? AND started_at_ms = ? AND outcome = 'running'
+    `).bind(Date.now(), outcome, bucketStartMs, startedAtMs).run();
     return { skipped: false, bucketStartMs, outcome, contentSha256: row.contentSha256 };
   } catch (error) {
     await env.HISTORY_DB.prepare(`
       UPDATE history_collection_runs SET completed_at_ms = ?, outcome = 'failed', error_code = ?
-      WHERE bucket_start_ms = ?
-    `).bind(Date.now(), "capture-failed", bucketStartMs).run();
+      WHERE bucket_start_ms = ? AND started_at_ms = ? AND outcome = 'running'
+    `).bind(Date.now(), "capture-failed", bucketStartMs, startedAtMs).run();
     throw error;
   }
 }

@@ -1,11 +1,13 @@
 import { aggregateHourlyWeather } from "../lib/weather-timeline.js";
 import { publicRouteFromNtaRouteId } from "../lib/presentation.js";
 import {
+  buildEirGridReading,
   latestEirGridValue,
   latestObservedAt,
   normalizeOfficialWeatherWarnings,
   normalizeProviderTimestamp,
-  parseIrelandLocalTimestamp
+  parseIrelandLocalTimestamp,
+  readBoundedJsonResponse
 } from "./river-source.js";
 import { classifyTideTrend, irishGridToLonLat, tideQueryWindow } from "./server-entry.js";
 
@@ -44,18 +46,20 @@ const fresh = (value, maximumAgeMs, now) => {
   return Number.isFinite(age) && age >= 0 && age < maximumAgeMs;
 };
 
-const fetchJson = async (fetcher, url, cacheTtl) => {
+const fetchJson = async (fetcher, url, cacheTtl, maximumBytes = 512_000) => {
   const response = await fetcher(url, {
     cf: { cacheEverything: true, cacheTtl, cacheTtlByStatus: { "200-299": cacheTtl, "400-599": 0 } }
   });
   if (!response.ok) throw new Error(`upstream-http-${response.status}`);
-  return response.json();
+  return (await readBoundedJsonResponse(response, "upstream", maximumBytes)).body;
 };
 
 const cleanErrorCode = (error) => {
   const message = String(error?.message ?? error ?? "");
   if (/upstream-http-\d{3}/.test(message)) return message.match(/upstream-http-\d{3}/)[0];
   if (/timeout|abort/i.test(message)) return "upstream-timeout";
+  if (/upstream-body-too-large/.test(message)) return "upstream-body-too-large";
+  if (/upstream-malformed-json/.test(message)) return "upstream-malformed";
   return "upstream-unavailable";
 };
 
@@ -84,21 +88,42 @@ const collect = async (name, operation, fetchedAt) => {
   }
 };
 
+const mapWithConcurrency = async (items, limit, operation) => {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await operation(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+};
+
 const weatherTop = (stations, field) => [...stations]
   .filter((station) => station[field] !== null)
   .sort((first, second) => (second[field] ?? -Infinity) - (first[field] ?? -Infinity))[0] ?? null;
 
 export async function collectWeather(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
-  const results = await Promise.all(WEATHER_STATIONS.map(async (definition) => {
+  const results = await mapWithConcurrency(WEATHER_STATIONS, 3, async (definition) => {
     try {
       const rows = await fetchJson(fetcher, `https://prodapi.metweb.ie/observations/${definition.endpoint}/today`, 300);
       const stationRows = (Array.isArray(rows) ? rows : []).filter((row) =>
         String(row?.name ?? "").trim().toLocaleLowerCase("en-IE") === definition.providerName.toLocaleLowerCase("en-IE")
-      );
-      const latest = stationRows.at(-1);
+      ).map((row) => ({
+        row,
+        observedAt: parseIrelandLocalTimestamp(String(row.date ?? ""), String(row.reportTime ?? ""), now)
+      })).filter((item) => {
+        const timestamp = Date.parse(item.observedAt ?? "");
+        return Number.isFinite(timestamp) && timestamp <= now;
+      }).sort((first, second) => Date.parse(first.observedAt) - Date.parse(second.observedAt));
+      const selected = stationRows.at(-1);
+      const latest = selected?.row;
       if (!latest) return null;
-      const observedAt = parseIrelandLocalTimestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
+      const observedAt = selected.observedAt;
       if (!fresh(observedAt, 3 * 60 * 60_000, now)) return null;
       return {
         reading: {
@@ -114,7 +139,7 @@ export async function collectWeather(fetcher, now) {
           observedAt,
           fresh: true
         },
-        history: stationRows.map((row) => ({
+        history: stationRows.map(({ row }) => ({
           time: String(row.reportTime ?? ""),
           temperature: numeric(row.temperature),
           rainfall: numeric(row.rainfall),
@@ -124,7 +149,7 @@ export async function collectWeather(fetcher, now) {
     } catch {
       return null;
     }
-  }));
+  });
   const valid = results.filter(Boolean);
   const stations = valid.map((item) => item.reading).sort((a, b) => a.id.localeCompare(b.id));
   const status = stations.length === WEATHER_STATIONS.length ? "live" : stations.length ? "partial" : "unavailable";
@@ -143,12 +168,39 @@ export async function collectWeather(fetcher, now) {
   };
 }
 
-async function collectWarnings(fetcher, now) {
+export async function collectWarnings(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
   return collect("warnings", async () => {
     const rows = await fetchJson(fetcher, "https://www.met.ie/Open_Data/json/warning_IRELAND.json", 300);
-    const warnings = normalizeOfficialWeatherWarnings(rows, now).sort((a, b) => a.id.localeCompare(b.id));
-    return { envelope: source({ status: "live", data: warnings, fetchedAt, latestObservedAt: latestObservedAt(warnings.map((item) => ({ observedAt: item.updated || item.issued }))) }), gaps: [] };
+    let postCutoffUpdates = 0;
+    const warnings = normalizeOfficialWeatherWarnings(rows, now).filter((warning) => {
+      const issuedText = String(warning.issued ?? "").trim();
+      const updatedText = String(warning.updated ?? "").trim();
+      const issued = issuedText ? Date.parse(issuedText) : null;
+      const updated = updatedText ? Date.parse(updatedText) : null;
+      if (issued !== null && Number.isFinite(issued) && issued > now) return false;
+      if ((issuedText && !Number.isFinite(issued)) ||
+          (updatedText && (!Number.isFinite(updated) || updated > now))) {
+        postCutoffUpdates += 1;
+        return false;
+      }
+      return true;
+    }).sort((a, b) => a.id.localeCompare(b.id));
+    const status = postCutoffUpdates ? "partial" : "live";
+    return {
+      envelope: source({
+        status,
+        data: warnings,
+        fetchedAt,
+        latestObservedAt: latestObservedAt(warnings.map((item) => ({ observedAt: item.updated || item.issued }))),
+        errorCode: postCutoffUpdates ? "post-cutoff-update" : null
+      }),
+      gaps: postCutoffUpdates ? [gap(
+        "warnings",
+        "post-cutoff-update",
+        `${postCutoffUpdates} warning record${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+      )] : []
+    };
   }, fetchedAt);
 }
 
@@ -175,50 +227,95 @@ export async function collectMarine(fetcher, now) {
   }, fetchedAt);
 }
 
+const dublinDate = (now) => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit"
+}).format(new Date(now));
+
+export const eirGridDublinHourWindow = (now) => {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
+  const prefix = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}`;
+  return { dateFrom: `${prefix}:00:00`, dateTo: `${prefix}:59:59` };
+};
+
 const fetchGridRows = async (fetcher, chartType, areas, now) => {
-  const day = new Date(now).toISOString().slice(0, 10);
+  const day = dublinDate(now);
+  const hour = eirGridDublinHourWindow(now);
   const url = new URL("https://www.smartgriddashboard.com/api/chart/");
   url.search = new URLSearchParams({
-    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day", dateFrom: day, dateTo: day, areas
+    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day",
+    dateFrom: chartType === "frequency" ? hour.dateFrom : day,
+    dateTo: chartType === "frequency" ? hour.dateTo : day,
+    areas
   }).toString();
   const body = await fetchJson(fetcher, url, chartType === "frequency" ? 60 : 300);
   return body.Rows ?? [];
 };
 
-async function collectGrid(fetcher, now) {
+const GRID_SHARDS = Object.freeze({
+  demand: [["demand", "demandactual", "SYSTEM_DEMAND", "demand"]],
+  generation: [["generation", "generationactual", "GEN_EXP", "generation"]],
+  "wind-interconnection": [["wind", "windactual", "WIND_ACTUAL", "wind"], ["interconnection", "interconnection", "INTER_NET", "interconnection"]],
+  carbon: [["co2", "co2intensity,co2emission", "CO2_INTENSITY", "carbonIntensity"], ["co2", "co2intensity,co2emission", "CO2_EMISSIONS", "carbonEmissions"]],
+  frequency: [["frequency", "frequency", "SYS_FREQUENCY", "frequency"]]
+});
+
+export async function collectGridShard(fetcher, now, shard) {
+  const definitions = GRID_SHARDS[shard];
+  if (!definitions) throw new TypeError(`unknown-grid-shard:${shard}`);
+  const fetched = new Map();
+  const values = {};
+  const errors = [];
+  for (const [chartType, areas, metric, key] of definitions) {
+    const requestKey = `${chartType}:${areas}`;
+    try {
+      if (!fetched.has(requestKey)) fetched.set(requestKey, fetchGridRows(fetcher, chartType, areas, now));
+      values[key] = latestEirGridValue(await fetched.get(requestKey), metric, now);
+      if (!values[key]) errors.push(key);
+    } catch (error) {
+      values[key] = null;
+      errors.push(`${key}:${cleanErrorCode(error)}`);
+    }
+  }
+  return { shard, values, errors };
+}
+
+export function mergeGridShards(shards, now) {
   const fetchedAt = new Date(now).toISOString();
-  return collect("grid", async () => {
-    const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] = await Promise.all([
-      fetchGridRows(fetcher, "demand", "demandactual", now),
-      fetchGridRows(fetcher, "generation", "generationactual", now),
-      fetchGridRows(fetcher, "wind", "windactual", now),
-      fetchGridRows(fetcher, "co2", "co2intensity,co2emission", now),
-      fetchGridRows(fetcher, "frequency", "frequency", now),
-      fetchGridRows(fetcher, "interconnection", "interconnection", now)
-    ]);
-    const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
-    const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
-    const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
-    const intensity = latestEirGridValue(carbonRows, "CO2_INTENSITY", now);
-    const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
-    const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
-    const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
-    const observedAt = [demand, generation, wind, intensity, emissions, frequency, interconnector]
-      .map((item) => item?.observedAt).filter(Boolean).sort().at(-1) ?? null;
-    if (!observedAt) throw new Error("no-fresh-observations");
-    const reading = {
-      observedAt,
-      demandMW: demand?.value ?? null,
-      generationMW: generation?.value ?? null,
-      windMW: wind?.value ?? null,
-      windSharePercent: wind && demand && demand.value > 0 ? wind.value / demand.value * 100 : null,
-      carbonIntensity: intensity?.value ?? null,
-      carbonEmissions: emissions?.value ?? null,
-      frequencyHz: frequency?.value ?? null,
-      interconnectorMW: interconnector?.value ?? null
+  const values = Object.assign({}, ...shards.map((item) => item?.values ?? {}));
+  const demand = values.demand;
+  const generation = values.generation;
+  const wind = values.wind;
+  const intensity = values.carbonIntensity;
+  const emissions = values.carbonEmissions;
+  const frequency = values.frequency;
+  const interconnector = values.interconnection;
+  const reading = buildEirGridReading({
+    demand, generation, wind, carbonIntensity: intensity, carbonEmissions: emissions,
+    frequency, interconnection: interconnector
+  });
+  const missing = [
+      ["demand", demand], ["generation", generation], ["wind", wind], ["carbon-intensity", intensity],
+      ["carbon-emissions", emissions], ["frequency", frequency], ["interconnection", interconnector]
+    ].filter(([, value]) => !value).map(([name]) => name);
+  if (!reading) return {
+      envelope: source({ status: "unavailable", data: null, fetchedAt, errorCode: "empty-success" }),
+      gaps: [gap("grid", "empty-success", "EirGrid returned HTTP success with no usable current rows; values remain unknown.")]
     };
-    return { envelope: source({ status: "live", data: reading, fetchedAt, latestObservedAt: observedAt }), gaps: [] };
-  }, fetchedAt);
+  return {
+      envelope: source({
+        status: missing.length ? "partial" : "live", data: reading, fetchedAt, latestObservedAt: reading.observedAt,
+        errorCode: missing.length ? "partial-provider-response" : null
+      }),
+      gaps: missing.length ? [gap("grid", "partial-provider-response", `EirGrid omitted: ${missing.join(", ")}; missing values remain null.`)] : []
+  };
+}
+
+export async function collectGrid(fetcher, now) {
+  const shards = await Promise.all(Object.keys(GRID_SHARDS).map((shard) => collectGridShard(fetcher, now, shard)));
+  return mergeGridShards(shards, now);
 }
 
 const AIR_LOCATIONS = [
@@ -228,7 +325,7 @@ const AIR_LOCATIONS = [
   ["derry-air", "Derry", 55.00, -7.31]
 ];
 
-async function collectModelledAir(fetcher, now) {
+export async function collectModelledAir(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
   return collect("air_modelled", async () => {
     const url = new URL("https://air-quality-api.open-meteo.com/v1/air-quality");
@@ -239,15 +336,31 @@ async function collectModelledAir(fetcher, now) {
     const bodies = await fetchJson(fetcher, url, 1800);
     const readings = AIR_LOCATIONS.flatMap(([id, name, latitude, longitude], index) => {
       const current = bodies[index]?.current;
-      return current?.time ? [{
-        id, name, latitude, longitude, observedAt: `${current.time}:00Z`,
+      const observedAt = current?.time ? `${current.time}:00Z` : "";
+      return fresh(observedAt, 12 * 60 * 60_000, now) ? [{
+        id, name, latitude, longitude, observedAt,
         europeanAqi: numeric(current.european_aqi), pm25: numeric(current.pm2_5), pm10: numeric(current.pm10),
         nitrogenDioxide: numeric(current.nitrogen_dioxide), ozone: numeric(current.ozone), uvIndex: numeric(current.uv_index),
         grassPollen: numeric(current.grass_pollen), source: "modelled", stationClassification: null
       }] : [];
     });
     if (!readings.length) throw new Error("no-fresh-observations");
-    return { envelope: source({ status: "live", data: readings, fetchedAt, latestObservedAt: latestObservedAt(readings) }), gaps: [] };
+    const status = readings.length === AIR_LOCATIONS.length ? "live" : "partial";
+    const missing = AIR_LOCATIONS.length - readings.length;
+    return {
+      envelope: source({
+        status,
+        data: readings,
+        fetchedAt,
+        latestObservedAt: latestObservedAt(readings),
+        errorCode: missing ? "partial-provider-response" : null
+      }),
+      gaps: missing ? [gap(
+        "air_modelled",
+        "partial-provider-response",
+        `${missing} of ${AIR_LOCATIONS.length} configured Open-Meteo locations had no fresh current reading.`
+      )] : []
+    };
   }, fetchedAt);
 }
 
@@ -278,17 +391,49 @@ export async function collectTides(fetcher, now) {
     const surges = surgesResult.status === "fulfilled" ? surgesResult.value : { table: { rows: [] } };
     const predictions = predictionsResult.status === "fulfilled" ? predictionsResult.value : { table: { rows: [] } };
     const levelRows = levels.table?.rows ?? [];
-    const surgeRows = surges.table?.rows ?? [];
+    const surgeRows = (surges.table?.rows ?? []).filter((row) => {
+      const observed = Date.parse(row?.[3]);
+      return Number.isFinite(observed) && observed <= now;
+    });
     const predictionRows = predictions.table?.rows ?? [];
     const distance = (a, b) => Math.hypot(Number(a[1]) - Number(b[1]), Number(a[2]) - Number(b[2]));
+    const coordinateCell = (row) => [Math.floor(Number(row[1]) / .08), Math.floor(Number(row[2]) / .08)];
+    const coordinateKey = (x, y) => `${x}:${y}`;
+    const nearestByCoordinate = (rows) => {
+      const index = new Map();
+      for (const row of rows) {
+        const [x, y] = coordinateCell(row);
+        const key = coordinateKey(x, y);
+        index.set(key, [...(index.get(key) ?? []), row]);
+      }
+      return index;
+    };
+    const nearby = (index, row) => {
+      const [x, y] = coordinateCell(row);
+      const candidates = [];
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+          candidates.push(...(index.get(coordinateKey(x + xOffset, y + yOffset)) ?? []));
+        }
+      }
+      return candidates.filter((item) => distance(row, item) < .08);
+    };
+    const surgeIndex = nearestByCoordinate(surgeRows);
+    const predictionIndex = nearestByCoordinate(predictionRows);
     const byStation = new Map();
-    for (const row of levelRows) byStation.set(String(row[0]), [...(byStation.get(String(row[0])) ?? []), row]);
+    for (const row of levelRows) {
+      const observed = Date.parse(row?.[3]);
+      if (Number.isFinite(observed) && observed <= now) {
+        byStation.set(String(row[0]), [...(byStation.get(String(row[0])) ?? []), row]);
+      }
+    }
     const readings = [...byStation.values()].flatMap((rows) => {
       rows.sort((a, b) => Date.parse(a[3]) - Date.parse(b[3]));
       const row = rows.at(-1);
       if (!fresh(row?.[3], 3 * 60 * 60_000, now)) return [];
-      const surge = [...surgeRows].sort((a, b) => distance(row, a) - distance(row, b))[0];
-      const future = predictionRows.filter((item) => distance(row, item) < .08 && Date.parse(item[3]) > now);
+      const localSurges = nearby(surgeIndex, row);
+      const surge = localSurges.reduce((nearest, item) => !nearest || distance(row, item) < distance(row, nearest) ? item : nearest, null);
+      const future = nearby(predictionIndex, row).filter((item) => Date.parse(item[3]) > now);
       const nextHigh = future.find((item) => item[4] === "HIGH");
       const nextLow = future.find((item) => item[4] === "LOW");
       return [{
@@ -315,24 +460,51 @@ export async function collectTides(fetcher, now) {
   }, fetchedAt);
 }
 
-export async function collectBathing(fetcher, now) {
+export async function collectBathing(fetcher, now, compactLocations = null) {
   const fetchedAt = new Date(now).toISOString();
   return collect("bathing", async () => {
     const alertsBody = await fetchJson(fetcher, "https://data.epa.ie/bw/api/v1/alerts?per_page=100", 900);
-    const alerts = (alertsBody.list ?? []).filter((item) => {
+    let postCutoffUpdates = 0;
+    const alerts = (Array.isArray(alertsBody?.list) ? alertsBody.list : []).filter((item) => {
       const started = Date.parse(normalizeProviderTimestamp(item.incident_start_date) ?? "");
       const ended = Date.parse(normalizeProviderTimestamp(item.incident_end_date) ?? "");
-      return Number.isFinite(started) && started <= now && (!Number.isFinite(ended) || ended > now);
+      const rawUpdated = String(item.last_updated ?? "").trim();
+      const updated = rawUpdated ? Date.parse(normalizeProviderTimestamp(rawUpdated) ?? "") : null;
+      if (!Number.isFinite(started) || started > now || (Number.isFinite(ended) && ended <= now)) return false;
+      if (updated !== null && (!Number.isFinite(updated) || updated > now)) {
+        postCutoffUpdates += 1;
+        return false;
+      }
+      return true;
     });
-    if (!alerts.length) return { envelope: source({ status: "live", data: [], fetchedAt }), gaps: [] };
-    const locationsBody = await fetchJson(fetcher, "https://data.epa.ie/bw/api/v1/locations?per_page=500", 86_400);
-    const locations = new Map((locationsBody.list ?? []).map((item) => [item.beach_id, item]));
+    if (!alerts.length) {
+      const status = postCutoffUpdates ? "partial" : "live";
+      return {
+        envelope: source({ status, data: [], fetchedAt, errorCode: postCutoffUpdates ? "post-cutoff-update" : null }),
+        gaps: postCutoffUpdates ? [gap(
+          "bathing",
+          "post-cutoff-update",
+          `${postCutoffUpdates} active bathing notice${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+        )] : []
+      };
+    }
+    const indexState = compactLocations && compactLocations.index instanceof Map ? compactLocations : null;
+    const locations = indexState
+      ? indexState.index
+      : compactLocations instanceof Map
+        ? compactLocations
+      : new Map(((await fetchJson(fetcher, "https://data.epa.ie/bw/api/v1/locations?per_page=500", 86_400, 1_000_000)).list ?? [])
+        .map((item) => [String(item.beach_id), item]));
     const archived = alerts.flatMap((alert) => {
-      const location = locations.get(alert.beach_id);
+      const location = locations.get(String(alert.beach_id));
       const east = numeric(location?.easting);
       const north = numeric(location?.northing);
-      if (east === null || north === null) return [];
-      const coordinates = irishGridToLonLat(east, north);
+      const latitude = numeric(location?.latitude);
+      const longitude = numeric(location?.longitude);
+      if ((east === null || north === null) && (latitude === null || longitude === null)) return [];
+      const coordinates = latitude !== null && longitude !== null
+        ? { latitude, longitude }
+        : irishGridToLonLat(east, north);
       return [{
       id: `bathing-${alert.incident_id}`,
       name: String(alert.beach_name ?? "Bathing location"),
@@ -341,19 +513,34 @@ export async function collectBathing(fetcher, now) {
       restriction: String(alert.bathing_restriction_type ?? "Bathing alert"),
       description: String(alert.incident_description ?? ""),
       startedAt: normalizeProviderTimestamp(alert.incident_start_date) ?? "",
-      updatedAt: String(alert.last_updated ?? ""),
+      endsAt: normalizeProviderTimestamp(alert.incident_end_date),
+      updatedAt: normalizeProviderTimestamp(alert.last_updated) ?? "",
       noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
       }];
     }).sort((a, b) => a.id.localeCompare(b.id));
-    const status = archived.length === alerts.length ? "live" : "partial";
+    const status = archived.length === alerts.length && (!indexState || indexState.status === "current") && !postCutoffUpdates
+      ? "live"
+      : "partial";
+    const missing = alerts.length - archived.length;
+    const indexGap = indexState && indexState.status !== "current"
+      ? gap("bathing", `location-index-${indexState.status}`, `The compact bathing location index was ${indexState.status}; its coordinates were not treated as current.`, "provider")
+      : null;
     return {
       envelope: source({ status, data: archived, fetchedAt, latestObservedAt: latestObservedAt(archived.map((item) => ({ observedAt: item.updatedAt || item.startedAt }))) }),
-      gaps: status === "live" ? [] : [gap("bathing", "missing-location", `${alerts.length - archived.length} active bathing alerts had no authoritative map location and were omitted.`, "provider")]
+      gaps: status === "live" ? [] : [
+        ...(postCutoffUpdates ? [gap(
+          "bathing",
+          "post-cutoff-update",
+          `${postCutoffUpdates} active bathing notice${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+        )] : []),
+        ...(indexGap ? [indexGap] : []),
+        ...(missing ? [gap("bathing", "missing-location", `${missing} active bathing alerts had no current authoritative map location and were omitted.`, "provider")] : [])
+      ]
     };
   }, fetchedAt);
 }
 
-async function collectEarthquakes(fetcher, now) {
+export async function collectEarthquakes(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
   return collect("earthquakes", async () => {
     const url = new URL("https://earthquake.usgs.gov/fdsnws/event/1/query");
@@ -362,21 +549,40 @@ async function collectEarthquakes(fetcher, now) {
       minlatitude: "49", maxlatitude: "57", minlongitude: "-13", maxlongitude: "-4", orderby: "time"
     }).toString();
     const body = await fetchJson(fetcher, url, 900);
-    const readings = (body.features ?? []).slice(0, 30).flatMap((feature) => {
+    const validReadings = (Array.isArray(body.features) ? body.features : []).flatMap((feature) => {
       const [longitude, latitude, depthKm] = feature.geometry?.coordinates ?? [];
       const magnitude = numeric(feature.properties?.mag);
-      return [longitude, latitude, depthKm].every(Number.isFinite) && magnitude !== null ? [{
+      const observed = Number(feature.properties?.time);
+      return [longitude, latitude, depthKm, observed].every(Number.isFinite) && observed <= now && observed >= now - 7 * 24 * 60 * 60_000 && magnitude !== null ? [{
         id: String(feature.id), longitude, latitude, depthKm, magnitude,
         place: String(feature.properties?.place ?? "Near Ireland"),
-        observedAt: new Date(Number(feature.properties?.time)).toISOString(), detailUrl: String(feature.properties?.url ?? "")
+        observedAt: new Date(observed).toISOString(), detailUrl: String(feature.properties?.url ?? "")
       }] : [];
-    }).sort((a, b) => a.id.localeCompare(b.id));
-    return { envelope: source({ status: "live", data: readings, fetchedAt, latestObservedAt: latestObservedAt(readings) }), gaps: [] };
+    }).sort((first, second) =>
+      Date.parse(second.observedAt) - Date.parse(first.observedAt) || first.id.localeCompare(second.id)
+    );
+    const truncated = validReadings.length > 30;
+    const readings = validReadings.slice(0, 30).sort((a, b) => a.id.localeCompare(b.id));
+    const status = truncated ? "partial" : "live";
+    return {
+      envelope: source({
+        status,
+        data: readings,
+        fetchedAt,
+        latestObservedAt: latestObservedAt(readings),
+        errorCode: truncated ? "result-cap" : null
+      }),
+      gaps: truncated ? [gap(
+        "earthquakes",
+        "result-cap",
+        `${validReadings.length} valid earthquake events matched the seven-day capture window; the newest 30 were retained.`
+      )] : []
+    };
   }, fetchedAt);
 }
 
 export const summarizeTransit = (vehicles, status, capturedAt) => {
-  if (status !== "live") return null;
+  if (status !== "live" && status !== "partial") return null;
   const byRoute = new Map();
   let unmappedRouteVehicles = 0;
   for (const vehicle of Array.isArray(vehicles) ? vehicles : []) {
@@ -408,18 +614,12 @@ export const summarizeTransit = (vehicles, status, capturedAt) => {
 export const summarizeRail = (trains, status, capturedAt, includeRail) => {
   if (!includeRail) return null;
   if (status !== "live") return null;
-  const byDirection = new Map();
-  for (const train of Array.isArray(trains) ? trains : []) {
-    const direction = String(train.direction ?? "Direction unavailable").replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-    byDirection.set(direction, (byDirection.get(direction) ?? 0) + 1);
-  }
   return {
     status,
     capturedAt,
     total: (Array.isArray(trains) ? trains : []).length,
     running: (Array.isArray(trains) ? trains : []).filter((train) => train.status === "running").length,
-    notStarted: (Array.isArray(trains) ? trains : []).filter((train) => train.status !== "running").length,
-    byDirection: [...byDirection].map(([direction, count]) => ({ direction, count })).sort((a, b) => a.direction.localeCompare(b.direction))
+    notStarted: (Array.isArray(trains) ? trains : []).filter((train) => train.status !== "running").length
   };
 };
 

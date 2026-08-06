@@ -1,6 +1,7 @@
 import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./server-entry.js";
 import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
 import { captureHistory, handleHistoryRequest, maintainHistory } from "./history.js";
+import { summarizeTransit } from "./history-sources.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
@@ -19,6 +20,11 @@ const transitLiveHeaders = {
 const transitUnavailableHeaders = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store"
+};
+
+const captureCutoff = (url, fallback = Date.now()) => {
+  const value = Number(url.searchParams.get("captureBucketStartMs"));
+  return Number.isInteger(value) && value >= 0 ? value : fallback;
 };
 
 const distanceKm = (first, second) => {
@@ -48,11 +54,13 @@ export const addEstimatedSpeeds = (current, previous, maximumKmh = 130) => {
   });
 };
 
+const transitUsable = (status) => status === "live" || status === "partial";
+
 const transitResponse = (value) => new Response(JSON.stringify({
   generatedAt: new Date().toISOString(),
-  transit: value.status === "live" ? value.vehicles : [],
+  transit: transitUsable(value.status) ? value.vehicles : [],
   transitStatus: value.status
-}), { headers: value.status === "live" ? transitLiveHeaders : transitUnavailableHeaders });
+}), { headers: value.status === "live" ? transitLiveHeaders : value.status === "partial" ? partialHeaders : transitUnavailableHeaders });
 
 export class NtaFeedCoordinator {
   constructor(state, env) {
@@ -61,41 +69,72 @@ export class NtaFeedCoordinator {
     this.refreshPromise = null;
   }
 
-  async refresh(stale) {
+  staleResult(snapshot, errorCode = "provider-rate-limit-stale") {
+    return snapshot?.result?.vehicles?.length
+      ? { ...snapshot.result, status: "stale", errorCode }
+      : { vehicles: [], status: "unavailable", errorCode };
+  }
+
+  async refresh(snapshot) {
     const startedAt = Date.now();
     await this.state.storage.put("nextAllowedAt", startedAt + NTA_REFRESH_MS);
     try {
-      const result = await fetchTransit(this.env);
-      if (result.status !== "live" || !result.vehicles.length) return { vehicles: [], status: "unavailable" };
-      result.vehicles = addEstimatedSpeeds(result.vehicles, stale?.result?.vehicles ?? []);
-      const snapshot = { expiresAt: startedAt + NTA_REFRESH_MS, result };
-      await this.state.storage.put("snapshot", snapshot);
+      const value = await fetchTransit(this.env, fetch, startedAt);
+      if (!transitUsable(value.status) || !value.vehicles?.length) return value;
+      const result = {
+        ...value,
+        vehicles: addEstimatedSpeeds(value.vehicles, snapshot?.result?.vehicles ?? [])
+      };
+      await this.state.storage.put("snapshot", { expiresAt: startedAt + NTA_REFRESH_MS, result });
       return result;
     } catch (error) {
       console.error("NTA coordinated refresh failed", error);
-      return { vehicles: [], status: "unavailable" };
+      return this.staleResult(snapshot, String(error?.message ?? error));
     }
   }
 
-  async fetch() {
-    const now = Date.now();
-    const snapshot = await this.state.storage.get("snapshot");
-    if (snapshot?.expiresAt > now && snapshot.result?.status === "live" && snapshot.result.vehicles?.length) {
-      return transitResponse(snapshot.result);
+  async current(snapshot, now) {
+    if (snapshot?.expiresAt > now && transitUsable(snapshot.result?.status) && snapshot.result.vehicles?.length) {
+      return snapshot.result;
     }
-
+    if (this.refreshPromise) return this.refreshPromise;
+    const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
+    if (this.refreshPromise) return this.refreshPromise;
+    if (typeof nextAllowedAt === "number" && nextAllowedAt > now) return this.staleResult(snapshot);
     if (!this.refreshPromise) {
-      this.refreshPromise = (async () => {
-        const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
-        if (typeof nextAllowedAt === "number" && nextAllowedAt > Date.now()) {
-          return { vehicles: [], status: "unavailable" };
-        }
-        return this.refresh(snapshot);
-      })().finally(() => {
-        this.refreshPromise = null;
+      this.refreshPromise = this.refresh(snapshot).finally(() => { this.refreshPromise = null; });
+    }
+    return this.refreshPromise;
+  }
+
+  async fetch(request) {
+    const requestUrl = new URL(request?.url ?? "https://internal/transit");
+    const path = requestUrl.pathname;
+    const now = Date.now();
+    const cutoffMs = captureCutoff(requestUrl, now);
+    const snapshot = await this.state.storage.get("snapshot");
+    const result = await this.current(snapshot, now);
+    if (path === "/history-summary") {
+      const availableVehicles = Array.isArray(result.vehicles) ? result.vehicles : [];
+      const vehicles = availableVehicles.filter((vehicle) => {
+        const observedAt = Date.parse(vehicle.observedAt);
+        const age = cutoffMs - observedAt;
+        return Number.isFinite(observedAt) && age >= 0 && age < 30 * 60_000;
+      });
+      const filteredSubset = vehicles.length < availableVehicles.length;
+      const status = transitUsable(result.status) && vehicles.length
+        ? filteredSubset ? "partial" : result.status
+        : result.status === "credential-required" ? "credential-required"
+          : result.status === "stale" ? "stale" : "unavailable";
+      return Response.json({
+        transit: [],
+        transitStatus: status,
+        aggregate: transitUsable(status) ? summarizeTransit(vehicles, status, new Date(cutoffMs).toISOString()) : null,
+        latestObservedAt: transitUsable(status) ? vehicles.map((vehicle) => vehicle.observedAt).sort().at(-1) ?? null : null,
+        errorCode: result.errorCode ?? null
       });
     }
-    return transitResponse(await this.refreshPromise);
+    return transitResponse(result);
   }
 }
 
@@ -106,69 +145,69 @@ export class RiverFeedCoordinator {
     this.refreshPromise = null;
   }
 
-  async refresh(stale) {
+  staleResult(snapshot, now, errorCode = "provider-rate-limit-stale") {
+    const rivers = normalizeRiverReadings(snapshot?.rivers ?? [], now);
+    const status = rivers.length ? "stale" : "unavailable";
+    const provenance = snapshot?.provenance
+      ? { ...snapshot.provenance, status, fallback: rivers.length ? `Cached coordinator snapshot; provider error: ${errorCode}` : snapshot.provenance.fallback }
+      : makeRiverProvenance({ status, readings: rivers, fallback: rivers.length ? "Cached coordinator snapshot" : null });
+    return { rivers, status, provenance, errorCode };
+  }
+
+  async refresh(snapshot) {
     const startedAt = Date.now();
     await this.state.storage.put("nextAllowedAt", startedAt + RIVER_REFRESH_MS);
     try {
-      const result = await fetchRiversResult(this.env);
-      const rivers = normalizeRiverReadings(result.rivers, startedAt);
-      if (!rivers.length) throw new Error("OPW returned no valid fresh river gauges");
-      const snapshot = {
-        expiresAt: startedAt + RIVER_REFRESH_MS,
-        rivers,
-        provenance: result.provenance
-      };
-      await this.state.storage.put("snapshot", snapshot);
-      return { rivers, status: result.provenance.status, provenance: result.provenance };
+      const result = await fetchRiversResult(this.env, fetch, startedAt);
+      const value = { rivers: result.rivers, status: result.provenance.status, provenance: result.provenance };
+      await this.state.storage.put("snapshot", { expiresAt: startedAt + RIVER_REFRESH_MS, ...value });
+      return value;
     } catch (error) {
       console.error("OPW coordinated refresh failed", error);
-      const freshRivers = normalizeRiverReadings(stale?.rivers ?? [], Date.now());
-      const provenance = stale?.provenance
-        ? { ...stale.provenance, status: freshRivers.length ? "stale" : "unavailable", fetchedAt: new Date().toISOString(), fallback: "Cached coordinator snapshot" }
-        : makeRiverProvenance({
-            status: freshRivers.length ? "stale" : "unavailable",
-            readings: freshRivers,
-            fallback: freshRivers.length ? "Cached coordinator snapshot" : null
-          });
-      return {
-        rivers: freshRivers,
-        status: provenance.status,
-        provenance
-      };
+      return this.staleResult(snapshot, startedAt, String(error?.message ?? error));
     }
   }
 
-  async fetch() {
-    const now = Date.now();
-    const snapshot = await this.state.storage.get("snapshot");
-    const snapshotRivers = normalizeRiverReadings(snapshot?.rivers ?? [], now);
-    if (snapshot?.expiresAt > now && snapshotRivers.length) {
-      return Response.json({
-        rivers: snapshotRivers,
-        status: snapshot.provenance?.status ?? "live",
-        provenance: snapshot.provenance ?? makeRiverProvenance({ status: "live", readings: snapshotRivers })
-      });
+  async current(snapshot, now) {
+    const rivers = normalizeRiverReadings(snapshot?.rivers ?? [], now);
+    if (snapshot?.expiresAt > now && rivers.length) {
+      return { rivers, status: snapshot.provenance?.status ?? "live", provenance: snapshot.provenance };
     }
+    if (this.refreshPromise) return this.refreshPromise;
+    const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
+    if (this.refreshPromise) return this.refreshPromise;
+    if (typeof nextAllowedAt === "number" && nextAllowedAt > now) return this.staleResult(snapshot, now);
     if (!this.refreshPromise) {
-      this.refreshPromise = (async () => {
-        const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
-        if (typeof nextAllowedAt === "number" && nextAllowedAt > Date.now()) {
-          const freshRivers = normalizeRiverReadings(snapshot?.rivers ?? [], Date.now());
-          const status = freshRivers.length ? "stale" : "unavailable";
-          return {
-            rivers: freshRivers,
-            status,
-            provenance: snapshot?.provenance
-              ? { ...snapshot.provenance, status, fetchedAt: new Date().toISOString(), fallback: "Cached coordinator snapshot" }
-              : makeRiverProvenance({ status, readings: freshRivers, fallback: freshRivers.length ? "Cached coordinator snapshot" : null })
-          };
-        }
-        return this.refresh(snapshot);
-      })().finally(() => {
-        this.refreshPromise = null;
+      this.refreshPromise = this.refresh(snapshot).finally(() => { this.refreshPromise = null; });
+    }
+    return this.refreshPromise;
+  }
+
+  async fetch(request) {
+    const requestUrl = new URL(request?.url ?? "https://internal/rivers");
+    const path = requestUrl.pathname;
+    const now = Date.now();
+    const cutoffMs = captureCutoff(requestUrl, now);
+    const snapshot = await this.state.storage.get("snapshot");
+    const result = await this.current(snapshot, now);
+    if (path === "/history-summary") {
+      const availableRivers = Array.isArray(result.rivers) ? result.rivers : [];
+      const rivers = normalizeRiverReadings(availableRivers, cutoffMs);
+      const filteredSubset = rivers.length < availableRivers.length;
+      const usableStatus = result.status === "live" || result.status === "partial" || result.status === "fallback";
+      const status = rivers.length
+        ? filteredSubset && usableStatus ? "partial" : result.status
+        : "unavailable";
+      return Response.json({
+        rivers,
+        status,
+        provenance: result.provenance
+          ? { ...result.provenance, status, latestObservedAt: rivers.map((river) => river.observedAt).sort().at(-1) ?? null }
+          : makeRiverProvenance({ status, readings: rivers }),
+        errorCode: result.errorCode ?? null
       });
     }
-    return Response.json(await this.refreshPromise);
+    return Response.json(result);
   }
 }
 
@@ -217,10 +256,12 @@ const livingResponse = async (env) => {
 // Historical rail retention is disabled unless reuse permission is explicitly
 // recorded in configuration. Avoid even calling the Irish Rail upstream during
 // the default scheduled capture; only the OPW half of /api/living is needed.
-export const historyLivingSnapshot = async (env) => {
+export const historyLivingSnapshot = async (env, captureBucketStartMs = Date.now()) => {
   const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
   try {
-    const response = await riverCoordinator.fetch("https://internal/rivers");
+    const response = await riverCoordinator.fetch(
+      `https://internal/history-summary?captureBucketStartMs=${encodeURIComponent(captureBucketStartMs)}`
+    );
     if (!response.ok) throw new Error(`river-coordinator-http-${response.status}`);
     const result = await response.json();
     const rivers = Array.isArray(result.rivers) ? result.rivers : [];
@@ -255,6 +296,52 @@ export const historyLivingSnapshot = async (env) => {
       }
     };
   }
+};
+
+export const historyTransitSnapshot = async (env, captureBucketStartMs = Date.now()) => {
+  const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
+  try {
+    const response = await coordinator.fetch(
+      `https://internal/history-summary?captureBucketStartMs=${encodeURIComponent(captureBucketStartMs)}`
+    );
+    if (!response.ok) throw new Error(`transit-coordinator-http-${response.status}`);
+    return response.json();
+  } catch (error) {
+    console.error("NTA history capture failed", error);
+    return {
+      transit: [],
+      transitStatus: env.NTA_API_KEY ? "unavailable" : "credential-required",
+      aggregate: null,
+      latestObservedAt: null
+    };
+  }
+};
+
+export const runPaidHistoryTick = async (env, scheduledTime, {
+  capture = captureHistory,
+  maintain = maintainHistory
+} = {}) => {
+  const operations = [["capture", () => capture(env, scheduledTime, {
+    loadLiving: (captureBucketStartMs) => historyLivingSnapshot(env, captureBucketStartMs),
+    loadTransit: (captureBucketStartMs) => historyTransitSnapshot(env, captureBucketStartMs)
+  })]];
+  if (new Date(scheduledTime).getUTCMinutes() === 15) operations.push([
+    "maintenance",
+    () => maintain(env, scheduledTime)
+  ]);
+  const settled = await Promise.allSettled(operations.map(([, operation]) => operation()));
+  const failures = settled.flatMap((result, index) => result.status === "rejected"
+    ? [{ operation: operations[index][0], reason: result.reason }]
+    : []);
+  if (failures.length) {
+    const error = new AggregateError(
+      failures.map((failure) => failure.reason),
+      `Paid history tick failed: ${failures.map((failure) => failure.operation).join(", ")}`
+    );
+    error.failures = failures;
+    throw error;
+  }
+  return settled[0].value;
 };
 
 const staticResponse = async (request, env) => {
@@ -302,17 +389,7 @@ const cloudflareWorker = {
       return;
     }
     if (controller.cron === "*/15 * * * *") {
-      const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
-      ctx.waitUntil(captureHistory(env, controller.scheduledTime, {
-        loadLiving: () => env.HISTORY_INCLUDE_IRISH_RAIL === "true"
-          ? livingResponse(env)
-          : historyLivingSnapshot(env),
-        loadTransit: () => coordinator.fetch("https://internal/transit")
-      }));
-      return;
-    }
-    if (controller.cron === "7 * * * *") {
-      ctx.waitUntil(maintainHistory(env, controller.scheduledTime));
+      ctx.waitUntil(runPaidHistoryTick(env, controller.scheduledTime));
     }
   }
 };

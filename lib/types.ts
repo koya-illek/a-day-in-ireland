@@ -133,6 +133,7 @@ export type BathingAlert = {
   restriction: string;
   description: string;
   startedAt: string;
+  endsAt?: string | null;
   updatedAt: string;
   noticeUrl: string | null;
 };
@@ -193,7 +194,7 @@ export type ProviderProvenance = {
 };
 
 export type ObservationSourceStatus = "live" | "partial" | "stale" | "fallback" | "unavailable";
-export type ContextSourceStatus = "live" | "fallback" | "stale" | "unavailable";
+export type ContextSourceStatus = "live" | "partial" | "fallback" | "stale" | "credential-required" | "unavailable";
 
 export type LiveSnapshot = {
   generatedAt: string;
@@ -215,7 +216,7 @@ export type LiveSnapshot = {
   satellite: SatelliteFrame | null;
   earthquakes: EarthquakeReading[];
   transit: TransitVehicle[];
-  transitStatus: "live" | "stale" | "credential-required" | "unavailable";
+  transitStatus: "live" | "partial" | "stale" | "credential-required" | "unavailable";
   sourceProvenance?: {
     trains: ProviderProvenance;
     rivers: ProviderProvenance;

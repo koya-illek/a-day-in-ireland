@@ -1,4 +1,4 @@
-import type { ProviderProvenance, RiverReading } from "../lib/types";
+import type { GridReading, ProviderProvenance, RiverReading } from "../lib/types";
 
 export const RIVER_PROVIDER: string;
 export const RIVER_ENDPOINT: string;
@@ -32,8 +32,15 @@ export function normalizeProviderTimestamp(value: unknown): string | null;
 export function normalizeRiverReadings(readings: unknown[], now?: number): RiverReading[];
 export function parseRiverGeoJson(body: unknown, now?: number): RiverReading[];
 export function isIrelandCoordinate(latitude: unknown, longitude: unknown): boolean;
-export function parseIrelandLocalTimestamp(date: string, time: string): string | null;
-export function parseEirGridLocalTimestamp(value: string): string | null;
+export function parseIrelandLocalTimestamp(date: string, time: string, notAfter?: number | null): string | null;
+export function parseEirGridLocalTimestamp(value: string, notAfter?: number | null): string | null;
+export function readBoundedResponseBytes(response: Response, label: string, maximumBytes: number): Promise<Uint8Array>;
+export function readBoundedJsonResponse(
+  response: Response,
+  label: string,
+  maximumBytes: number
+): Promise<{ body: unknown; bodyBytes: number }>;
+export function readBoundedTextResponse(response: Response, label: string, maximumBytes: number): Promise<string>;
 export function latestObservedAt(readings: Array<{ observedAt: string }>): string | null;
 export function latestEirGridValue(
   rows: unknown[],
@@ -41,6 +48,15 @@ export function latestEirGridValue(
   now?: number,
   maxAgeMs?: number
 ): { value: number; observedAt: string; timestamp: number } | null;
+export function buildEirGridReading(values?: {
+  demand?: { value: number; observedAt: string } | null;
+  generation?: { value: number; observedAt: string } | null;
+  wind?: { value: number; observedAt: string } | null;
+  carbonIntensity?: { value: number; observedAt: string } | null;
+  carbonEmissions?: { value: number; observedAt: string } | null;
+  frequency?: { value: number; observedAt: string } | null;
+  interconnection?: { value: number; observedAt: string } | null;
+}): GridReading | null;
 export function makeSourceProvenance(options: {
   provider: string;
   endpoint: string;

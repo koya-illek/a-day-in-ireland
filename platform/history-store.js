@@ -42,10 +42,13 @@ const byteArray = (value) => {
 };
 
 const transformBytes = async (bytes, stream) => {
-  const writer = stream.writable.getWriter();
-  await writer.write(bytes);
-  await writer.close();
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    }
+  });
+  return new Uint8Array(await new Response(source.pipeThrough(stream)).arrayBuffer());
 };
 
 export const gzipJson = async (value) => {
@@ -125,6 +128,42 @@ const effectiveAtSql = `CASE
   ELSE COALESCE(representative_at_ms, bucket_start_ms)
 END`;
 
+const ALLOWED_STATUS_VALUES = new Set([
+  "live", "partial", "fallback", "stale", "unavailable", "credential-required"
+]);
+
+const validateSourceStatus = (sourceStatus) => {
+  if (!sourceStatus || typeof sourceStatus !== "object") return;
+  for (const [key, entry] of Object.entries(sourceStatus)) {
+    if (!entry || typeof entry !== "object") continue;
+    const status = entry.status;
+    if (status !== undefined && status !== null && !ALLOWED_STATUS_VALUES.has(status)) {
+      throw new RangeError(`Invalid status '${status}' for source '${key}' in history snapshot`);
+    }
+  }
+};
+
+const validatePayloadTimestamps = (payload, capturedAtMs) => {
+  const capturedUpperBound = capturedAtMs + 5 * MINUTE_MS; // small clock skew tolerance
+  const checkedFields = [
+    [payload?.snapshot?.generatedAt, "snapshot.generatedAt"],
+    [payload?.capturedAt, "payload.capturedAt"],
+  ];
+  for (const [value, label] of checkedFields) {
+    if (value === undefined || value === null) continue;
+    const ts = Date.parse(value);
+    if (Number.isFinite(ts) && ts > capturedUpperBound) {
+      throw new RangeError(`Future timestamp in ${label}: ${value} exceeds capture time ${new Date(capturedAtMs).toISOString()}`);
+    }
+  }
+};
+
+const validatePayload = (payload, capturedAtMs) => {
+  if (!payload || typeof payload !== "object") return;
+  validateSourceStatus(payload.sourceStatus);
+  validatePayloadTimestamps(payload, capturedAtMs);
+};
+
 export async function encodeSnapshotRow({
   resolutionMinutes,
   bucketStartMs,
@@ -137,6 +176,7 @@ export async function encodeSnapshotRow({
   sourceStatus,
   gaps
 }) {
+  validatePayload(payload, periodEndMs ?? bucketStartMs);
   const encoded = await gzipJson(payload);
   return {
     resolutionMinutes,
@@ -450,11 +490,11 @@ export async function rollupPeriod(db, {
   `).bind(fromResolutionMinutes, startMs, endMs).all());
   const decoded = summaryOnly
     ? await Promise.all(rows.map((row) => gunzipJson(row.payload)))
-    : rows.length ? [await gunzipJson(rows[0].payload)] : [];
+    : rows.length ? [await gunzipJson(rows[rows.length - 1].payload)] : [];
   const representative = decoded[0] ?? emptyPayload(startMs);
   const representativeAtMs = summaryOnly || !rows.length
     ? null
-    : Number(rows[0].representative_at_ms ?? rows[0].bucket_start_ms);
+    : Number(rows[rows.length - 1].representative_at_ms ?? rows[rows.length - 1].bucket_start_ms);
   const sourceStatus = mergeSourceStatus(rows, sourceKeys, expectedSamples);
   const gaps = uniqueGaps([
     ...rows.flatMap((row) => JSON.parse(row.gaps_json)),
@@ -509,6 +549,9 @@ export async function pruneHistory(db, now = Date.now()) {
         SELECT 1 FROM history_snapshots AS hourly
         WHERE hourly.resolution_minutes = 60
           AND hourly.bucket_start_ms = raw.bucket_start_ms - (raw.bucket_start_ms % ?)
+          AND hourly.expected_samples > 0
+          AND hourly.collected_samples >= hourly.expected_samples
+          AND hourly.collected_at_ms >= raw.collected_at_ms
       )
   `).bind(rawCutoff, HOUR_MS).run();
   await db.prepare(`
@@ -519,6 +562,9 @@ export async function pruneHistory(db, now = Date.now()) {
         WHERE daily.resolution_minutes = 1440
           AND daily.bucket_start_ms <= hourly.bucket_start_ms
           AND daily.period_end_ms > hourly.bucket_start_ms
+          AND daily.expected_samples > 0
+          AND daily.collected_samples >= daily.expected_samples
+          AND daily.collected_at_ms >= hourly.collected_at_ms
       )
   `).bind(hourCutoff).run();
   await db.prepare("DELETE FROM history_collection_runs WHERE bucket_start_ms < ?")

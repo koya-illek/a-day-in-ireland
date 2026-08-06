@@ -13,6 +13,13 @@ async function enableExploreLayer(page: Page, name: RegExp) {
   await page.getByRole("button", { name: "Close explore panel" }).click();
 }
 
+async function openActivityContext(page: Page) {
+  const details = page.locator("details.activity-context");
+  if (!(await details.evaluate((element: HTMLDetailsElement) => element.open))) {
+    await details.locator("summary").click();
+  }
+}
+
 function metObservationTime(minutesAgo: number) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-IE", {
@@ -82,7 +89,7 @@ async function installRadarTileAvailabilityFixture(
   });
 }
 
-async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { fiveSignals?: boolean } = {}) {
+async function installMapMarkerFixtures(page: Page, { multipleSignals = false }: { multipleSignals?: boolean } = {}) {
   const stationNames = new Map([
     ["malin-head", "Malin Head"], ["finner", "Finner"], ["belmullet", "Belmullet"],
     ["athenry", "Athenry"], ["dublin", "Dublin Airport"], ["gurteen", "Gurteen"],
@@ -99,7 +106,7 @@ async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { f
         name: stationNames.get(endpoint) ?? "Unknown station",
         ...observation,
         temperature: "16",
-        rainfall: fiveSignals ? "1.2" : "0.4",
+        rainfall: multipleSignals ? "1.2" : "0.4",
         windSpeed: "12",
         cardinalWindDirection: "E",
         weatherDescription: "Bright intervals"
@@ -135,7 +142,7 @@ async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { f
         observedAt, windSpeedKnots: 8, waveHeight: 1.1, wavePeriod: 5, seaTemperature: 14
       }],
       radar: [],
-      grid: fiveSignals ? {
+      grid: multipleSignals ? {
         observedAt, demandMW: 1000, generationMW: 1000, windMW: 650,
         windSharePercent: 65, carbonIntensity: 190, carbonEmissions: 95,
         frequencyHz: 50, interconnectorMW: 0
@@ -148,7 +155,7 @@ async function installMapMarkerFixtures(page: Page, { fiveSignals = false }: { f
       aurora: null,
       tides: [{
         id: "fixture-tide", name: "Fixture Tide", latitude: 53.3, longitude: -9.7, observedAt,
-        waterLevel: -1.48, predictedLevel: -1.58, surge: fiveSignals ? 0.3 : 0.1, trend: "falling",
+        waterLevel: -1.48, predictedLevel: -1.58, surge: multipleSignals ? 0.3 : 0.1, trend: "falling",
         nextHighAt: "2026-08-04T21:10:00.000Z", nextHighLevel: 1.8,
         nextLowAt: "2026-08-04T15:10:00.000Z", nextLowLevel: -1.72
       }],
@@ -451,24 +458,44 @@ test("the live map leads into selected-place and across-Ireland evidence", async
   const hierarchy = await page.evaluate(() => {
     const place = document.querySelector(".place-context");
     const notices = document.querySelector(".official-notices");
-    const guidance = document.querySelector(".now-guidance");
+    const matters = document.querySelector(".what-matters-now");
     const map = document.querySelector("#live-map");
     return Boolean(
-      place && notices && guidance && map &&
+      place && notices && matters && map &&
       (map.compareDocumentPosition(place) & Node.DOCUMENT_POSITION_FOLLOWING) &&
       (place.compareDocumentPosition(notices) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-      (notices.compareDocumentPosition(guidance) & Node.DOCUMENT_POSITION_FOLLOWING) &&
-      !(guidance.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING)
+      (notices.compareDocumentPosition(matters) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+      !(matters.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING)
     );
   });
   expect(hierarchy).toBe(true);
+});
+
+test("default island context stays compact until a place is selected", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.goto("/");
+
+  const place = page.locator(".place-context");
+  await expect(place).toHaveClass(/place-context-compact/);
+  await expect(place.getByRole("heading", { name: "Personalise this view" })).toBeVisible();
+  await expect(place.locator(".place-observations")).toHaveCount(0);
+  await expect(place.locator("#place-message")).toContainText("GPS coordinates are never stored or shared");
+
+  const notices = page.locator(".official-notices");
+  await expect(notices).toHaveClass(/compact/);
+  await expect(notices).toContainText("No current or upcoming Met Éireann notices");
+
+  await place.locator("#place-select").selectOption("cork");
+  await expect(place).not.toHaveClass(/place-context-compact/);
+  await expect(place.getByRole("heading", { name: "Cork", exact: true })).toBeVisible();
+  await expect(place.locator(".place-observations dl > div")).toHaveCount(4);
 });
 
 test("official notices retain scope after the map", async ({ page }) => {
   await page.goto("/?view=weather");
   const notices = page.locator(".official-notices");
   await expect(notices).toHaveAttribute("data-scope", "across-ireland");
-  await expect(notices.getByRole("heading", { name: "Official notices across Ireland", exact: true })).toBeVisible();
+  await expect(notices.getByRole("heading", { name: /Official notices/ })).toBeVisible();
 
   const afterMap = await page.evaluate(() => {
     const notices = document.querySelector(".official-notices");
@@ -485,7 +512,7 @@ test("official notices retain scope after the map", async ({ page }) => {
   } else {
     await expect(notices).toContainText(/No current or upcoming Met Éireann notices|notice feed is unavailable/);
   }
-  await expect(page.locator(".notable-now .signal-item").filter({ hasText: "Met Éireann" })).toHaveCount(0);
+  await expect(page.locator(".what-matters-now .signal-item").filter({ hasText: "Met Éireann" })).toHaveCount(0);
 });
 
 test("multiple notices render as active/upcoming facts without turning Blight into a walk notice", async ({ page }) => {
@@ -901,12 +928,20 @@ test("explore layer dialog traps and restores focus", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(page.locator(".explore-panel.is-open")).toHaveCount(0);
   await expect(opener).toBeFocused();
+});
 
-  const dataDetails = page.getByRole("button", { name: "Data details" });
-  await dataDetails.click();
-  await expect(close).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dataDetails).toBeFocused();
+test("data details disclosure is keyboard operable and keeps focus", async ({ page }) => {
+  await page.goto("/");
+  const details = page.locator("details.freshness-details");
+  const summary = details.locator("summary");
+  await summary.focus();
+  await expect(summary).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(details).toHaveAttribute("open", "");
+  await expect(summary).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(details).not.toHaveAttribute("open", "");
+  await expect(summary).toBeFocused();
 });
 
 test("does not expose a decorative sound control", async ({ page }) => {
@@ -1000,7 +1035,11 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#connection-summary")).toContainText(/Connected|Checking for newer data/);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
-  await expect(page.getByText("Ireland, at a glance.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What matters now." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Ireland, at a glance|Signals that matter|What the live data shows/ })).toHaveCount(0);
+  const dataDetails = page.locator("details.freshness-details");
+  await expect(dataDetails).not.toHaveAttribute("open", "");
+  await dataDetails.locator("summary").click();
   const freshnessChips = page.locator(".freshness-chip");
   await expect(freshnessChips.first()).toBeVisible();
   const chipCount = await freshnessChips.count();
@@ -1957,42 +1996,47 @@ test("new public contexts are discoverable and honestly describe unavailable dat
   await expect(movementGroup.getByRole("button", { name: /Public transport/ })).toBeVisible();
 });
 
-test("notable-now board is present without fabricating an event", async ({ page }) => {
+test("what-matters board only presents selected-layer signals when they exist", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Signals that matter to this view." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What matters now." })).toBeVisible();
   await expect(page.getByText("Bathing water", { exact: true })).toHaveCount(0);
   await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
   const signals = page.locator(".notable-signals .signal-item");
-  const quiet = page.getByText(/Provider checks completed|Unable to assess every selected signal source|No automated highlight rule applies/);
-  await expect(signals.first().or(quiet)).toBeVisible();
-  expect(await page.locator(".notable-signals .signal-item:visible").count()).toBeLessThanOrEqual(3);
+  const visibleSignalCount = await page.locator(".notable-signals .signal-item:visible").count();
+  const visiblePulseCount = await page.locator(".what-matters-grid .pulse-card:visible").count();
+  await expect(page.locator(".what-matters-grid .pulse-card")).toHaveCount(3);
+  expect(visibleSignalCount).toBeLessThanOrEqual(1);
+  expect(visibleSignalCount + visiblePulseCount).toBeLessThanOrEqual(4);
+  if (!(await signals.count())) await expect(page.locator(".notable-signals")).toHaveCount(0);
 });
 
-test("controlled five-signal view exposes a legible 44px disclosure on desktop and mobile", async ({ page }) => {
-  await installMapMarkerFixtures(page, { fiveSignals: true });
+test("multiple true signals expose one concise exception and a legible disclosure", async ({ page }) => {
+  await installMapMarkerFixtures(page, { multipleSignals: true });
   await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
 
   const signals = page.locator(".notable-signals .signal-item");
-  await expect(signals).toHaveCount(5);
-  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(3);
+  await expect(signals).toHaveCount(3);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(1);
+  await expect(page.locator(".what-matters-grid .pulse-card:visible")).toHaveCount(3);
   const control = await expectNotableMoreTarget(page);
   await control.click();
   await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
-  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(3);
 });
 
-test("controlled five-signal disclosure remains visible and usable at 320px and 200 percent text", async ({ page }, testInfo) => {
+test("multiple-signal disclosure remains visible and usable at 320px and 200 percent text", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
-  await installMapMarkerFixtures(page, { fiveSignals: true });
+  await installMapMarkerFixtures(page, { multipleSignals: true });
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto("/?view=custom&layers=rain,trains,grid,tides,bathing");
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
 
-  await expect(page.locator(".notable-signals .signal-item")).toHaveCount(5);
+  await expect(page.locator(".notable-signals .signal-item")).toHaveCount(3);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(1);
   const control = await expectNotableMoreTarget(page);
   await control.click();
   await expect(page.getByRole("button", { name: "Show fewer", exact: true })).toBeVisible();
-  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(5);
+  await expect(page.locator(".notable-signals .signal-item:visible")).toHaveCount(3);
 });
 
 test("my place and shared view state survive a deep link", async ({ page }) => {
@@ -2098,7 +2142,9 @@ test("tide details explain negative datum heights and order upcoming events by t
 
 test("current activity guidance and hourly timeline are actionable", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "What the live data shows." })).toBeVisible();
+  await expect(page.locator("details.activity-context")).not.toHaveAttribute("open", "");
+  await openActivityContext(page);
+  await expect(page.getByRole("heading", { name: "What the live data supports." })).toBeVisible();
   await expect(page.locator(".guidance-card")).toHaveCount(4);
   await expect(page.locator(".guidance-card").first()).not.toContainText(/\/100|No score/);
   await page.locator(".guidance-card").first().click();
@@ -2122,6 +2168,7 @@ test("activity actions preserve My Place in view state, storage, and share paylo
     });
   });
   await page.goto("/?place=cork");
+  await openActivityContext(page);
   const card = page.locator('[data-activity-id="outdoor-walk"]');
   await expect(card).toBeVisible();
   await card.click();
@@ -2327,8 +2374,7 @@ test("connection state settles truthfully, retries, and retains last-good data o
   await expect(page.locator(".pulse-card.trains strong")).toHaveText("—");
   await expect(page.locator(".pulse-card.rivers strong")).toHaveText("—");
   await expect(page.locator(".pulse-card.trains")).toContainText("cannot be assessed");
-  await expect(page.locator(".notable-signals .all-quiet")).toContainText("Unable to assess every selected signal source");
-  await expect(page.locator(".notable-signals")).not.toContainText("No unusual signals");
+  await expect(page.locator(".signal-assessment")).toContainText("Unable to assess every selected signal source");
   await expect(page.locator(".official-notices-empty")).toContainText("cannot be confirmed");
   await expect(page.locator(".retry-live-data")).toBeEnabled();
 
@@ -2347,8 +2393,7 @@ test("connection state settles truthfully, retries, and retains last-good data o
   await expect(page.locator(".guidance-card .guidance-status")).toHaveText(["Offline", "Offline", "Offline", "Offline"]);
   await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).toContainText("Provider: cached (offline)");
   await expect(page.locator(".official-notices-empty")).toContainText("Offline");
-  await expect(page.locator(".notable-signals .all-quiet")).toContainText("offline connection");
-  await expect(page.locator(".notable-signals")).not.toContainText("No unusual signals");
+  await expect(page.locator(".signal-assessment")).toContainText("offline connection");
   await expect(page.locator(".station-marker")).toHaveCount(0);
   await page.context().setOffline(false);
   await expect(page.locator(".live-state")).not.toHaveAttribute("data-service-state", "offline");
@@ -2383,8 +2428,8 @@ test("all failed radar tiles are unavailable rather than observed precipitation"
     await expect(page.locator('.map-notice[data-radar-availability="unavailable"]')).toContainText("none of the 4 Ireland tiles loaded");
     await expect(page.locator(".map-notice")).not.toContainText(/1 Met Éireann frame/);
   }
-  await expect(page.locator(".notable-signals .all-quiet")).toContainText("rain radar");
-  await expect(page.locator(".notable-signals")).not.toContainText("Provider checks completed");
+  await expect(page.locator(".signal-assessment")).toContainText("rain radar");
+  await expect(page.locator(".notable-signals")).toHaveCount(0);
 });
 
 test("partial radar tiles are labelled incomplete and never aggregate to live", async ({ page }, testInfo) => {
@@ -2405,8 +2450,8 @@ test("partial radar tiles are labelled incomplete and never aggregate to live", 
   if (testInfo.project.name === "desktop") {
     await expect(page.locator('.map-notice[data-radar-availability="partial"]')).toContainText("Displayed imagery is incomplete");
   }
-  await expect(page.locator(".notable-signals .all-quiet")).toContainText("rain radar");
-  await expect(page.locator(".notable-signals")).not.toContainText("Provider checks completed");
+  await expect(page.locator(".signal-assessment")).toContainText("rain radar");
+  await expect(page.locator(".notable-signals")).toHaveCount(0);
 });
 
 test("browser radar rendering masks the neutral no-data wedge and preserves precipitation colour", async ({ page }, testInfo) => {
@@ -2425,7 +2470,8 @@ test("browser radar rendering masks the neutral no-data wedge and preserves prec
     await expect(page.locator('.map-notice[data-radar-availability="live"]')).toContainText("all 4 Ireland tiles loaded");
   }
   await expect(page.locator('.radar-tile[data-radar-tile-state="ready"]')).toHaveCount(4);
-  await expect(page.locator(".notable-signals .all-quiet")).toContainText("Provider checks completed");
+  await expect(page.locator(".notable-signals")).toHaveCount(0);
+  await expect(page.locator(".signal-assessment")).toHaveCount(0);
   const pixels = await page.locator('.radar-tile[data-radar-tile-state="ready"]').first().evaluate(async (tile) => {
     const href = (tile as SVGImageElement).href.baseVal;
     const image = new Image();
@@ -2442,11 +2488,11 @@ test("browser radar rendering masks the neutral no-data wedge and preserves prec
   expect(pixels.slice(4)).toEqual([0, 128, 194, 255]);
 });
 
-test("mobile view keeps the layer rail clear of the signals board", async ({ page }, testInfo) => {
+test("mobile view keeps the layer rail clear of the what-matters board", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "mobile") testInfo.skip();
   await page.goto("/?place=cork&view=all");
   const rail = await page.locator(".section-rail").boundingBox();
-  const notable = await page.locator(".notable-now").boundingBox();
+  const notable = await page.locator(".what-matters-now").boundingBox();
   expect(rail).not.toBeNull();
   expect(notable).not.toBeNull();
   expect((rail?.y ?? 0) + (rail?.height ?? 0)).toBeLessThanOrEqual(notable?.y ?? 0);
@@ -2463,11 +2509,12 @@ test("mobile view keeps the layer rail clear of the signals board", async ({ pag
   expect(place).not.toBeNull();
   expect((place?.x ?? 0) + (place?.width ?? 0)).toBeLessThanOrEqual(viewport.clientWidth + 1);
 
-  const dataDetails = await page.getByRole("button", { name: "Data details" }).boundingBox();
+  const dataDetails = await page.locator("details.freshness-details > summary").boundingBox();
   expect(dataDetails).not.toBeNull();
   expect(dataDetails?.x ?? -1).toBeGreaterThanOrEqual(0);
   expect((dataDetails?.x ?? 0) + (dataDetails?.width ?? 0)).toBeLessThanOrEqual(viewport.clientWidth + 1);
 
+  await openActivityContext(page);
   await page.locator(".guidance-card").first().click();
   await page.waitForFunction(() => {
     const rail = document.querySelector(".section-rail")?.getBoundingClientRect();

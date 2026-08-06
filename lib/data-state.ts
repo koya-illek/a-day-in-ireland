@@ -111,7 +111,7 @@ export function getSelectedSourceAssessment(
   if (selectedLayers.has("iss")) add("ISS elements", availableContext(snapshot.contextStatus.iss) && Boolean(snapshot.iss));
   if (selectedLayers.has("satellite")) add("satellite imagery", availableContext(snapshot.contextStatus.satellite) && Boolean(snapshot.satellite));
   if (selectedLayers.has("earthquakes")) add("earthquake detections", availableContext(snapshot.contextStatus.earthquakes));
-  if (selectedLayers.has("transit")) add("public-transport positions", snapshot.transitStatus === "live" && snapshot.transit.length > 0);
+  if (selectedLayers.has("transit")) add("public-transport positions", ["live", "partial"].includes(snapshot.transitStatus) && snapshot.transit.length > 0);
 
   return {
     assessedSourceCount: checks.length,

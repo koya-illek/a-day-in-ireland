@@ -15,11 +15,13 @@ import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATI
 import { aggregateHourlyWeather } from "./weather-timeline.js";
 import {
   RIVER_ENDPOINT,
+  buildEirGridReading,
   latestEirGridValue,
   latestObservedAt,
   makeRiverProvenance,
   normalizeRiverReadings,
-  normalizeOfficialWeatherWarnings
+  normalizeOfficialWeatherWarnings,
+  readBoundedJsonResponse
 } from "../platform/river-source.js";
 
 const numberOrNull = (value: unknown): number | null => {
@@ -39,7 +41,10 @@ type StationResult = {
   history: Array<{ time: string; temperature: number | null; rainfall: number | null; windSpeed: number | null }>;
 };
 
-async function fetchStation(station: (typeof WEATHER_STATIONS)[number]): Promise<StationResult | null> {
+async function fetchStation(
+  station: (typeof WEATHER_STATIONS)[number],
+  captureNow = Date.now()
+): Promise<StationResult | null> {
   try {
     const response = await fetch(
       `https://prodapi.metweb.ie/observations/${station.endpoint}/today`,
@@ -47,25 +52,34 @@ async function fetchStation(station: (typeof WEATHER_STATIONS)[number]): Promise
     );
     if (!response.ok) return null;
     const rows = (await response.json()) as Array<Record<string, unknown>>;
-    const stationRows = rows.filter((row) => matchesWeatherStationIdentity(station, row.name));
+    const stationRows = rows.filter((row) => matchesWeatherStationIdentity(station, row.name))
+      .map((row) => ({
+        row,
+        observedAt: irelandTimestamp(String(row.date ?? ""), String(row.reportTime ?? ""), captureNow)
+      }))
+      .filter((item) => {
+        const observedAt = Date.parse(item.observedAt ?? "");
+        return Number.isFinite(observedAt) && observedAt <= captureNow;
+      })
+      .sort((first, second) => Date.parse(first.observedAt ?? "") - Date.parse(second.observedAt ?? ""));
     const latest = stationRows.at(-1);
     if (!latest) return null;
-    const observedAt = irelandTimestamp(String(latest.date ?? ""), String(latest.reportTime ?? ""));
+    const observedAt = latest.observedAt;
     return {
       reading: {
         id: station.id,
         name: station.name,
         latitude: station.latitude,
         longitude: station.longitude,
-        temperature: numberOrNull(latest.temperature),
-        rainfall: numberOrNull(latest.rainfall),
-        windSpeed: numberOrNull(latest.windSpeed),
-        windDirection: String(latest.cardinalWindDirection ?? "").trim(),
-        description: String(latest.weatherDescription ?? "Observation available"),
+        temperature: numberOrNull(latest.row.temperature),
+        rainfall: numberOrNull(latest.row.rainfall),
+        windSpeed: numberOrNull(latest.row.windSpeed),
+        windDirection: String(latest.row.cardinalWindDirection ?? "").trim(),
+        description: String(latest.row.weatherDescription ?? "Observation available"),
         observedAt,
-        fresh: isWeatherObservationFresh(observedAt)
+        fresh: isWeatherObservationFresh(observedAt, captureNow)
       },
-      history: stationRows.map((row) => ({
+      history: stationRows.map(({ row }) => ({
         time: String(row.reportTime ?? ""),
         temperature: numberOrNull(row.temperature),
         rainfall: numberOrNull(row.rainfall),
@@ -256,39 +270,55 @@ async function fetchRadar(): Promise<RadarFrame[]> {
 }
 
 type GridRow = { EffectiveTime?: unknown; FieldName?: unknown; Value?: unknown };
+const EIRGRID_BODY_LIMIT = 256_000;
 
-async function fetchGridRows(chartType: string, areas: string): Promise<GridRow[]> {
-  const day = new Date().toISOString().slice(0, 10);
+async function fetchGridRows(
+  chartType: string,
+  areas: string,
+  fetcher: typeof fetch = fetch,
+  now = Date.now()
+): Promise<GridRow[]> {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  const hour = `${day}T${parts.hour}`;
   const url = new URL("https://www.smartgriddashboard.com/api/chart/");
   url.search = new URLSearchParams({
     region: "ALL",
     chartType,
     dateRange: chartType === "frequency" ? "hour" : "day",
-    dateFrom: day,
-    dateTo: day,
+    dateFrom: chartType === "frequency" ? `${hour}:00:00` : day,
+    dateTo: chartType === "frequency" ? `${hour}:59:59` : day,
     areas
   }).toString();
-  const response = await fetch(url, {
+  const response = await fetcher(url, {
     next: { revalidate: chartType === "frequency" ? 60 : 300 },
     signal: AbortSignal.timeout(8000)
   });
   if (!response.ok) throw new Error(`EirGrid ${chartType} returned ${response.status}`);
-  const body = (await response.json()) as { Rows?: GridRow[] };
+  const { body } = await readBoundedJsonResponse(response, `eirgrid-${chartType}`, EIRGRID_BODY_LIMIT) as {
+    body: { Rows?: GridRow[] };
+    bodyBytes: number;
+  };
   return body.Rows ?? [];
 }
 
-async function fetchGrid(): Promise<GridReading | null> {
-  try {
-    const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] =
-      await Promise.all([
-        fetchGridRows("demand", "demandactual"),
-        fetchGridRows("generation", "generationactual"),
-        fetchGridRows("wind", "windactual"),
-        fetchGridRows("co2", "co2intensity,co2emission"),
-        fetchGridRows("frequency", "frequency"),
-        fetchGridRows("interconnection", "interconnection")
+export async function fetchGrid(
+  fetcher: typeof fetch = fetch,
+  now = Date.now()
+): Promise<{ reading: GridReading | null; status: "live" | "partial" | "unavailable" }> {
+    const settled = await Promise.allSettled([
+        fetchGridRows("demand", "demandactual", fetcher, now),
+        fetchGridRows("generation", "generationactual", fetcher, now),
+        fetchGridRows("wind", "windactual", fetcher, now),
+        fetchGridRows("co2", "co2intensity,co2emission", fetcher, now),
+        fetchGridRows("frequency", "frequency", fetcher, now),
+        fetchGridRows("interconnection", "interconnection", fetcher, now)
       ]);
-    const now = Date.now();
+    const rows = (index: number): GridRow[] => settled[index].status === "fulfilled" ? settled[index].value : [];
+    const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] = [0, 1, 2, 3, 4, 5].map(rows);
     const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
     const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
     const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
@@ -296,25 +326,13 @@ async function fetchGrid(): Promise<GridReading | null> {
     const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
     const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
     const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
-    const timestamps = [demand, generation, wind, intensity, emissions, frequency, interconnector]
-      .map((item) => item?.observedAt)
-      .filter((value): value is string => Boolean(value))
-      .sort();
-    if (!timestamps.length) return null;
-    return {
-      observedAt: timestamps[0] ?? null,
-      demandMW: demand?.value ?? null,
-      generationMW: generation?.value ?? null,
-      windMW: wind?.value ?? null,
-      windSharePercent: wind && demand && demand.value > 0 ? (wind.value / demand.value) * 100 : null,
-      carbonIntensity: intensity?.value ?? null,
-      carbonEmissions: emissions?.value ?? null,
-      frequencyHz: frequency?.value ?? null,
-      interconnectorMW: interconnector?.value ?? null
-    };
-  } catch {
-    return null;
-  }
+    const reading = buildEirGridReading({
+      demand, generation, wind, carbonIntensity: intensity, carbonEmissions: emissions,
+      frequency, interconnection: interconnector
+    });
+    if (!reading) return { reading: null, status: "unavailable" };
+    const metricCount = [demand, generation, wind, intensity, emissions, frequency, interconnector].filter(Boolean).length;
+    return { reading, status: metricCount === 7 ? "live" : "partial" };
 }
 
 const AIR_LOCATIONS = [
@@ -490,6 +508,7 @@ async function fetchRivers(): Promise<RiverReading[]> {
 }
 
 export async function getLiveSnapshot(): Promise<LiveSnapshot> {
+  const captureNow = Date.now();
   const [
     stationResults,
     fallbackStations,
@@ -502,14 +521,14 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     airQuality,
     aurora
   ] = await Promise.all([
-    Promise.all(WEATHER_STATIONS.map(fetchStation)),
+    Promise.all(WEATHER_STATIONS.map((station) => fetchStation(station, captureNow))),
     fetchLatestStationFallback(),
     fetchWarnings(),
     fetchMarine(),
     fetchTrains(),
     fetchRivers(),
     fetchRadar(),
-    fetchGrid(),
+    fetchGrid(fetch, captureNow),
     fetchAirQuality(),
     fetchAurora()
   ]);
@@ -531,7 +550,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
   const generatedAt = new Date().toISOString();
   return {
     generatedAt,
-    lastSuccessAt: [fresh.length, trains.length, rivers.length, marine.length, radar.length, grid, airQuality.length, aurora, warningResult.status === "live"]
+    lastSuccessAt: [fresh.length, trains.length, rivers.length, marine.length, radar.length, grid.reading, airQuality.length, aurora, warningResult.status === "live"]
       .some(Boolean) ? generatedAt : null,
     sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
     stations,
@@ -540,7 +559,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     trains,
     rivers,
     radar,
-    grid,
+    grid: grid.reading,
     airQuality,
     aurora,
     tides: [],
@@ -569,7 +588,7 @@ export async function getLiveSnapshot(): Promise<LiveSnapshot> {
     contextStatus: {
       marine: marine.length ? "live" : "unavailable",
       radar: radar.length ? "live" : "unavailable",
-      grid: grid ? "live" : "unavailable",
+      grid: grid.status,
       measuredAir: "unavailable",
       modelledAir: airQuality.length ? "live" : "unavailable",
       aurora: aurora ? "live" : "unavailable",

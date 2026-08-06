@@ -3,16 +3,22 @@ main = "platform/cloudflare-entry.js"
 compatibility_date = "2026-07-25"
 workers_dev = true
 
+[limits]
+cpu_ms = 1000
+subrequests = 100
+
 routes = [
   { pattern = "day.illek.ie", custom_domain = true }
 ]
 
 [triggers]
-crons = ["*/15 * * * *", "7 * * * *"]
+crons = ["*/15 * * * *"]
 
-# Provisioning handoff: production HISTORY_DB is intentionally absent until
-# `wrangler d1 create a-day-in-ireland-history` succeeds with D1 account scope.
-# Add the returned real database_id under [[d1_databases]] before deployment.
+[[d1_databases]]
+binding = "HISTORY_DB"
+database_name = "a-day-in-ireland-history"
+database_id = "499aadb0-e1be-470a-848b-1874fa71818a"
+migrations_dir = "migrations"
 
 [vars]
 EDGE_RUNTIME = "cloudflare"

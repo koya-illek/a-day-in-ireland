@@ -10,19 +10,286 @@ import {
   historyRange,
   mergeSourceStatus,
   previousDublinDayBounds,
+  pruneHistory,
   resolveHistory,
   rollupPeriod,
-  summarizeDailyRepresentatives
+  summarizeDailyRepresentatives,
+  writeSnapshot
 } from "../platform/history-store.js";
-import { buildHistoryCapture, handleHistoryRequest } from "../platform/history.js";
+import { buildHistoryCapture, captureHistory, handleHistoryRequest, maintainHistory } from "../platform/history.js";
 import {
   collectBathing,
+  collectEarthquakes,
   collectMarine,
+  collectModelledAir,
   collectTides,
+  collectWarnings,
   collectWeather,
+  eirGridDublinHourWindow,
   summarizeTransit
 } from "../platform/history-sources.js";
-import { historyLivingSnapshot } from "../platform/cloudflare-entry.js";
+import { historyLivingSnapshot, runPaidHistoryTick } from "../platform/cloudflare-entry.js";
+import { TestD1Database } from "./d1-test-helper.mjs";
+
+test("paid tick captures every quarter-hour and maintains only at minute 15", async () => {
+  const calls = [];
+  const capture = async (_env, scheduledTime, loaders) => {
+    calls.push(["capture", scheduledTime]);
+    assert.equal(typeof loaders.loadLiving, "function");
+    assert.equal(typeof loaders.loadTransit, "function");
+    return { skipped: false };
+  };
+  const maintain = async (_env, scheduledTime) => { calls.push(["maintain", scheduledTime]); };
+  const at00 = Date.parse("2026-08-05T12:00:00.000Z");
+  const at15 = Date.parse("2026-08-05T12:15:00.000Z");
+  await runPaidHistoryTick({}, at00, { capture, maintain });
+  await runPaidHistoryTick({}, at15, { capture, maintain });
+  assert.deepEqual(calls, [
+    ["capture", at00],
+    ["capture", at15],
+    ["maintain", at15]
+  ]);
+});
+
+test("paid scheduler stays fail-closed for Irish Rail when the legacy opt-in flag is set", async () => {
+  const originalFetch = globalThis.fetch;
+  let upstreamCalls = 0;
+  let riverCalls = 0;
+  const scheduledTime = Date.parse("2026-08-05T12:00:00.000Z");
+  const env = {
+    HISTORY_INCLUDE_IRISH_RAIL: "true",
+    RIVER_FEED: {
+      getByName() {
+        return { async fetch() {
+          riverCalls += 1;
+          return Response.json({ rivers: [{ id: "river-1" }], status: "live" });
+        } };
+      }
+    }
+  };
+  globalThis.fetch = async () => {
+    upstreamCalls += 1;
+    return new Response("unexpected upstream call", { status: 503 });
+  };
+  try {
+    await runPaidHistoryTick(env, scheduledTime, {
+      capture: async (_env, cutoff, loaders) => {
+        const living = await loaders.loadLiving(cutoff);
+        assert.deepEqual(living.trains, []);
+        assert.equal(living.sourceStatus.trains, "unavailable");
+        return { skipped: false };
+      },
+      maintain: async () => {}
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(riverCalls, 1);
+  assert.equal(upstreamCalls, 0);
+});
+
+test("paid minute-15 tick settles capture and maintenance independently and reports every failure", async () => {
+  const at15 = Date.parse("2026-08-05T12:15:00.000Z");
+  let maintenanceFinished = false;
+  await assert.rejects(
+    runPaidHistoryTick({}, at15, {
+      capture: async () => { throw new Error("capture-sentinel-failure"); },
+      maintain: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        maintenanceFinished = true;
+      }
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /capture/);
+      assert.deepEqual(error.failures.map((failure) => failure.operation), ["capture"]);
+      assert.match(String(error.errors[0]), /capture-sentinel-failure/);
+      return true;
+    }
+  );
+  assert.equal(maintenanceFinished, true);
+
+  let captureFinished = false;
+  await assert.rejects(
+    runPaidHistoryTick({}, at15, {
+      capture: async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        captureFinished = true;
+        return { skipped: false };
+      },
+      maintain: async () => { throw new Error("maintenance-sentinel-failure"); }
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /maintenance/);
+      assert.deepEqual(error.failures.map((failure) => failure.operation), ["maintenance"]);
+      assert.match(String(error.errors[0]), /maintenance-sentinel-failure/);
+      return true;
+    }
+  );
+  assert.equal(captureFinished, true);
+});
+
+test("direct paid capture claims a bucket once and passes its cutoff to both coordinator loaders", async (t) => {
+  const db = new TestD1Database();
+  t.after(() => db.close());
+  db.exec(await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8"));
+  const cutoff = Date.parse("2026-08-05T12:15:00.000Z");
+  const loaderCutoffs = [];
+  const loaders = {
+    scoped: { sources: {}, gaps: [] },
+    loadLiving: async (value) => {
+      loaderCutoffs.push(["living", value]);
+      return { trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" }, sourceProvenance: {} };
+    },
+    loadTransit: async (value) => {
+      loaderCutoffs.push(["transit", value]);
+      return { transit: [], transitStatus: "unavailable", aggregate: null, latestObservedAt: null };
+    }
+  };
+  const results = await Promise.all([
+    captureHistory({ HISTORY_DB: db, NTA_API_KEY: "configured" }, cutoff, loaders),
+    captureHistory({ HISTORY_DB: db, NTA_API_KEY: "configured" }, cutoff, loaders)
+  ]);
+  assert.equal(results.filter((result) => result.skipped === false).length, 1);
+  assert.deepEqual(results.find((result) => result.skipped), {
+    skipped: true,
+    reason: "duplicate-bucket",
+    bucketStartMs: cutoff
+  });
+  assert.deepEqual(loaderCutoffs, [["living", cutoff], ["transit", cutoff]]);
+  assert.equal(Number(db.sqlite.prepare("SELECT COUNT(*) AS count FROM history_snapshots").get().count), 1);
+  const runs = db.sqlite.prepare(`SELECT outcome, completed_at_ms FROM history_collection_runs
+    WHERE bucket_start_ms = ?`).all(cutoff);
+  assert.equal(runs.length, 1);
+  assert.notEqual(runs[0].outcome, "running");
+  assert.ok(Number.isFinite(Number(runs[0].completed_at_ms)));
+});
+
+test("migration v1 alone supports direct capture, hourly and daily maintenance, and pruning", async (t) => {
+  const db = new TestD1Database();
+  t.after(() => db.close());
+  db.exec(await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8"));
+  const capturedAt = Date.parse("2026-08-05T12:00:00.000Z");
+  const loaders = {
+    scoped: { sources: {}, gaps: [] },
+    loadLiving: async () => ({
+      trains: [], rivers: [],
+      sourceStatus: { trains: "unavailable", rivers: "unavailable" },
+      sourceProvenance: {}
+    }),
+    loadTransit: async () => ({
+      transit: [], transitStatus: "unavailable", aggregate: null, latestObservedAt: null
+    })
+  };
+  await captureHistory({ HISTORY_DB: db, NTA_API_KEY: "configured" }, capturedAt, loaders);
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T13:15:00.000Z"));
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T23:15:00.000Z"));
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-06T02:15:00.000Z"));
+  const rows = db.sqlite.prepare(`SELECT resolution_minutes, COUNT(*) AS count
+    FROM history_snapshots GROUP BY resolution_minutes ORDER BY resolution_minutes`).all();
+  assert.deepEqual(rows.map((row) => [Number(row.resolution_minutes), Number(row.count)]), [
+    [15, 1], [60, 3], [1440, 1]
+  ]);
+  assert.equal(Number(db.sqlite.prepare("SELECT COUNT(*) AS count FROM history_collection_runs").get().count), 1);
+
+  const insertFixture = async (resolutionMinutes, bucketStartMs, periodEndMs, label) => {
+    const row = await encodeSnapshotRow({
+      resolutionMinutes,
+      bucketStartMs,
+      periodEndMs,
+      representativeAtMs: resolutionMinutes === 1440 ? null : bucketStartMs,
+      collectedAtMs: periodEndMs,
+      payload: { label },
+      expectedSamples: 1,
+      collectedSamples: 1,
+      sourceStatus: {},
+      gaps: []
+    });
+    await writeSnapshot(db, row);
+  };
+  const pruneAt = Date.parse("2026-08-06T03:15:00.000Z");
+  const rolledRaw = Date.parse("2026-06-01T12:15:00.000Z");
+  const rolledRawHour = Date.parse("2026-06-01T12:00:00.000Z");
+  const unrolledRaw = Date.parse("2026-06-02T12:15:00.000Z");
+  const rolledHour = Date.parse("2025-07-01T12:00:00.000Z");
+  const unrolledHour = Date.parse("2025-07-03T12:00:00.000Z");
+  const coveringDay = Date.parse("2025-07-01T00:00:00.000Z");
+  await insertFixture(15, rolledRaw, rolledRaw + 15 * 60_000, "rolled-raw");
+  await insertFixture(60, rolledRawHour, rolledRawHour + 60 * 60_000, "rolled-raw-hour");
+  await insertFixture(15, unrolledRaw, unrolledRaw + 15 * 60_000, "unrolled-raw");
+  await insertFixture(60, rolledHour, rolledHour + 60 * 60_000, "rolled-hour");
+  await insertFixture(60, unrolledHour, unrolledHour + 60 * 60_000, "unrolled-hour");
+  await insertFixture(1440, coveringDay, coveringDay + 24 * 60 * 60_000, "covering-day");
+  await pruneHistory(db, pruneAt);
+  const retainedFixtureTimes = new Set(db.sqlite.prepare(`SELECT resolution_minutes, bucket_start_ms
+    FROM history_snapshots`).all().map((row) => `${row.resolution_minutes}:${row.bucket_start_ms}`));
+  assert.equal(retainedFixtureTimes.has(`15:${rolledRaw}`), false, "rolled expired raw data is pruned");
+  assert.equal(retainedFixtureTimes.has(`15:${unrolledRaw}`), true, "unrolled expired raw data is preserved");
+  assert.equal(retainedFixtureTimes.has(`60:${rolledHour}`), false, "rolled expired hourly data is pruned");
+  assert.equal(retainedFixtureTimes.has(`60:${unrolledHour}`), true, "unrolled expired hourly data is preserved");
+  assert.equal(retainedFixtureTimes.has(`60:${rolledRawHour}`), true, "coarser raw coverage is preserved");
+  assert.equal(retainedFixtureTimes.has(`1440:${coveringDay}`), true, "daily coverage is preserved");
+});
+
+test("pruning requires a complete rollup collected after every finer snapshot", async (t) => {
+  const db = new TestD1Database();
+  t.after(() => db.close());
+  db.exec(await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8"));
+
+  const insert = async ({ resolutionMinutes, bucketStartMs, periodEndMs, collectedAtMs, expectedSamples, collectedSamples }) => {
+    await writeSnapshot(db, await encodeSnapshotRow({
+      resolutionMinutes,
+      bucketStartMs,
+      periodEndMs,
+      representativeAtMs: resolutionMinutes === 1440 ? null : bucketStartMs,
+      collectedAtMs,
+      payload: { marker: `${resolutionMinutes}:${bucketStartMs}` },
+      expectedSamples,
+      collectedSamples,
+      sourceStatus: {},
+      gaps: []
+    }));
+  };
+
+  const hour = 60 * 60_000;
+  const day = 24 * hour;
+  const incompleteRaw = Date.parse("2027-06-01T12:15:00.000Z");
+  const staleRaw = Date.parse("2027-06-02T12:15:00.000Z");
+  const coveredRaw = Date.parse("2027-06-03T12:15:00.000Z");
+  for (const [raw, rawCollectedAt, hourlyCollectedAt, hourlySamples] of [
+    [incompleteRaw, 100, 200, 1],
+    [staleRaw, 300, 200, 4],
+    [coveredRaw, 200, 300, 4]
+  ]) {
+    const hourStart = raw - (raw % hour);
+    await insert({ resolutionMinutes: 15, bucketStartMs: raw, periodEndMs: raw + 15 * 60_000, collectedAtMs: rawCollectedAt, expectedSamples: 1, collectedSamples: 1 });
+    await insert({ resolutionMinutes: 60, bucketStartMs: hourStart, periodEndMs: hourStart + hour, collectedAtMs: hourlyCollectedAt, expectedSamples: 4, collectedSamples: hourlySamples });
+  }
+
+  const incompleteHour = Date.parse("2026-07-01T12:00:00.000Z");
+  const staleHour = Date.parse("2026-07-02T12:00:00.000Z");
+  const coveredHour = Date.parse("2026-07-03T12:00:00.000Z");
+  for (const [hourStart, hourlyCollectedAt, dailyCollectedAt, dailySamples] of [
+    [incompleteHour, 100, 200, 23],
+    [staleHour, 300, 200, 24],
+    [coveredHour, 200, 300, 24]
+  ]) {
+    const dayStart = Date.parse(new Date(hourStart).toISOString().slice(0, 10) + "T00:00:00.000Z");
+    await insert({ resolutionMinutes: 60, bucketStartMs: hourStart, periodEndMs: hourStart + hour, collectedAtMs: hourlyCollectedAt, expectedSamples: 4, collectedSamples: 4 });
+    await insert({ resolutionMinutes: 1440, bucketStartMs: dayStart, periodEndMs: dayStart + day, collectedAtMs: dailyCollectedAt, expectedSamples: 24, collectedSamples: dailySamples });
+  }
+
+  await pruneHistory(db, Date.parse("2027-08-06T03:15:00.000Z"));
+  const retained = new Set(db.sqlite.prepare("SELECT resolution_minutes, bucket_start_ms FROM history_snapshots")
+    .all().map((row) => `${row.resolution_minutes}:${row.bucket_start_ms}`));
+  assert.equal(retained.has(`15:${incompleteRaw}`), true, "an incomplete hourly rollup cannot prune raw evidence");
+  assert.equal(retained.has(`15:${staleRaw}`), true, "an hourly rollup older than its raw input cannot prune it");
+  assert.equal(retained.has(`15:${coveredRaw}`), false, "a complete newer hourly rollup may prune raw evidence");
+  assert.equal(retained.has(`60:${incompleteHour}`), true, "an incomplete daily rollup cannot prune hourly evidence");
+  assert.equal(retained.has(`60:${staleHour}`), true, "a daily rollup older than its hourly input cannot prune it");
+  assert.equal(retained.has(`60:${coveredHour}`), false, "a complete newer daily rollup may prune hourly evidence");
+});
 
 test("history payload encoding is canonical, deterministic, and gzip round-trips", async () => {
   const first = { z: 3, nested: { b: 2, a: 1 }, list: [{ y: 2, x: 1 }] };
@@ -43,6 +310,43 @@ test("history payload encoding is canonical, deterministic, and gzip round-trips
   assert.equal(rowFirst.contentSha256, rowSecond.contentSha256);
   assert.ok(rowFirst.payloadBytes > 0);
   assert.equal(rowFirst.codec, "gzip-json-v1");
+});
+
+test("history compression and decompression consume transform streams without backpressure deadlock", async () => {
+  const withTimeout = async (operation, label) => {
+    let timer;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`${label}-timeout`)), 5_000);
+        })
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  let state = 0x12345678;
+  const noise = Array.from({ length: 140_000 }, () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return String.fromCharCode(32 + state % 95);
+  }).join("");
+  const incompressible = { noise };
+  const encodedNoise = await withTimeout(gzipJson(incompressible), "incompressible-compression");
+  assert.ok(encodedNoise.uncompressedBytes > 100_000);
+  assert.ok(encodedNoise.compressed.byteLength > 65_536, "fixture must exceed the old transform backpressure threshold");
+  assert.deepEqual(
+    await withTimeout(gunzipJson(encodedNoise.compressed), "incompressible-decompression"),
+    incompressible
+  );
+
+  const expanding = { repeated: "x".repeat(250_000) };
+  const encodedExpanding = await withTimeout(gzipJson(expanding), "compressible-compression");
+  assert.ok(encodedExpanding.compressed.byteLength < 65_536);
+  assert.deepEqual(
+    await withTimeout(gunzipJson(encodedExpanding.compressed), "high-expansion-decompression"),
+    expanding
+  );
 });
 
 test("NTA history retains only normalized route aggregates and attribution", () => {
@@ -136,6 +440,121 @@ test("weather is partial when any configured station is absent", async () => {
   assert.equal(result.envelope.status, "partial");
   assert.equal(result.envelope.data.summary.reporting, 8);
   assert.ok(result.gaps.some((item) => item.source === "weather" && item.reason === "partial-provider-response"));
+});
+
+test("late history capture excludes post-cutoff warning updates but keeps future validity intervals", async () => {
+  const cutoff = Date.parse("2026-08-05T12:00:00.000Z");
+  const warning = (id, issued, updated, onset = "2026-08-05T10:00:00.000Z") => ({
+    id,
+    capId: `cap-${id}`,
+    type: "Rain",
+    severity: "Moderate",
+    certainty: "Likely",
+    regions: ["EI27"],
+    status: "Warning",
+    issued,
+    updated,
+    level: "Yellow",
+    headline: id,
+    description: `${id} description`,
+    onset,
+    expiry: "2026-08-06T12:00:00.000Z"
+  });
+  const result = await collectWarnings(async () => Response.json([
+    warning("before-cutoff", "2026-08-05T10:00:00.000Z", "2026-08-05T11:30:00.000Z"),
+    warning("updated-after-cutoff", "2026-08-05T10:00:00.000Z", "2026-08-05T12:00:00.001Z"),
+    warning("issued-after-cutoff", "2026-08-05T12:00:00.001Z", "2026-08-05T12:00:00.001Z", "2026-08-05T13:00:00.000Z")
+  ]), cutoff);
+  assert.equal(result.envelope.status, "partial");
+  assert.equal(result.envelope.errorCode, "post-cutoff-update");
+  assert.deepEqual(result.envelope.data.map((item) => item.id), ["before-cutoff"]);
+  assert.equal(result.envelope.data[0].expiry, "2026-08-06T12:00:00.000Z");
+  assert.ok(Date.parse(result.envelope.data[0].issued) <= cutoff);
+  assert.ok(Date.parse(result.envelope.data[0].updated) <= cutoff);
+  assert.equal(result.gaps.length, 1);
+  assert.equal(result.gaps[0].reason, "post-cutoff-update");
+  assert.match(result.gaps[0].detail, /^1 warning record was updated/);
+});
+
+test("late history capture excludes post-cutoff bathing updates but keeps active notices with future ends", async () => {
+  const cutoff = Date.parse("2026-08-05T12:00:00.000Z");
+  const alert = (incidentId, beachId, startedAt, updatedAt) => ({
+    incident_id: incidentId,
+    beach_id: beachId,
+    beach_name: `Beach ${incidentId}`,
+    county_name: "Cork",
+    incident_start_date: startedAt,
+    incident_end_date: "2026-08-06T12:00:00.000Z",
+    last_updated: updatedAt,
+    bathing_restriction_type: "Advice",
+    incident_description: `${incidentId} description`
+  });
+  const fetcher = async (input) => String(input).includes("/alerts")
+    ? Response.json({ list: [
+        alert("before-cutoff", "beach-before", "2026-08-05T10:00:00.000Z", "2026-08-05T11:30:00.000Z"),
+        alert("updated-after-cutoff", "beach-updated", "2026-08-05T10:00:00.000Z", "2026-08-05T12:00:00.001Z"),
+        alert("started-after-cutoff", "beach-future", "2026-08-05T12:00:00.001Z", "2026-08-05T12:00:00.001Z")
+      ] })
+    : Response.json({ list: [
+        { beach_id: "beach-before", latitude: 51.9, longitude: -8.5 },
+        { beach_id: "beach-updated", latitude: 52.0, longitude: -8.4 },
+        { beach_id: "beach-future", latitude: 52.1, longitude: -8.3 }
+      ] });
+  const result = await collectBathing(fetcher, cutoff);
+  assert.equal(result.envelope.status, "partial");
+  assert.deepEqual(result.envelope.data.map((item) => item.id), ["bathing-before-cutoff"]);
+  assert.equal(result.envelope.data[0].endsAt, "2026-08-06T12:00:00.000Z");
+  assert.ok(Date.parse(result.envelope.data[0].startedAt) <= cutoff);
+  assert.ok(Date.parse(result.envelope.data[0].updatedAt) <= cutoff);
+  assert.equal(result.gaps.length, 1);
+  assert.equal(result.gaps[0].reason, "post-cutoff-update");
+  assert.match(result.gaps[0].detail, /^1 active bathing notice was updated/);
+});
+
+test("earthquake history filters by cutoff before capping and reports truncation", async () => {
+  const cutoff = Date.parse("2026-08-05T12:00:00.000Z");
+  const feature = (id, observedAt) => ({
+    id,
+    geometry: { coordinates: [-8, 53, 5] },
+    properties: { mag: 1.2, time: observedAt, place: id, url: `https://example.test/${id}` }
+  });
+  const postCutoff = Array.from({ length: 30 }, (_, index) => feature(`future-${index}`, cutoff + index + 1));
+  const older = feature("valid-before-cutoff", cutoff - 1_000);
+  const filtered = await collectEarthquakes(async () => Response.json({ features: [...postCutoff, older] }), cutoff);
+  assert.equal(filtered.envelope.status, "live");
+  assert.deepEqual(filtered.envelope.data.map((item) => item.id), ["valid-before-cutoff"]);
+
+  const valid = Array.from({ length: 31 }, (_, index) => feature(`valid-${index}`, cutoff - index * 1_000));
+  const capped = await collectEarthquakes(async () => Response.json({ features: valid }), cutoff);
+  assert.equal(capped.envelope.status, "partial");
+  assert.equal(capped.envelope.errorCode, "result-cap");
+  assert.equal(capped.envelope.data.length, 30);
+  assert.ok(capped.gaps.some((item) => item.reason === "result-cap"));
+});
+
+test("modelled-air history status reflects all seven configured locations", async () => {
+  const now = Date.parse("2026-08-05T12:00:00.000Z");
+  const current = { time: "2026-08-05T11:00", european_aqi: 20 };
+  const partial = await collectModelledAir(async () => Response.json([
+    { current }, {}, {}, {}, {}, {}, {}
+  ]), now);
+  assert.equal(partial.envelope.status, "partial");
+  assert.equal(partial.envelope.data.length, 1);
+  assert.equal(partial.gaps[0].reason, "partial-provider-response");
+  assert.match(partial.gaps[0].detail, /^6 of 7/);
+
+  const live = await collectModelledAir(async () => Response.json(
+    Array.from({ length: 7 }, () => ({ current }))
+  ), now);
+  assert.equal(live.envelope.status, "live");
+  assert.equal(live.envelope.data.length, 7);
+  assert.deepEqual(live.gaps, []);
+
+  const unavailable = await collectModelledAir(async () => Response.json(
+    Array.from({ length: 7 }, () => ({}))
+  ), now);
+  assert.equal(unavailable.envelope.status, "unavailable");
+  assert.equal(unavailable.envelope.data, null);
 });
 
 test("marine history is explicitly partial while coastal sources are excluded", async () => {
@@ -234,6 +653,120 @@ test("default history living loader does not call Irish Rail", async () => {
   assert.deepEqual(result.trains, []);
   assert.equal(result.sourceStatus.trains, "unavailable");
   assert.deepEqual(result.rivers, [{ id: "river-1" }]);
+});
+
+test("migration-v1 capture and every raw/hour/day rollup retain movement aggregates without private entities", async (t) => {
+  const db = new TestD1Database();
+  t.after(() => db.close());
+  db.exec(await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8"));
+  const capturedAt = Date.parse("2026-08-04T23:00:00.000Z");
+  const ntaSentinel = {
+    id: "NTA-PRIVATE-ID-7f56",
+    route: "2 NX c a",
+    label: "NTA-PRIVATE-LABEL-7f56",
+    latitude: 53.123456789,
+    longitude: -7.987654321,
+    observedAt: new Date(capturedAt - 30_000).toISOString()
+  };
+  const railSentinel = {
+    id: "RAIL-PRIVATE-ID-9a42",
+    direction: "RAIL-PRIVATE-DIRECTION-9a42",
+    message: "RAIL-PRIVATE-MESSAGE-9a42",
+    latitude: 52.246813579,
+    longitude: -8.135792468,
+    status: "running",
+    observedAt: new Date(capturedAt - 60_000).toISOString()
+  };
+  await captureHistory({
+    HISTORY_DB: db,
+    NTA_API_KEY: "configured",
+    HISTORY_INCLUDE_IRISH_RAIL: "true"
+  }, capturedAt, {
+    scoped: { sources: {}, gaps: [] },
+    loadLiving: async () => ({
+      trains: [railSentinel],
+      rivers: [],
+      sourceStatus: { trains: "live", rivers: "unavailable" },
+      sourceProvenance: {
+        trains: {
+          provider: "Irish Rail",
+          endpoint: "test",
+          status: "live",
+          fetchedAt: new Date(capturedAt).toISOString(),
+          latestObservedAt: railSentinel.observedAt,
+          fallback: null
+        }
+      }
+    }),
+    loadTransit: async () => ({ transit: [ntaSentinel], transitStatus: "live" })
+  });
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T00:15:00.000Z"));
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T23:15:00.000Z"));
+
+  const rows = db.sqlite.prepare(`SELECT resolution_minutes, payload
+    FROM history_snapshots ORDER BY resolution_minutes, bucket_start_ms`).all();
+  assert.deepEqual([...new Set(rows.map((row) => Number(row.resolution_minutes)))], [15, 60, 1440]);
+  const forbiddenScalars = new Set([
+    ntaSentinel.id,
+    ntaSentinel.label,
+    ntaSentinel.latitude,
+    ntaSentinel.longitude,
+    railSentinel.id,
+    railSentinel.direction,
+    railSentinel.message,
+    railSentinel.latitude,
+    railSentinel.longitude
+  ]);
+  const scalarValues = (value, result = []) => {
+    if (Array.isArray(value)) value.forEach((item) => scalarValues(item, result));
+    else if (value && typeof value === "object") Object.values(value).forEach((item) => scalarValues(item, result));
+    else result.push(value);
+    return result;
+  };
+
+  const decoded = [];
+  for (const row of rows) {
+    const payload = await gunzipJson(row.payload);
+    decoded.push([Number(row.resolution_minutes), payload]);
+    assert.deepEqual(payload.snapshot?.trains ?? [], []);
+    assert.deepEqual(payload.snapshot?.transit ?? [], []);
+    const rail = payload.movementSummary?.rail;
+    if (rail) {
+      assert.deepEqual(Object.keys(rail).sort(), ["capturedAt", "notStarted", "running", "status", "total"]);
+    }
+    const transit = payload.movementSummary?.transit;
+    if (transit) {
+      assert.deepEqual(Object.keys(transit).sort(), [
+        "attribution", "byRoute", "capturedAt", "mappedRouteVehicles", "routes", "status", "total",
+        "unmappedRouteVehicles", "vehicles"
+      ]);
+      assert.ok(transit.byRoute.every((item) =>
+        Object.keys(item).sort().join(",") === "count,route" && Number.isInteger(item.count)
+      ));
+    }
+    for (const value of scalarValues(payload)) {
+      assert.equal(forbiddenScalars.has(value), false, `private scalar leaked into ${row.resolution_minutes}-minute row`);
+    }
+  }
+
+  const raw = decoded.find(([resolution]) => resolution === 15)[1];
+  assert.equal(raw.movementSummary.rail, null);
+  assert.equal(raw.movementSummary.transit.vehicles, 1);
+  assert.deepEqual(raw.movementSummary.transit.byRoute, [{ route: "NX", count: 1 }]);
+  const day = decoded.find(([resolution]) => resolution === 1440)[1];
+  assert.equal(day.snapshot, null);
+  assert.deepEqual(day.movementSummary, { rail: null, transit: null });
+});
+
+test("EirGrid frequency history queries use the Europe/Dublin wall-clock hour", () => {
+  assert.deepEqual(eirGridDublinHourWindow(Date.parse("2026-08-02T23:30:00.000Z")), {
+    dateFrom: "2026-08-03T00:00:00",
+    dateTo: "2026-08-03T00:59:59"
+  });
+  assert.deepEqual(eirGridDublinHourWindow(Date.parse("2026-01-02T23:30:00.000Z")), {
+    dateFrom: "2026-01-02T23:00:00",
+    dateTo: "2026-01-02T23:59:59"
+  });
 });
 
 const effectiveAt = (row) => row.resolution_minutes === 1440
@@ -588,16 +1121,23 @@ test("history API isolates a missing binding and rejects invalid or future times
   });
 });
 
-test("migration and Wrangler configs enforce aggregate BLOB storage and safe provisioning", async () => {
+test("migration and Wrangler configs enforce aggregate BLOB storage and production binding", async () => {
   const migration = await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8");
+  const historyStore = await readFile(new URL("../platform/history-store.js", import.meta.url), "utf8");
   const production = await readFile(new URL("../wrangler.api.toml", import.meta.url), "utf8");
   const local = await readFile(new URL("../wrangler.history.local.toml", import.meta.url), "utf8");
   assert.match(migration, /payload BLOB NOT NULL/);
   assert.match(migration, /codec TEXT NOT NULL/);
   assert.match(migration, /representative_at_ms INTEGER/);
   assert.doesNotMatch(migration, /history_observations/);
-  assert.match(production, /crons = \["\*\/15 \* \* \* \*", "7 \* \* \* \*"\]/);
-  assert.doesNotMatch(production, /^\s*\[\[d1_databases\]\]/m);
+  assert.doesNotMatch(historyStore, /history_workflow_runs|materialized_current|workflow_step_reservations|history_rollup_samples|history_rollup_repairs|bathing_index_workflow_runs/);
+  assert.match(production, /main = "platform\/cloudflare-entry\.js"/);
+  assert.match(production, /crons = \["\*\/15 \* \* \* \*"\]/);
+  assert.match(production, /\[limits\][\s\S]*cpu_ms = 1000[\s\S]*subrequests = 100/);
+  assert.doesNotMatch(production, /\[\[workflows\]\]|MATERIALIZED_READS|SOL_HIGH_WORKFLOW/);
+  assert.match(production, /binding = "HISTORY_DB"/);
+  assert.match(production, /database_name = "a-day-in-ireland-history"/);
+  assert.match(production, /database_id = "[0-9a-f-]{36}"/);
   assert.match(local, /binding = "HISTORY_DB"/);
   assert.match(local, /database_name = "a-day-in-ireland-history-local"/);
 });

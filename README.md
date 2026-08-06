@@ -31,11 +31,11 @@ The Cloudflare production architecture uses:
 - A SQLite-backed Durable Object as the single global NTA refresh coordinator.
 - A 65-second upstream refresh floor and 60-second edge response cache, satisfying the NTA token limit across Cloudflare locations.
 - Independent weather, living and context state merges plus two-attempt browser refreshes prevent a single slow upstream from clearing unrelated healthy layers. Failed providers are marked unavailable instead of being kept live by a stale whole-response cache.
-- Browser-side EEA monitoring-station retrieval, avoiding heavy CSV processing within the Workers Free CPU allowance.
+- Browser-side EEA monitoring-station retrieval, keeping heavy CSV processing outside the Worker context endpoint.
 - Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error.
 - The non-Cloudflare server adapter uses the hosted OpenAI river bridge for that same OPW fallback; treat that bridge as an operational dependency rather than an origin of truth for the data.
 
-The account’s Workers Free plan automatically enforces its 10 ms CPU ceiling; Cloudflare does not accept an explicit CPU override on that plan. Requests on the custom hostname pass through the Worker, while immutable Next.js assets are cached for a year at the edge and HTML is cached for five minutes. The direct `pages.dev` origin remains available as a fallback.
+The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while immutable Next.js assets are cached for a year at the edge and HTML is cached for five minutes. The direct `pages.dev` origin remains available as a fallback.
 
 The Pages origin is configured as `PAGES_ORIGIN` in `wrangler.api.toml` so changing the Pages project does not require editing the Worker source.
 

@@ -957,7 +957,7 @@ function DetailCard({
     >
       <button ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>
       {stack && stack.items.length <= MOVEMENT_DRILL_THRESHOLD && (
-        <div className="detail-stack-navigation" aria-label="Overlapping map items">
+        <div className="detail-stack-navigation" role="navigation" aria-label="Overlapping map items">
           <button
             onClick={() => onStackChange((stack.index - 1 + stack.items.length) % stack.items.length)}
             aria-label="Previous item at this location"
@@ -1546,7 +1546,7 @@ function HistoryControls({
           </div>
           {comparison.status === "error" && <p className="history-error" role="alert">Comparison unavailable. {comparison.error}</p>}
           {comparison.status === "ready" && history.envelope && comparison.envelope?.resolvedAt && (
-            <div className="history-comparison" aria-label="Selected historical conditions compared with the latest stored snapshot">
+            <div className="history-comparison" role="region" aria-label="Selected historical conditions compared with the latest stored snapshot">
               <div className="history-comparison-heading"><b>Selected · {history.envelope.resolvedAt ? formatIrelandHistoryTime(history.envelope.resolvedAt) : "Unavailable"}</b><b>Latest stored · {formatIrelandHistoryTime(comparison.envelope.resolvedAt)}</b></div>
               <dl>
                 {historyMetricRows(history.envelope, comparison.envelope).map((row) => (
@@ -1998,9 +1998,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     };
 
     panel.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
     return () => {
       panel.removeEventListener("keydown", handleKeyDown);
       if (opener?.isConnected) opener.focus();
+      document.body.style.overflow = "";
     };
   }, [panelOpen]);
 
@@ -2383,8 +2385,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const largestEarthquake = [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null;
   const visibleIssPass = snapshot.iss?.passes.find((pass) => pass.visible) ?? null;
   const showRainNotable = layers.has("rain");
-  const showRailNotable = layers.has("trains");
-  const showGridNotable = layers.has("grid");
   const showBathingNotables = layers.has("bathing");
   const showTideNotable = layers.has("tides");
   const showEarthquakeNotable = layers.has("earthquakes");
@@ -2479,9 +2479,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const trainsLive = online && snapshot.sourceProvenance?.trains.status === "live";
   const trainsCached = snapshot.sourceProvenance?.trains.status === "stale" || (!online && snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0);
   const riversLive = online && snapshot.sourceProvenance?.rivers.status === "live";
-  const riversCached = snapshot.sourceProvenance?.rivers.status === "stale" || (!online && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback") && snapshot.rivers.length > 0);
+  const riversPartial = online && snapshot.sourceProvenance?.rivers.status === "partial" && snapshot.rivers.length > 0;
+  const riversCached = snapshot.sourceProvenance?.rivers.status === "stale" || (!online && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback" || snapshot.sourceProvenance?.rivers.status === "partial") && snapshot.rivers.length > 0);
   const riversFallback = online && snapshot.sourceProvenance?.rivers.status === "fallback";
-  const riversAvailable = riversLive || riversCached || riversFallback;
+  const riversAvailable = riversLive || riversPartial || riversCached || riversFallback;
   const weatherNotableCurrent = online && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && !weatherStale;
   const railNotableCurrent = trainsLive && !transitStale;
   const gridNotableCurrent = online && snapshot.contextStatus.grid === "live";
@@ -2495,16 +2496,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const issNotableCurrent = online && snapshot.contextStatus.iss === "live";
   const hasVisibleNotable =
     Boolean(showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5) ||
-    Boolean(showRailNotable && railNotableCurrent && runningTrainCount !== null && runningTrainCount > 0) ||
-    Boolean(showGridNotable && gridNotableCurrent && snapshot.grid) ||
     Boolean(showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.length) ||
     Boolean(showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15) ||
     Boolean(showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake) ||
     Boolean(showIssNotable && issNotableCurrent && visibleIssPass);
   const notableItemCount =
     (showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 ? 1 : 0) +
-    (showRailNotable && railNotableCurrent && runningTrainCount !== null && runningTrainCount > 0 ? 1 : 0) +
-    (showGridNotable && gridNotableCurrent && snapshot.grid ? 1 : 0) +
     (showBathingNotables && bathingNotableCurrent ? snapshot.bathingAlerts.length : 0) +
     (showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
     (showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake ? 1 : 0) +
@@ -3016,9 +3013,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             : "Iarnród Éireann positions are unavailable, so this view cannot determine how many trains are currently moving."
       },
       rivers: {
-        title: riversLive && !riverDataStale ? "Fresh river readings" : riversCached ? "Cached river readings" : riversFallback ? "Fallback river readings" : "River readings unavailable",
+        title: riversLive && !riverDataStale ? "Fresh river readings" : riversPartial ? "Partial river readings" : riversCached ? "Cached river readings" : riversFallback ? "Fallback river readings" : "River readings unavailable",
         detail: riversLive && !riverDataStale
           ? riverStationCount === null ? "OPW gauge coverage is unavailable; no gauge count is inferred." : `${riverStationCount} OPW gauges observed within the last three hours. These are local levels, not flood warnings.`
+          : riversPartial
+            ? `${snapshot.rivers.length} recent readings · partial coverage`
           : riversCached
             ? riverStationCount === null ? "Saved gauge coverage is unavailable." : `${riverStationCount} gauge readings are retained from the last successful refresh; they are not current levels.`
             : riversFallback
@@ -3148,7 +3147,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
         ?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
     });
-  }, [activeWarning, coastalObservatoryCount, lastSuccessLabel, now, online, prefersReducedMotion, railNotableCurrent, reportingCount, riverDataStale, riverStationCount, riversCached, riversFallback, riversLive, runningTrainCount, snapshot, trainsCached, warningsUnavailable, weatherBuoyCount, weatherNotableCurrent]);
+  }, [activeWarning, coastalObservatoryCount, lastSuccessLabel, now, online, prefersReducedMotion, railNotableCurrent, reportingCount, riverDataStale, riverStationCount, riversCached, riversFallback, riversLive, riversPartial, runningTrainCount, snapshot, trainsCached, warningsUnavailable, weatherBuoyCount, weatherNotableCurrent]);
 
   const toggleLayer = useCallback((layer: Layer) => {
     rememberVisibleMapAnchor();
@@ -3354,7 +3353,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <p><span>Warmest</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? `${snapshot.summary.warmest?.temperature ?? "—"}°` : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : weatherNotableCurrent ? `${snapshot.summary.warmest?.name ?? "No usable report"}${timeMode === "past" ? " · at capture" : ""}` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? "Weather summary not retained" : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
             <p><span>Strongest wind</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? snapshot.summary.windiest?.windSpeed ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : weatherNotableCurrent ? `km/h · ${snapshot.summary.windiest?.name ?? "No usable report"}${timeMode === "past" ? " · at capture" : ""}` : timeMode === "past" ? historyGapForFocus(historyGaps, "wind")?.detail ?? "Wind summary not retained" : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
             <p><span>{timeMode === "past" ? "Rail services" : "Trains moving"}</span><strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "—" : trainsLive || trainsCached ? runningTrainCount ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored rail coverage" : "Connecting" : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "Retained aggregate at capture" : historyGapForFocus(historyGaps, "trains")?.detail ?? "Not retained — permission pending" : trainsLive ? runningTrainCount === null ? "Count unavailable" : "Current positions" : trainsCached ? runningTrainCount === null ? "Count unavailable" : "Cached positions" : "Provider unavailable"}</small></p>
-            <p><span>River gauges</span><strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? riverStationCount ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : riversLive ? riverStationCount === null ? "Count unavailable" : timeMode === "past" ? "Readings retained at capture" : "Fresh readings" : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations not retained" : riversCached ? riverStationCount === null ? "Count unavailable" : "Cached readings" : riversFallback ? riverStationCount === null ? "Count unavailable" : "Fallback source" : "Provider unavailable"}</small></p>
+            <p><span>River gauges</span><strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : riversLive ? riverStationCount === null ? "Count unavailable" : timeMode === "past" ? "Readings retained at capture" : "Fresh readings" : riversPartial ? `${snapshot.rivers.length} readings · partial` : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations not retained" : riversCached ? riverStationCount === null ? "Count unavailable" : "Cached readings" : riversFallback ? riverStationCount === null ? "Count unavailable" : "Fallback source" : "Provider unavailable"}</small></p>
           </div>
         </aside>
 
@@ -3370,9 +3369,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                       : isDailyHistorySummary ? `This is a ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} captured ${lastSuccessLabel}. Summary values and recorded gaps are shown; a point-by-point map is not reconstructed.`
                         : `Stored observations captured ${lastSuccessLabel}. They are separate from live feeds and retain provider timestamps and gaps.`
                 : isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Loading fresh observations across the island…" : serviceDisplayState === "offline" ? `Offline. Showing the last saved observations where available; last success ${lastSuccessLabel}.` : serviceDisplayState === "cached" ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.` : serviceDisplayState === "unavailable" ? "Live services are unavailable, so national conditions cannot be assessed." : `${narrative.period} ${narrative.detail}`}</p>
+              <p className="moment-summary" aria-hidden="true">{timeMode === "past"
+                ? `Stored observations from ${lastSuccessLabel}.`
+                : isConnectingWithoutSnapshot ? "Connecting to live island observations…"
+                : snapshot.summary.reporting ? `${snapshot.summary.reporting} stations reporting · ${snapshot.summary.warmest ? `${snapshot.summary.warmest.temperature}° warmest` : "temperatures varied"}${snapshot.summary.wettest?.rainfall ? ` · ${snapshot.summary.wettest.rainfall} mm rain` : ""}`
+                  : "Connecting to live observations…"}</p>
               <a className="view-map-action" href="#live-map">View {timeMode === "past" ? "historical" : "live"} map <span aria-hidden="true">↓</span></a>
             </div>
-            <div className="workspace-facts" aria-label={`${timeMode === "past" ? "Historical" : "Current"} national highlights across Ireland`}>
+            <div className="workspace-facts" role="group" aria-label={`${timeMode === "past" ? "Historical" : "Current"} national highlights across Ireland`}>
               <button onClick={() => focusContext("grid")}><b>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? `${snapshot.grid.windSharePercent.toFixed(0)}%` : "—"}</b><small>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? `demand met by wind${timeMode === "past" ? " at capture" : ""}` : "grid wind share unavailable"}</small></button>
               <button onClick={() => focusContext("sea")}><b>{online && snapshot.contextStatus.marine === "live" ? snapshot.marine.length : "—"}</b><small>{online && snapshot.contextStatus.marine === "live" ? timeMode === "past" ? "marine sites represented at capture" : "marine sites reporting" : "marine observations unavailable"}</small></button>
               <button onClick={() => focusContext("radar")}><b>{weatherNotableCurrent && snapshot.summary.wettest?.rainfall !== null && snapshot.summary.wettest?.rainfall !== undefined ? `${snapshot.summary.wettest.rainfall} mm` : "—"}</b><small>{weatherNotableCurrent ? "recent observed rain" : "rain observations unavailable"}</small></button>
@@ -3380,91 +3384,106 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </div>
 
           {(() => {
+            const placeControls = (
+              <>
+                <label htmlFor="place-select">Nearby context</label>
+                <div className="place-controls">
+                  <select id="place-select" value={selectedPlace.id} onChange={(event) => choosePlace(event.target.value)}>
+                    {selectedPlaceIsEphemeral && <option value="nearby">Your area · this session</option>}
+                    {PLACE_OPTIONS.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
+                  </select>
+                  <button type="button" className="locate-button" onClick={useMyLocation} aria-label="Use my location"><span aria-hidden="true">⌖</span> Locate</button>
+                </div>
+                <small id="place-message" aria-live="polite">{placeMessage || "Saved as a place ID; GPS coordinates are never stored or shared."}</small>
+                <small className="place-limits">{selectedPlaceIsEphemeral
+                  ? "Session-only location: nearest available readings are shown with distance; the share link remains an Ireland view."
+                  : `Nearby limits: weather ${NEARBY_RADIUS_KM.weather} km · rivers ${NEARBY_RADIUS_KM.river} km · air ${NEARBY_RADIUS_KM.air} km.`}</small>
+              </>
+            );
+            const compactNotices = timeMode !== "past" &&
+              layers.has("warnings") &&
+              !isConnectingWithoutSnapshot &&
+              !warningsUnavailable &&
+              visibleWarnings.length === 0;
             const briefing = (
               <>
           <section
-            className={`place-context ${selectedPlace.id === "island" ? "island-context" : "local-context"}`}
+            className={`place-context ${selectedPlace.id === "island" ? "island-context place-context-compact" : "local-context"}`}
             data-place-id={selectedPlace.id}
             aria-labelledby="my-place-heading"
           >
-            <div className="place-picker">
-              <p className="eyebrow">My Place</p>
-              <h2 id="my-place-heading">{selectedPlace.name}</h2>
-              <p className="place-context-summary">
-                {selectedPlace.id === "island"
-                  ? `Whole-island ${timeMode === "past" ? "historical " : ""}context is shown above; choose a mapped place or use your location for nearby observations.`
-                  : selectedPlaceIsEphemeral
-                    ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."
-                    : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}
-              </p>
-              <label htmlFor="place-select">Nearby context</label>
-              <div className="place-controls">
-                <select id="place-select" value={selectedPlace.id} onChange={(event) => choosePlace(event.target.value)}>
-                  {selectedPlaceIsEphemeral && <option value="nearby">Your area · this session</option>}
-                  {PLACE_OPTIONS.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
-                </select>
-                <button type="button" className="locate-button" onClick={useMyLocation} aria-label="Use my location"><span aria-hidden="true">⌖</span> Locate</button>
+            {selectedPlace.id === "island" ? (
+              <div className="place-picker place-picker-compact">
+                <div className="place-compact-copy">
+                  <p className="eyebrow">My Place</p>
+                  <h2 id="my-place-heading">Personalise this view</h2>
+                  <p className="place-context-summary">Choose a place or use your location to add nearby weather, river and air observations.</p>
+                </div>
+                <div className="place-compact-controls">{placeControls}</div>
               </div>
-              <small id="place-message" aria-live="polite">{placeMessage || "Saved as a place ID; GPS coordinates are never stored or shared."}</small>
-              <small className="place-limits">{selectedPlaceIsEphemeral
-                ? "Session-only location: nearest available readings are shown with distance; the share link remains an Ireland view."
-                : `Nearby limits: weather ${NEARBY_RADIUS_KM.weather} km · rivers ${NEARBY_RADIUS_KM.river} km · air ${NEARBY_RADIUS_KM.air} km.`}</small>
-            </div>
-            <div
-              className="place-observations"
-              aria-label={selectedPlace.id === "island" ? "Local observations unavailable until a place is selected" : timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}
-            >
-              <p className="eyebrow">{selectedPlace.id === "island" ? "Local observations · choose a place" : timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}</p>
-              <dl>
-                <div>
-                  <dt>Temperature</dt>
-                  <dd>{localStation?.item.temperature ?? "—"}°</dd>
-                  <small>{localStation
-                    ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
-                    : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point weather observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved weather is not used as a current nearby condition." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
+            ) : (
+              <>
+                <div className="place-picker">
+                  <p className="eyebrow">My Place</p>
+                  <h2 id="my-place-heading">{selectedPlace.name}</h2>
+                  <p className="place-context-summary">{selectedPlaceIsEphemeral
+                    ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."
+                    : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}</p>
+                  {placeControls}
                 </div>
-                <div>
-                  <dt>Rain</dt>
-                  <dd>{localStation?.item.rainfall == null ? "—" : `${localStation.item.rainfall} mm`}</dd>
-                  <small>{localStation
-                    ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
-                    : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} rain observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point rain observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved rain observations are not used as current nearby rainfall." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current rain observation is available." : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.` : "Rain observations are unavailable; nearby rainfall cannot be assessed."}</small>
+                <div
+                  className="place-observations"
+                  aria-label={timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}
+                >
+                  <p className="eyebrow">{timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}</p>
+                  <dl>
+                    <div>
+                      <dt>Temperature</dt>
+                      <dd>{localStation?.item.temperature ?? "—"}°</dd>
+                      <small>{localStation
+                        ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
+                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point weather observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved weather is not used as a current nearby condition." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
+                    </div>
+                    <div>
+                      <dt>Rain</dt>
+                      <dd>{localStation?.item.rainfall == null ? "—" : `${localStation.item.rainfall} mm`}</dd>
+                      <small>{localStation
+                        ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
+                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} rain observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point rain observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved rain observations are not used as current nearby rainfall." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current rain observation is available." : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.` : "Rain observations are unavailable; nearby rainfall cannot be assessed."}</small>
+                    </div>
+                    <div>
+                      <dt>River</dt>
+                      <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "—"}</dd>
+                      <small>{localRiver
+                        ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now, timeMode === "past")
+                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges…` : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? `No point river observation was retained within ${NEARBY_RADIUS_KM.river} km for this historical record.` : riversLive || riversPartial || riversFallback ? selectedPlaceIsEphemeral ? "No current river observation is available." : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.` : riversCached ? "The river feed is unavailable; cached readings are not used as current local conditions." : "River readings are unavailable; nearby levels cannot be assessed."}</small>
+                    </div>
+                    <div>
+                      <dt>Air</dt>
+                      <dd>{localAir?.item.europeanAqi == null ? "—" : `AQI ${localAir.item.europeanAqi}`}</dd>
+                      <small>{localAir
+                        ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now, timeMode === "past")
+                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} air-quality sources…` : timeMode === "past" ? historyGapForFocus(historyGaps, "air")?.detail ?? `No point air-quality observation was retained within ${NEARBY_RADIUS_KM.air} km for this historical record.` : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback" ? selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>
+                    </div>
+                  </dl>
                 </div>
-                <div>
-                  <dt>River</dt>
-                  <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "—"}</dd>
-                  <small>{localRiver
-                    ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now, timeMode === "past")
-                    : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges…` : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? `No point river observation was retained within ${NEARBY_RADIUS_KM.river} km for this historical record.` : riversLive || riversFallback ? selectedPlaceIsEphemeral ? "No current river observation is available." : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.` : riversCached ? "The river feed is unavailable; cached readings are not used as current local conditions." : "River readings are unavailable; nearby levels cannot be assessed."}</small>
-                </div>
-                <div>
-                  <dt>Air</dt>
-                  <dd>{localAir?.item.europeanAqi == null ? "—" : `AQI ${localAir.item.europeanAqi}`}</dd>
-                  <small>{localAir
-                    ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now, timeMode === "past")
-                    : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} air-quality sources…` : timeMode === "past" ? historyGapForFocus(historyGaps, "air")?.detail ?? `No point air-quality observation was retained within ${NEARBY_RADIUS_KM.air} km for this historical record.` : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback" ? selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>
-                </div>
-              </dl>
-            </div>
+              </>
+            )}
           </section>
 
-          <div className="freshness-strip" aria-label="Data freshness and provider status">
-            <button
-              type="button"
-              onClick={(event) => {
-                panelOpenerRef.current = event.currentTarget;
-                setPanelOpen(true);
-              }}
-            >
-              Data details <span aria-hidden="true">→</span>
-            </button>
+          <div className="freshness-strip" role="status" aria-label="Data freshness and provider status">
             {timeMode === "past" ? (
               <>
                 <button type="button" className="refresh-data-button" disabled aria-describedby="connection-summary">Live refresh paused</button>
                 <span id="connection-summary" className={`freshness-chip connection-chip ${historyState.status}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState}>
                   <i aria-hidden="true" /><b>Historical record</b><small>{historyState.status === "loading" ? "Loading stored conditions" : historyState.status === "ready" ? `${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 15)} · captured ${lastSuccessLabel} · ${historyGaps.length} recorded gap${historyGaps.length === 1 ? "" : "s"}` : "No stored record is available for the selected time"}{connectionStatus === "offline" ? " · readable offline once loaded" : ""}</small>
                 </span>
-                <span className="freshness-chip cached"><i aria-hidden="true" /><b>Live separation</b><small>Live feeds remain paused and are never substituted into this historical view.</small></span>
+                <details className="freshness-details">
+                  <summary>Data details</summary>
+                  <div className="freshness-detail-grid">
+                    <span className="freshness-chip cached"><i aria-hidden="true" /><b>Live separation</b><small>Live feeds remain paused and are never substituted into this historical view.</small></span>
+                  </div>
+                </details>
               </>
             ) : (
               <>
@@ -3480,20 +3499,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 <span id="connection-summary" className={`freshness-chip connection-chip ${serviceDisplayState}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState}>
                   <i aria-hidden="true" /><b>Connection</b><small>{connectionStatus === "offline" ? `Offline · live refresh unavailable${snapshot.lastSuccessAt ? " · saved snapshot" : ""}` : serviceDisplayState === "connecting" ? "Checking for newer data" : `Connected · ${connectionLabel}`} · checked {formatTime(lastCheckedAt)} · last success {lastSuccessLabel}</small>
                 </span>
-                <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : weatherDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Weather provider connecting" : `Weather provider ${statusText(weatherDisplayStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${!online ? "; offline saved snapshot" : weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}>
-                  <i aria-hidden="true" /><b>Weather provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(weatherDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${online && weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}`}</small>
-                </span>
-                <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : trainDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Rail provider connecting" : `Rail provider ${statusText(trainDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${!online ? "; offline saved snapshot" : transitStale && snapshot.trains.length > 0 ? "; positions are stale" : ""}`}>
-                  <i aria-hidden="true" /><b>Rail provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(trainDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${online && transitStale && snapshot.trains.length > 0 ? " · stale" : ""}`}</small>
-                </span>
-                <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : riverDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "River provider connecting" : `River provider ${statusText(riverDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${!online ? "; offline saved snapshot" : riverDataStale && snapshot.rivers.length > 0 ? "; readings are stale" : ""}`}>
-                  <i aria-hidden="true" /><b>River provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(riverDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${online && riverDataStale && snapshot.rivers.length > 0 ? " · stale" : ""}`}</small>
-                </span>
+                <details className="freshness-details">
+                  <summary>Data details</summary>
+                  <div className="freshness-detail-grid">
+                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : weatherDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Weather provider connecting" : `Weather provider ${statusText(weatherDisplayStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${!online ? "; offline saved snapshot" : weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}>
+                      <i aria-hidden="true" /><b>Weather provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(weatherDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${online && weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}`}</small>
+                    </span>
+                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : trainDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Rail provider connecting" : `Rail provider ${statusText(trainDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${!online ? "; offline saved snapshot" : transitStale && snapshot.trains.length > 0 ? "; positions are stale" : ""}`}>
+                      <i aria-hidden="true" /><b>Rail provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(trainDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${online && transitStale && snapshot.trains.length > 0 ? " · stale" : ""}`}</small>
+                    </span>
+                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : riverDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "River provider connecting" : `River provider ${statusText(riverDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${!online ? "; offline saved snapshot" : riverDataStale && snapshot.rivers.length > 0 ? "; readings are stale" : ""}`}>
+                      <i aria-hidden="true" /><b>River provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(riverDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${online && riverDataStale && snapshot.rivers.length > 0 ? " · stale" : ""}`}</small>
+                    </span>
+                  </div>
+                </details>
               </>
             )}
           </div>
 
-          <section className="official-notices" data-scope="across-ireland" aria-labelledby="official-notices-heading">
+          <section className={`official-notices ${compactNotices ? "compact" : ""}`} data-scope="across-ireland" aria-labelledby="official-notices-heading">
+            {compactNotices ? (
+              <div className="official-notices-compact-row">
+                <span className="live-dot live" aria-hidden="true" />
+                <h2 id="official-notices-heading">Official notices</h2>
+                <p className="official-notices-empty">No current or upcoming Met Éireann notices.</p>
+              </div>
+            ) : (
+              <>
             <div className="official-notices-heading">
               <div>
                 <p className="eyebrow">{timeMode === "past" ? "Stored official notices" : "Official notices"}</p>
@@ -3547,66 +3579,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             ) : (
               <p className="official-notices-empty">Met Éireann notices are hidden in this map view. Enable them in Explore to review {timeMode === "past" ? "the stored notices" : "official notices across Ireland"}.</p>
             )}
+              </>
+            )}
           </section>
-
-          {timeMode === "past" ? (
-            <section className="now-guidance history-guidance" aria-labelledby="guidance-heading">
-              <div className="guidance-heading">
-                <div><p className="eyebrow">Historical context · {selectedPlace.name}</p><h2 id="guidance-heading">Live guidance is paused.</h2></div>
-                <p>Stored observations are for review and comparison only. They are not used as current travel, coastal, outdoor or safety guidance.</p>
-              </div>
-            </section>
-          ) : <section className="now-guidance" aria-labelledby="guidance-heading">
-            <div className="guidance-heading">
-              <div>
-                <p className="eyebrow">Live signals · {selectedPlace.name}</p>
-                <h2 id="guidance-heading">What the live data shows.</h2>
-              </div>
-              <p>Observed conditions, official notices and feed coverage grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>
-            </div>
-            <div className="guidance-list">
-              {isConnectingWithoutSnapshot ? activityGuidance.map((item) => (
-                <button
-                  type="button"
-                  className="guidance-card connecting"
-                  data-activity-id={item.id}
-                  key={item.id}
-                  disabled
-                >
-                  <span className="guidance-status" data-guidance-mode="status">Connecting</span>
-                  <strong>{item.title}</strong>
-                  <span className="guidance-reason" data-guidance-mode="reason">Loading live observations and provider coverage…</span>
-                  <span className="guidance-caveat" data-guidance-mode="caveat">No current condition is stated until the first refresh settles.</span>
-                </button>
-              )) : serviceDisplayState === "offline" ? activityGuidance.map((item) => (
-                <button
-                  type="button"
-                  className="guidance-card unavailable"
-                  data-activity-id={item.id}
-                  key={item.id}
-                  disabled
-                >
-                  <span className="guidance-status" data-guidance-mode="status">Offline</span>
-                  <strong>{item.title}</strong>
-                  <span className="guidance-reason" data-guidance-mode="reason">Live sources cannot be refreshed while this device is offline.</span>
-                  <span className="guidance-caveat" data-guidance-mode="caveat">Saved observations are not used as current activity context.</span>
-                </button>
-              )) : activityGuidance.map((item) => (
-                <button
-                  type="button"
-                  className={`guidance-card ${item.status}`}
-                  data-activity-id={item.id}
-                  key={item.id}
-                  onClick={() => focusActivity(item.id, item.title, `${item.reason} ${item.caveat}`)}
-                >
-                  <span className="guidance-status" data-guidance-mode="status">{ACTIVITY_STATUS_LABELS[item.status]}</span>
-                  <strong>{item.title}</strong>
-                  <span className="guidance-reason" data-guidance-mode="reason">{item.reason}</span>
-                  <span className="guidance-caveat" data-guidance-mode="caveat">{item.caveat}</span>
-                </button>
-              ))}
-            </div>
-          </section>}
 
               </>
             );
@@ -4130,11 +4105,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span>{timeMode === "past" ? "Stored observations, operational records and clearly labelled model data" : "Observed, operational, and clearly labelled model data"} · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
-        <div className="live-signal-dock" aria-label={`${timeMode === "past" ? "Stored provider coverage" : "Provider signal status"} across Ireland`}>
+        <div className="live-signal-dock" role="status" aria-label={`${timeMode === "past" ? "Stored provider coverage" : "Provider signal status"} across Ireland`}>
           <strong><span className={`live-dot ${timeMode === "past" ? "partial" : liveServiceCount ? "live" : "partial"}`} />{timeMode === "past" ? "Stored coverage" : "Provider feeds"}</strong>
           <span><time>{latestWeatherObs > 0 ? formatTime(new Date(latestWeatherObs)) : "—"}</time>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations` : weatherNotableCurrent ? reportingCount === null ? "Weather station count unavailable" : `${reportingCount} weather stations ${timeMode === "past" ? "retained" : "reporting"}` : weatherCached ? reportingCount === null ? "Saved weather station count unavailable" : `${reportingCount} saved weather stations` : "Weather observations unavailable"}</span>
           <span><time>{snapshot.sourceProvenance?.trains.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.trains.latestObservedAt)) : "—"}</time>{timeMode === "past" ? historyState.envelope?.movementSummary.rail ? `${historyState.envelope.movementSummary.rail.total} rail services in retained aggregate; positions not shown` : historyGapForFocus(historyGaps, "trains")?.detail ?? "Rail history unavailable" : isConnectingWithoutSnapshot ? "Connecting to rail positions" : railNotableCurrent ? runningTrainCount === null ? "Rail service count unavailable" : `${runningTrainCount} trains sharing current positions` : trainsCached ? runningTrainCount === null ? "Cached rail service count unavailable" : `${runningTrainCount} trains in cached positions` : "Rail positions unavailable"}</span>
-          <span><time>{snapshot.sourceProvenance?.rivers.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.rivers.latestObservedAt)) : "—"}</time>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges` : riversLive && !riverDataStale ? riverStationCount === null ? "River gauge count unavailable" : `${riverStationCount} ${timeMode === "past" ? "retained" : "fresh"} river gauges` : riversCached ? riverStationCount === null ? "Cached river gauge count unavailable" : `${riverStationCount} cached river gauges` : riversFallback ? riverStationCount === null ? "Fallback river gauge count unavailable" : `${riverStationCount} fallback-source river gauges` : "River readings unavailable"}</span>
+          <span><time>{snapshot.sourceProvenance?.rivers.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.rivers.latestObservedAt)) : "—"}</time>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges` : riversLive && !riverDataStale ? riverStationCount === null ? "River gauge count unavailable" : `${riverStationCount} ${timeMode === "past" ? "retained" : "fresh"} river gauges` : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "Cached river gauge count unavailable" : `${riverStationCount} cached river gauges` : riversFallback ? riverStationCount === null ? "Fallback river gauge count unavailable" : `${riverStationCount} fallback-source river gauges` : "River readings unavailable"}</span>
         </div>
 
       </section>
@@ -4165,25 +4140,19 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         document.body
       )}
 
-      <section className="notable-now" aria-labelledby="notable-heading">
-        <div>
-          <p className="eyebrow">Notable {timeMode === "past" ? "then" : "now"}</p>
-          <h2 id="notable-heading">Signals {timeMode === "past" ? "retained for" : "that matter to"} this view.</h2>
+      <section className="what-matters-now" data-scope="across-ireland" aria-labelledby="what-matters-heading">
+        <div className="what-matters-heading">
+          <div>
+            <p className="eyebrow">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
+            <h2 id="what-matters-heading">What {timeMode === "past" ? "mattered then" : "matters now"}.</h2>
+          </div>
+
         </div>
-        <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`}>
+        {hasVisibleNotable && (
+          <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`} role="region" aria-label={`${timeMode === "past" ? "Historical" : "Current"} highlighted signals`}>
           {showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
             <button className="signal-item" onClick={() => focusContext("radar")}>
               <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall?.toFixed(1) ?? "—"} mm recently observed</small>
-            </button>
-          )}
-          {showRailNotable && railNotableCurrent && runningTrainCount !== null && runningTrainCount > 0 && (
-            <button className="signal-item" onClick={() => focusContext("trains")}>
-              <span>Movement</span><b>{runningTrainCount} trains moving</b><small>{snapshot.trains.length} rail positions in the {timeMode === "past" ? "stored" : "current"} snapshot</small>
-            </button>
-          )}
-          {showGridNotable && gridNotableCurrent && snapshot.grid && (
-            <button className="signal-item" onClick={() => focusContext("grid")}>
-              <span>Energy</span><b>{snapshot.grid.windSharePercent === null ? "Wind share unavailable" : `${snapshot.grid.windSharePercent.toFixed(0)}% wind share`}</b><small>{snapshot.grid.demandMW === null ? `${timeMode === "past" ? "Captured" : "Current"} demand unavailable` : `${snapshot.grid.demandMW.toFixed(0)} MW ${timeMode === "past" ? "captured" : "current"} demand`}</small>
             </button>
           )}
           {showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.map((alert) => (
@@ -4206,32 +4175,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <span>Night sky</span><b>ISS pass at {formatTime(new Date(visibleIssPass.startsAt))}</b><small>{formatDate(new Date(visibleIssPass.startsAt))} · up to {visibleIssPass.maxElevation.toFixed(0)}°</small>
             </button>
           )}
-          {!hasVisibleNotable && isConnectingWithoutSnapshot && (
-            <p className="all-quiet"><span className="live-dot partial" />Connecting to the selected signal sources…</p>
-          )}
-          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.assessedSourceCount === 0 && (
-            <p className="all-quiet"><span className="live-dot partial" />No automated highlight rule applies to the selected orientation layers{timeMode === "past" ? " in this historical record" : ""}.</p>
-          )}
-          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.fullyAssessed && (
-            <p className="all-quiet"><span className="live-dot live" />{timeMode === "past" ? "Stored source coverage was assessed" : "Provider checks completed"}; no highlighted signal matches the selected layers.</p>
-          )}
-          {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.assessedSourceCount > 0 && !selectedSourceAssessment.fullyAssessed && (
-            <p className="all-quiet"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
-          )}
-          {notableItemCount > 3 && (
+          {notableItemCount > 1 && (
             <button className="notable-more" onClick={() => setShowAllNotables((current) => !current)}>
-              {showAllNotables ? "Show fewer" : `View ${notableItemCount - 3} more`}
+              {showAllNotables ? "Show fewer" : `View ${notableItemCount - 1} more`}
             </button>
           )}
-        </div>
-      </section>
+          </div>
+        )}
+        {!hasVisibleNotable && !isConnectingWithoutSnapshot && selectedSourceAssessment.assessedSourceCount > 0 && !selectedSourceAssessment.fullyAssessed && (
+          <p className="signal-assessment"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
+        )}
 
-      <section className="island-pulse" data-scope="across-ireland" aria-labelledby="pulse-heading">
-        <div className="pulse-intro">
-          <p className="eyebrow">Across Ireland · {timeMode === "past" ? "historical" : "national"} signal board</p>
-          <h2 id="pulse-heading">{timeMode === "past" ? "Ireland then." : "Ireland, at a glance."}</h2>
-          <p>Energy, movement and water alongside the weather across Ireland. Every signal keeps its own timestamp, retention level and meaning.</p>
-        </div>
+        <div className="what-matters-grid">
         <button className="pulse-card grid" onClick={() => focusContext("grid")}>
           <span><i>ϟ</i> All-island electricity</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : gridWindShare === null ? "—" : `${gridWindShare.toFixed(0)}%`}</strong>
@@ -4260,11 +4215,76 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </button>
         <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
-          <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? riverStationCount ?? "—" : "—"}</strong>
-          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "fallback readings are present, but the gauge count is unavailable" : "gauges supplied by the labelled fallback source" : "river readings unavailable; current levels cannot be assessed"}</small>
+          <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "—" : "—"}</strong>
+          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "fallback readings are present, but the gauge count is unavailable" : "gauges supplied by the labelled fallback source" : "river readings unavailable; current levels cannot be assessed"}</small>
           <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
         </button>
+        </div>
+
+        <details className="activity-context">
+          <summary>{timeMode === "past" ? "Historical guidance note" : "Activity context"}</summary>
+          {timeMode === "past" ? (
+            <div className="now-guidance history-guidance" aria-labelledby="guidance-heading">
+              <div className="guidance-heading">
+                <div><p className="eyebrow">Historical context · {selectedPlace.name}</p><h3 id="guidance-heading">Live guidance is paused.</h3></div>
+                <p>Stored observations are for review and comparison only. They are not used as current travel, coastal, outdoor or safety guidance.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="now-guidance" aria-labelledby="guidance-heading">
+              <div className="guidance-heading">
+                <div>
+                  <p className="eyebrow">Live context · {selectedPlace.name}</p>
+                  <h3 id="guidance-heading">What the live data supports.</h3>
+                </div>
+                <p>Observed conditions, official notices and feed coverage grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>
+              </div>
+              <div className="guidance-list">
+                {isConnectingWithoutSnapshot ? activityGuidance.map((item) => (
+                  <button
+                    type="button"
+                    className="guidance-card connecting"
+                    data-activity-id={item.id}
+                    key={item.id}
+                    disabled
+                  >
+                    <span className="guidance-status" data-guidance-mode="status">Connecting</span>
+                    <strong>{item.title}</strong>
+                    <span className="guidance-reason" data-guidance-mode="reason">Loading live observations and provider coverage…</span>
+                    <span className="guidance-caveat" data-guidance-mode="caveat">No current condition is stated until the first refresh settles.</span>
+                  </button>
+                )) : serviceDisplayState === "offline" ? activityGuidance.map((item) => (
+                  <button
+                    type="button"
+                    className="guidance-card unavailable"
+                    data-activity-id={item.id}
+                    key={item.id}
+                    disabled
+                  >
+                    <span className="guidance-status" data-guidance-mode="status">Offline</span>
+                    <strong>{item.title}</strong>
+                    <span className="guidance-reason" data-guidance-mode="reason">Live sources cannot be refreshed while this device is offline.</span>
+                    <span className="guidance-caveat" data-guidance-mode="caveat">Saved observations are not used as current activity context.</span>
+                  </button>
+                )) : activityGuidance.map((item) => (
+                  <button
+                    type="button"
+                    className={`guidance-card ${item.status}`}
+                    data-activity-id={item.id}
+                    key={item.id}
+                    onClick={() => focusActivity(item.id, item.title, `${item.reason} ${item.caveat}`)}
+                  >
+                    <span className="guidance-status" data-guidance-mode="status">{ACTIVITY_STATUS_LABELS[item.status]}</span>
+                    <strong>{item.title}</strong>
+                    <span className="guidance-reason" data-guidance-mode="reason">{item.reason}</span>
+                    <span className="guidance-caveat" data-guidance-mode="caveat">{item.caveat}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </details>
       </section>
 
       <section className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
@@ -4272,7 +4292,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <div><p className="eyebrow">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
           <p>Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below.</p>
         </div>
-        <div className="timeline-legend" aria-label="Chart legend">
+        <div className="timeline-legend" role="img" aria-label="Chart legend">
           <span><i className="temperature" />Average temperature (°C)</span>
           <span><i className="rain" />Average observed rain per station (mm)</span>
         </div>
@@ -4400,7 +4420,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             </button>
           ))}
         </nav>
-        <div className="layer-list" aria-label="Explore layer categories">
+        <div className="layer-list" role="group" aria-label="Explore layer categories">
           {LAYER_GROUPS.map((group) => (
             <details
               className="layer-group"

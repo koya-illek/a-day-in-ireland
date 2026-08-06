@@ -261,6 +261,164 @@ test("last-good retention is age bounded and is always relabelled cached rather 
   assert.equal(retainLastGoodTransit(previous, now + 31 * 60_000).transitStatus, "unavailable");
 });
 
+test("browser context refresh preserves partial/stale warnings truth and valid live-empty truth", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { refreshCurrentContexts } = await importWarningAdapter("../lib/browser-live.ts");
+  const now = Date.parse("2026-08-05T12:00:00Z");
+  const previous = createInitialSnapshot(new Date(now).toISOString());
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hostname: "localhost" },
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  globalThis.fetch = async () => Response.json({
+    generatedAt: new Date(now).toISOString(),
+    marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+    warnings: [], warningsStatus: "partial", satellite: null, earthquakes: [], issTle: null,
+    contextStatus: {
+      marine: "partial", radar: "unavailable", grid: "unavailable", measuredAir: "unavailable",
+      modelledAir: "unavailable", aurora: "unavailable", tides: "stale", bathing: "live",
+      satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "partial"
+    }
+  });
+  try {
+    const refreshed = await refreshCurrentContexts(previous);
+    assert.equal(refreshed.contextStatus.marine, "partial");
+    assert.equal(refreshed.contextStatus.tides, "stale");
+    assert.equal(refreshed.contextStatus.warnings, "partial");
+    assert.equal(refreshed.contextStatus.bathing, "live");
+    assert.deepEqual(refreshed.marine, []);
+    assert.deepEqual(refreshed.tides, []);
+    assert.deepEqual(refreshed.warnings, []);
+    assert.deepEqual(refreshed.bathingAlerts, []);
+    assert.ok(![refreshed.contextStatus.marine, refreshed.contextStatus.tides, refreshed.contextStatus.warnings]
+      .includes("live"));
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+});
+
+test("browser living refresh preserves partial river provenance instead of upgrading it to live", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { refreshLivingLayers } = await importWarningAdapter("../lib/browser-live.ts");
+  const now = Date.now();
+  const previous = createInitialSnapshot(new Date(now).toISOString());
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hostname: "localhost" },
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  globalThis.fetch = async () => Response.json({
+    generatedAt: new Date(now).toISOString(),
+    trains: [],
+    rivers: [{
+      id: "partial-river",
+      name: "Partial river",
+      latitude: 53.3,
+      longitude: -8.2,
+      level: 1.2,
+      observedAt: new Date(now - 60_000).toISOString(),
+      fresh: true
+    }],
+    sourceStatus: { trains: "unavailable", rivers: "partial" }
+  });
+  try {
+    const refreshed = await refreshLivingLayers(previous);
+    assert.deepEqual(refreshed.rivers.map((river) => river.id), ["partial-river"]);
+    assert.equal(refreshed.sourceProvenance.rivers.status, "partial");
+    assert.equal(refreshed.summary.riverStations, 1);
+    assert.notEqual(refreshed.sourceProvenance.rivers.status, "live");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+});
+
+test("browser weather removes future station rows before latest selection and timeline aggregation", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { refreshWeather } = await importWarningAdapter("../lib/browser-live.ts");
+  const now = Date.now();
+  const previous = createInitialSnapshot(new Date(now).toISOString());
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hostname: "localhost" },
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  const wall = (instant) => Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(instant)).map((part) => [part.type, part.value]));
+  const current = wall(Math.floor(now / 3_600_000) * 3_600_000);
+  const future = wall(Math.floor(now / 3_600_000) * 3_600_000 + 3_600_000);
+  const rows = [
+    { name: "Dublin Airport", date: `${future.day}-${future.month}-${future.year}`, reportTime: `${future.hour}:00`, temperature: 99, rainfall: 99, windSpeed: 99 },
+    { name: "Dublin Airport", date: `${current.day}-${current.month}-${current.year}`, reportTime: `${current.hour}:00`, temperature: 12, rainfall: 1, windSpeed: 10 }
+  ];
+  globalThis.fetch = async (input) => String(input).includes("/observations/dublin/today")
+    ? Response.json(rows)
+    : new Response("unavailable", { status: 503 });
+  try {
+    const refreshed = await refreshWeather(previous);
+    assert.equal(refreshed.stations[0].temperature, 12);
+    assert.ok(Date.parse(refreshed.stations[0].observedAt) <= now);
+    assert.doesNotMatch(JSON.stringify(refreshed.timeline), /99/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+});
+
+test("browser weather resolves both autumn folds by capture time and rejects the spring gap", async () => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { refreshWeather } = await importWarningAdapter("../lib/browser-live.ts");
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  const originalDateNow = Date.now;
+  let providerRow;
+  globalThis.window = {
+    location: { hostname: "localhost" },
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  globalThis.fetch = async (input) => String(input).includes("/observations/dublin/today")
+    ? Response.json([providerRow])
+    : new Response("unavailable", { status: 503 });
+  const refreshAt = async (captureNow, date, reportTime) => {
+    Date.now = () => captureNow;
+    providerRow = {
+      name: "Dublin Airport",
+      date,
+      reportTime,
+      temperature: 12,
+      rainfall: 0,
+      windSpeed: 5,
+      cardinalWindDirection: "W",
+      weatherDescription: "Test"
+    };
+    return refreshWeather(createInitialSnapshot(new Date(captureNow).toISOString()));
+  };
+  try {
+    const firstFold = await refreshAt(Date.parse("2026-10-25T01:00:00.000Z"), "25-10-2026", "01:30");
+    assert.equal(firstFold.stations[0].observedAt, "2026-10-25T00:30:00.000Z");
+
+    const secondFold = await refreshAt(Date.parse("2026-10-25T01:45:00.000Z"), "25-10-2026", "01:30");
+    assert.equal(secondFold.stations[0].observedAt, "2026-10-25T01:30:00.000Z");
+
+    const springGap = await refreshAt(Date.parse("2026-03-29T02:00:00.000Z"), "29-03-2026", "01:30");
+    assert.deepEqual(springGap.stations, []);
+  } finally {
+    Date.now = originalDateNow;
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+});
+
 test("Met Éireann station definitions use canonical endpoints and reject mismatched identities", async () => {
   const weather = await importStandaloneTypeScript("../lib/weather-stations.ts");
   const dublin = weather.WEATHER_STATIONS.find((station) => station.name === "Dublin");
@@ -524,7 +682,7 @@ test("tide query windows remain stable inside a cache bucket", async () => {
   assert.deepEqual(tideQueryWindow(first), tideQueryWindow(second));
   assert.notDeepEqual(tideQueryWindow(first), tideQueryWindow(nextBucket));
   assert.deepEqual(tideQueryWindow(first), {
-    since: "2026-08-02T09:00:00Z",
+    since: "2026-08-03T08:15:00Z",
     until: "2026-08-04T21:00:00Z"
   });
 });
@@ -646,6 +804,27 @@ test("Met Éireann and EirGrid local timestamps use Europe/Dublin deterministica
   assert.equal(parseEirGridLocalTimestamp("02-Aug-2026 12:00:00"), "2026-08-02T11:00:00.000Z");
   assert.equal(parseEirGridLocalTimestamp("02-Jan-2026 12:00:00"), "2026-01-02T12:00:00.000Z");
   assert.equal(parseIrelandLocalTimestamp("31-02-2026", "12:00"), null);
+  assert.equal(parseIrelandLocalTimestamp("29-03-2026", "01:30"), null, "spring DST gap does not exist");
+  assert.equal(parseEirGridLocalTimestamp("29-Mar-2026 01:30:00"), null, "EirGrid spring DST gap does not exist");
+
+  const beforeSecondFold = Date.parse("2026-10-25T01:00:00.000Z");
+  const afterSecondFold = Date.parse("2026-10-25T01:45:00.000Z");
+  assert.equal(
+    parseIrelandLocalTimestamp("25-10-2026", "01:30", beforeSecondFold),
+    "2026-10-25T00:30:00.000Z"
+  );
+  assert.equal(
+    parseIrelandLocalTimestamp("25-10-2026", "01:30", afterSecondFold),
+    "2026-10-25T01:30:00.000Z"
+  );
+  assert.equal(
+    parseEirGridLocalTimestamp("25-Oct-2026 01:30:00", beforeSecondFold),
+    "2026-10-25T00:30:00.000Z"
+  );
+  assert.equal(
+    parseEirGridLocalTimestamp("25-Oct-2026 01:30:00", afterSecondFold),
+    "2026-10-25T01:30:00.000Z"
+  );
 });
 
 test("EirGrid selection keeps only the newest current value", () => {
@@ -663,6 +842,48 @@ test("EirGrid selection keeps only the newest current value", () => {
     timestamp: Date.parse("2026-08-02T10:00:00.000Z")
   });
   assert.equal(latestEirGridValue(rows.slice(0, 1), "SYSTEM_DEMAND", now), null);
+});
+
+test("EirGrid scans the full byte-bounded row set instead of assuming metric order", () => {
+  const now = Date.parse("2026-08-02T12:30:00.000Z");
+  const rows = [
+    { FieldName: "SYSTEM_DEMAND", Value: "4321", EffectiveTime: "02-Aug-2026 13:15:00" },
+    ...Array.from({ length: 2_100 }, (_, index) => ({
+      FieldName: "OTHER_SERIES",
+      Value: String(index),
+      EffectiveTime: "02-Aug-2026 13:00:00"
+    }))
+  ];
+  assert.equal(latestEirGridValue(rows, "SYSTEM_DEMAND", now)?.value, 4321);
+});
+
+test("server and public grid integrations use the newest component timestamp", async () => {
+  const now = Date.parse("2026-08-02T12:30:00.000Z");
+  const rowsByChart = {
+    demand: [{ FieldName: "SYSTEM_DEMAND", Value: "4200", EffectiveTime: "02-Aug-2026 13:00:00" }],
+    generation: [{ FieldName: "GEN_EXP", Value: "4300", EffectiveTime: "02-Aug-2026 13:10:00" }],
+    wind: [{ FieldName: "WIND_ACTUAL", Value: "1000", EffectiveTime: "02-Aug-2026 12:55:00" }],
+    co2: [
+      { FieldName: "CO2_INTENSITY", Value: "250", EffectiveTime: "02-Aug-2026 13:05:00" },
+      { FieldName: "CO2_EMISSIONS", Value: "900", EffectiveTime: "02-Aug-2026 13:05:00" }
+    ],
+    frequency: [{ FieldName: "SYS_FREQUENCY", Value: "50", EffectiveTime: "02-Aug-2026 13:01:00" }],
+    interconnection: [{ FieldName: "INTER_NET", Value: "200", EffectiveTime: "02-Aug-2026 12:50:00" }]
+  };
+  const fetcher = async (input) => {
+    const chart = new URL(input).searchParams.get("chartType");
+    return Response.json({ Rows: rowsByChart[chart] ?? [] });
+  };
+  const server = await (await import("../platform/server-entry.js")).fetchGrid(fetcher, now);
+  const browser = await (await importWarningAdapter("../lib/live-data.ts")).fetchGrid(fetcher, now);
+  for (const result of [server, browser]) {
+    assert.equal(result.status, "live");
+    assert.equal(result.reading.observedAt, "2026-08-02T12:10:00.000Z");
+    assert.equal(result.reading.demandMW, 4200);
+    assert.equal(result.reading.generationMW, 4300);
+    assert.equal(result.reading.carbonIntensity, 250);
+  }
+  assert.deepEqual(browser, server);
 });
 
 test("Met Éireann CSV fallback does not invent fetch-time freshness", async () => {
@@ -702,6 +923,101 @@ test("river normalization rejects malformed and out-of-Ireland coordinates befor
   assert.deepEqual(readings.map((reading) => reading.id), ["valid"]);
 });
 
+test("river normalization does not silently truncate valid unique gauges", () => {
+  const now = Date.parse("2026-08-02T12:00:00.000Z");
+  const readings = [];
+  const cells = new Set();
+  for (let latitude = 51.4; latitude <= 55.5 && readings.length < 110; latitude += 0.11) {
+    for (let longitude = -10.7; longitude <= -5.4 && readings.length < 110; longitude += 0.11) {
+      if (!isIrelandCoordinate(latitude, longitude)) continue;
+      const cell = `${Math.round(longitude * 4)}:${Math.round(latitude * 5)}`;
+      if (cells.has(cell)) continue;
+      cells.add(cell);
+      readings.push({
+        id: `gauge-${readings.length}`,
+        name: `Gauge ${readings.length}`,
+        latitude,
+        longitude,
+        level: 1,
+        observedAt: "2026-08-02T11:30:00.000Z"
+      });
+    }
+  }
+  assert.ok(readings.length > 90, "fixture must contain more than the former 90-reading cap");
+  assert.equal(normalizeRiverReadings(readings, now).length, readings.length);
+});
+
+const chunkedBodyResponse = (chunkSizes, { status = 200 } = {}) => {
+  const state = { chunksRead: 0, cancelled: false };
+  let index = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (index >= chunkSizes.length) {
+        controller.close();
+        return;
+      }
+      const size = chunkSizes[index];
+      index += 1;
+      state.chunksRead += 1;
+      controller.enqueue(new Uint8Array(size).fill(120));
+    },
+    cancel() {
+      state.cancelled = true;
+    }
+  }, { highWaterMark: 0 });
+  return { response: new Response(body, { status }), state };
+};
+
+test("OPW non-OK diagnostics cancel a chunked body as soon as it reaches the cap", async () => {
+  const { acquireRiverRaw } = await import("../platform/server-entry.js");
+  const oversized = chunkedBodyResponse([16_000, 16_000, 8_000], { status: 503 });
+  let calls = 0;
+  const fetcher = async () => {
+    calls += 1;
+    return calls === 1 ? oversized.response : new Response("bridge unavailable", { status: 503 });
+  };
+  await assert.rejects(
+    acquireRiverRaw({}, fetcher),
+    /opw-error-body-too-large/
+  );
+  assert.equal(oversized.state.chunksRead, 2);
+  assert.equal(oversized.state.cancelled, true);
+});
+
+test("server, public, and scheduled EirGrid readers cancel before consuming later chunks", async () => {
+  const serverApi = await import("../platform/server-entry.js");
+  const browserApi = await importWarningAdapter("../lib/live-data.ts");
+  const { collectGrid } = await import("../platform/history-sources.js");
+  const now = Date.parse("2026-08-05T12:00:00.000Z");
+
+  const serverBody = chunkedBodyResponse([128_000, 128_000, 64]);
+  await assert.rejects(
+    serverApi.fetchGridRows("demand", "demandactual", async () => serverBody.response, now),
+    /eirgrid-demand-body-too-large/
+  );
+  assert.deepEqual(serverBody.state, { chunksRead: 2, cancelled: true });
+
+  const browserBodies = [];
+  const browserResult = await browserApi.fetchGrid(async () => {
+    const body = chunkedBodyResponse([128_000, 128_000, 64]);
+    browserBodies.push(body);
+    return body.response;
+  }, now);
+  assert.deepEqual(browserResult, { reading: null, status: "unavailable" });
+  assert.equal(browserBodies.length, 6);
+  assert.ok(browserBodies.every((body) => body.state.chunksRead === 2 && body.state.cancelled));
+
+  const scheduledBodies = [];
+  const scheduledResult = await collectGrid(async () => {
+    const body = chunkedBodyResponse([256_000, 256_000, 64]);
+    scheduledBodies.push(body);
+    return body.response;
+  }, now);
+  assert.equal(scheduledResult.envelope.status, "unavailable");
+  assert.equal(scheduledBodies.length, 6);
+  assert.ok(scheduledBodies.every((body) => body.state.chunksRead === 2 && body.state.cancelled));
+});
+
 test("out-of-order transit positions never produce a calculated speed", async () => {
   const { addEstimatedSpeeds } = await import("../platform/cloudflare-entry.js");
   const previous = [{
@@ -722,7 +1038,7 @@ test("out-of-order transit positions never produce a calculated speed", async ()
   assert.equal(vehicle.speedSource, null);
 });
 
-test("failed NTA refresh cannot reuse an expired live snapshot", async () => {
+test("failed NTA refresh relabels an expired snapshot stale and never serves its positions", async () => {
   const { NtaFeedCoordinator } = await import("../platform/cloudflare-entry.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("upstream unavailable", { status: 503 });
@@ -755,7 +1071,7 @@ test("failed NTA refresh cannot reuse an expired live snapshot", async () => {
 
     const response = await coordinator.fetch();
     const body = await response.json();
-    assert.equal(body.transitStatus, "unavailable");
+    assert.equal(body.transitStatus, "stale");
     assert.deepEqual(body.transit, []);
     assert.equal(response.headers.get("cache-control"), "no-store");
   } finally {
@@ -776,6 +1092,34 @@ test("an empty NTA feed is unavailable and is not cached as live", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("a truncated NTA feed stays partial through normalization and the shared cache", async () => {
+  const { fetchTransit } = await import("../platform/server-entry.js");
+  const { NtaFeedCoordinator } = await import("../platform/cloudflare-entry.js");
+  const now = Date.now();
+  const entity = (index) => ({
+    id: `vehicle-${index}`,
+    vehicle: {
+      vehicle: { id: `vehicle-${index}`, label: String(index) },
+      trip: { routeId: "03C 126 e a" },
+      position: { latitude: 53.3, longitude: -7.2 },
+      timestamp: Math.floor(now / 1000)
+    }
+  });
+  const fetcher = async () => Response.json({ entity: Array.from({ length: 1_201 }, (_, index) => entity(index)) });
+  const result = await fetchTransit({ NTA_API_KEY: "test-key" }, fetcher, now);
+  assert.equal(result.status, "partial");
+  assert.equal(result.truncated, true);
+  assert.equal(result.sourceEntityCount, 1_201);
+  assert.equal(result.vehicles.length, 1_200);
+
+  const state = new Map([["snapshot", { expiresAt: now + 60_000, result }]]);
+  const coordinator = new NtaFeedCoordinator({
+    storage: { get: async (key) => state.get(key), put: async (key, value) => state.set(key, value) }
+  }, { NTA_API_KEY: "test-key" });
+  const response = await coordinator.fetch(new Request("https://internal/transit"));
+  assert.equal((await response.json()).transitStatus, "partial");
 });
 
 test("an explicit transit upstream failure returns an uncacheable unavailable response", async () => {
@@ -837,6 +1181,42 @@ test("concurrent NTA coordinator requests share one upstream refresh", async () 
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("history coordinator summaries enforce the scheduled cutoff and keep vehicle positions private", async () => {
+  const { NtaFeedCoordinator, RiverFeedCoordinator } = await import("../platform/cloudflare-entry.js");
+  const cutoff = Date.now() - 1_000;
+  const ntaState = new Map([["snapshot", {
+    expiresAt: Date.now() + 60_000,
+    result: {
+      status: "live",
+      vehicles: [
+        { id: "before", route: "03C 126 e a", label: "private", latitude: 53.3, longitude: -7.2, observedAt: new Date(cutoff - 1_000).toISOString() },
+        { id: "after", route: "03C 126 e a", label: "future", latitude: 53.4, longitude: -7.3, observedAt: new Date(cutoff + 1).toISOString() }
+      ]
+    }
+  }]]);
+  const storage = (state) => ({ get: async (key) => state.get(key), put: async (key, value) => state.set(key, value) });
+  const nta = new NtaFeedCoordinator({ storage: storage(ntaState) }, { NTA_API_KEY: "test-key" });
+  const transit = await (await nta.fetch(new Request(`https://internal/history-summary?captureBucketStartMs=${cutoff}`))).json();
+  assert.equal(transit.transitStatus, "partial");
+  assert.deepEqual(transit.transit, []);
+  assert.equal(transit.aggregate.vehicles, 1);
+  assert.equal(transit.latestObservedAt, new Date(cutoff - 1_000).toISOString());
+  assert.doesNotMatch(JSON.stringify(transit), /before|after|private|future|latitude|longitude/);
+
+  const riverState = new Map([["snapshot", {
+    expiresAt: Date.now() + 60_000,
+    rivers: [
+      { id: "river-before", name: "Before", latitude: 53.1, longitude: -8.5, level: 1, observedAt: new Date(cutoff - 1_000).toISOString() },
+      { id: "river-after", name: "After", latitude: 53.2, longitude: -7, level: 2, observedAt: new Date(cutoff + 1).toISOString() }
+    ],
+    provenance: { provider: "OPW", endpoint: "", status: "live", fetchedAt: new Date().toISOString(), latestObservedAt: null, fallback: null }
+  }]]);
+  const rivers = new RiverFeedCoordinator({ storage: storage(riverState) }, {});
+  const river = await (await rivers.fetch(new Request(`https://internal/history-summary?captureBucketStartMs=${cutoff}`))).json();
+  assert.equal(river.status, "partial");
+  assert.deepEqual(river.rivers.map((item) => item.id), ["river-before"]);
 });
 
 test("concurrent river coordinator requests share one refresh", async () => {
@@ -905,6 +1285,88 @@ test("partial context responses are uncacheable", async () => {
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(body.contextStatus.marine, "unavailable");
     assert.equal(body.contextStatus.warnings, "unavailable");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("public contexts preserve partial marine, tide, modelled-air, and bathing coverage", async () => {
+  const api = await import("../platform/server-entry.js");
+  const originalFetch = globalThis.fetch;
+  const now = Date.now();
+  const observedAt = new Date(now - 30 * 60_000).toISOString();
+  const airTime = new Date(now - 60 * 60_000).toISOString().slice(0, 16);
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("IWBNetwork.json")) {
+      return Response.json({ table: { rows: [["M2", -5.4, 53.5, observedAt, 10, 1.2, 5, 14]] } });
+    }
+    if (url.includes("IrishNationalTideGaugeNetwork.json")) {
+      return Response.json({ table: { rows: [["Dublin", -6.2, 53.3, observedAt, 1.1]] } });
+    }
+    if (url.includes("imiSurgeObservationINTGN") || url.includes("IMI_TidePrediction_HighLow")) {
+      throw new Error("optional-tide-network-sentinel");
+    }
+    if (url.includes("air-quality-api.open-meteo.com")) {
+      return Response.json([{ current: { time: airTime, european_aqi: 21 } }, {}, {}, {}, {}, {}, {}]);
+    }
+    if (url.includes("/bw/api/v1/alerts")) {
+      return Response.json({ list: [{
+        incident_id: 77,
+        beach_id: 99,
+        beach_name: "Missing location beach",
+        incident_start_date: new Date(now - 60 * 60_000).toISOString(),
+        incident_end_date: new Date(now + 24 * 60 * 60_000).toISOString(),
+        bathing_restriction_type: "Advice"
+      }] });
+    }
+    if (url.includes("/bw/api/v1/locations")) return Response.json({ list: [] });
+    return new Response("upstream unavailable", { status: 503 });
+  };
+  try {
+    const response = await api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    const body = await response.json();
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(body.contextStatus.marine, "partial");
+    assert.equal(body.marine.length, 1);
+    assert.equal(body.contextStatus.tides, "partial");
+    assert.equal(body.tides.length, 1);
+    assert.equal(body.tides[0].surge, null);
+    assert.equal(body.tides[0].nextHighAt, null);
+    assert.equal(body.contextStatus.modelledAir, "partial");
+    assert.equal(body.airQuality.filter((item) => item.source === "modelled").length, 1);
+    assert.equal(body.contextStatus.bathing, "partial");
+    assert.deepEqual(body.bathingAlerts, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("public contexts mark successful empty marine and tide payloads unavailable", async () => {
+  const api = await import("../platform/server-entry.js");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("erddap.marine.ie")) return Response.json({ table: { rows: [] } });
+    if (url.includes("air-quality-api.open-meteo.com")) return Response.json([{}, {}, {}, {}, {}, {}, {}]);
+    if (url.includes("/bw/api/v1/alerts")) return Response.json({ list: [] });
+    return new Response("upstream unavailable", { status: 503 });
+  };
+  try {
+    const response = await api.default.fetch(
+      new Request("https://day.illek.ie/api/contexts"),
+      { EDGE_RUNTIME: "cloudflare" }
+    );
+    const body = await response.json();
+    assert.equal(body.contextStatus.marine, "unavailable");
+    assert.deepEqual(body.marine, []);
+    assert.equal(body.contextStatus.tides, "unavailable");
+    assert.deepEqual(body.tides, []);
+    assert.equal(body.contextStatus.modelledAir, "unavailable");
+    assert.equal(body.contextStatus.bathing, "live", "an authoritative empty alert list remains live-empty");
   } finally {
     globalThis.fetch = originalFetch;
   }

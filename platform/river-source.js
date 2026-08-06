@@ -29,6 +29,77 @@ const finiteNumber = (value) => {
   return Number.isFinite(number) ? number : null;
 };
 
+const bodyLimitError = (label, cause = undefined) => new Error(
+  `${label}-body-too-large`,
+  cause === undefined ? undefined : { cause }
+);
+
+const cancelBody = async (body, label) => {
+  if (!body) return null;
+  try {
+    await body.cancel(`${label}-body-too-large`);
+    return null;
+  } catch (error) {
+    return error;
+  }
+};
+
+export const readBoundedResponseBytes = async (response, label, maximumBytes) => {
+  if (!Number.isInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new RangeError("maximumBytes must be a positive integer");
+  }
+  const contentLength = response.headers?.get?.("content-length");
+  const declared = contentLength === null || contentLength === undefined ? Number.NaN : Number(contentLength);
+  if (Number.isFinite(declared) && declared >= maximumBytes) {
+    throw bodyLimitError(label, await cancelBody(response.body, label) ?? undefined);
+  }
+  if (!response.body) return new Uint8Array();
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total >= maximumBytes) {
+        let cancellationError;
+        try {
+          await reader.cancel(`${label}-body-too-large`);
+        } catch (error) {
+          cancellationError = error;
+        }
+        throw bodyLimitError(label, cancellationError);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+};
+
+export const readBoundedJsonResponse = async (response, label, maximumBytes) => {
+  const bytes = await readBoundedResponseBytes(response, label, maximumBytes);
+  try {
+    return { body: JSON.parse(new TextDecoder().decode(bytes)), bodyBytes: bytes.byteLength };
+  } catch (error) {
+    throw new Error(`${label}-malformed-json`, { cause: error });
+  }
+};
+
+export const readBoundedTextResponse = async (response, label, maximumBytes) =>
+  new TextDecoder().decode(await readBoundedResponseBytes(response, label, maximumBytes));
+
 const dublinFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "Europe/Dublin",
   year: "numeric",
@@ -59,7 +130,7 @@ const dublinOffsetMinutes = (timestamp) => {
   return (Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - timestamp) / 60_000;
 };
 
-const parseDublinWallTime = (year, month, day, hour, minute, second) => {
+const parseDublinWallTime = (year, month, day, hour, minute, second, notAfter = null) => {
   if (![year, month, day, hour, minute, second].every(Number.isInteger)) return null;
   if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null;
   const wallTimestamp = Date.UTC(year, month - 1, day, hour, minute, second);
@@ -86,10 +157,13 @@ const parseDublinWallTime = (year, month, day, hour, minute, second) => {
         parts.hour === hour && parts.minute === minute && parts.second === second;
     })
     .sort((first, secondValue) => first - secondValue);
-  return candidates.length ? new Date(candidates[0]).toISOString() : null;
+  const selected = Number.isFinite(notAfter)
+    ? candidates.filter((candidate) => candidate <= notAfter).at(-1)
+    : candidates[0];
+  return selected === undefined ? null : new Date(selected).toISOString();
 };
 
-export const parseIrelandLocalTimestamp = (date, time) => {
+export const parseIrelandLocalTimestamp = (date, time, notAfter = null) => {
   const dateMatch = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(date ?? "").trim());
   const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(time ?? "").trim());
   if (!dateMatch || !timeMatch) return null;
@@ -99,7 +173,8 @@ export const parseIrelandLocalTimestamp = (date, time) => {
     Number(dateMatch[1]),
     Number(timeMatch[1]),
     Number(timeMatch[2]),
-    Number(timeMatch[3] ?? "0")
+    Number(timeMatch[3] ?? "0"),
+    notAfter
   );
 };
 
@@ -108,12 +183,12 @@ const EIRGRID_MONTHS = {
   Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12
 };
 
-export const parseEirGridLocalTimestamp = (value) => {
+export const parseEirGridLocalTimestamp = (value, notAfter = null) => {
   const match = /^(\d{2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(value ?? "").trim());
   if (!match) return null;
   const month = EIRGRID_MONTHS[match[2][0].toUpperCase() + match[2].slice(1).toLowerCase()];
   return month
-    ? parseDublinWallTime(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]))
+    ? parseDublinWallTime(Number(match[3]), month, Number(match[1]), Number(match[4]), Number(match[5]), Number(match[6]), notAfter)
     : null;
 };
 
@@ -345,7 +420,7 @@ const deduplicate = (readings) => {
       cells.set(key, reading);
     }
   }
-  return [...cells.values()].slice(0, 90);
+  return [...cells.values()];
 };
 
 export const normalizeRiverReadings = (readings, now = Date.now()) => {
@@ -411,16 +486,49 @@ export const latestObservedAt = (readings) => {
 };
 
 export const latestEirGridValue = (rows, field, now = Date.now(), maxAgeMs = 6 * 60 * 60 * 1000) => {
-  const candidates = (Array.isArray(rows) ? rows : []).flatMap((item) => {
-    if (!item || String(item.FieldName ?? "") !== field) return [];
+  // Response bytes are capped by the caller. Scan every retained row because
+  // EirGrid groups series inconsistently and the requested metric is not
+  // guaranteed to appear near the end of the response.
+  const boundedRows = Array.isArray(rows) ? rows : [];
+  let latest = null;
+  for (const item of boundedRows) {
+    if (!item || String(item.FieldName ?? "") !== field) continue;
     const value = finiteNumber(item.Value);
-    const observedAt = parseEirGridLocalTimestamp(String(item.EffectiveTime ?? ""));
+    const observedAt = parseEirGridLocalTimestamp(String(item.EffectiveTime ?? ""), now);
     const timestamp = observedAt ? Date.parse(observedAt) : Number.NaN;
-    return value !== null && Number.isFinite(timestamp) && timestamp <= now && now - timestamp < maxAgeMs
-      ? [{ value, observedAt, timestamp }]
-      : [];
-  });
-  return candidates.sort((first, second) => first.timestamp - second.timestamp).at(-1) ?? null;
+    if (value !== null && Number.isFinite(timestamp) && timestamp <= now && now - timestamp < maxAgeMs &&
+        (!latest || timestamp >= latest.timestamp)) latest = { value, observedAt, timestamp };
+  }
+  return latest;
+};
+
+export const buildEirGridReading = ({
+  demand = null,
+  generation = null,
+  wind = null,
+  carbonIntensity = null,
+  carbonEmissions = null,
+  frequency = null,
+  interconnection = null
+} = {}) => {
+  const components = [demand, generation, wind, carbonIntensity, carbonEmissions, frequency, interconnection];
+  const observedAt = components
+    .map((item) => item?.observedAt)
+    .filter((item) => Number.isFinite(Date.parse(item)))
+    .sort((first, second) => Date.parse(first) - Date.parse(second))
+    .at(-1) ?? null;
+  if (!observedAt) return null;
+  return {
+    observedAt,
+    demandMW: demand?.value ?? null,
+    generationMW: generation?.value ?? null,
+    windMW: wind?.value ?? null,
+    windSharePercent: wind && demand && demand.value > 0 ? wind.value / demand.value * 100 : null,
+    carbonIntensity: carbonIntensity?.value ?? null,
+    carbonEmissions: carbonEmissions?.value ?? null,
+    frequencyHz: frequency?.value ?? null,
+    interconnectorMW: interconnection?.value ?? null
+  };
 };
 
 export const makeSourceProvenance = ({

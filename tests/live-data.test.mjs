@@ -16,10 +16,13 @@ test("hosting project id is persisted", async () => {
   assert.match(hosting.default.project_id, /^appgprj_/);
 });
 
-test("Cloudflare configuration preserves the free-tier architecture", async () => {
+test("Cloudflare configuration uses the direct Workers Paid architecture", async () => {
   const config = await readFile(new URL("../wrangler.api.toml", import.meta.url), "utf8");
   assert.match(config, /pattern = "day\.illek\.ie", custom_domain = true/);
-  assert.doesNotMatch(config, /cpu_ms\s*=/);
+  assert.match(config, /main = "platform\/cloudflare-entry\.js"/);
+  assert.match(config, /crons = \["\*\/15 \* \* \* \*"\]/);
+  assert.match(config, /\[limits\][\s\S]*cpu_ms = 1000[\s\S]*subrequests = 100/);
+  assert.doesNotMatch(config, /\[\[workflows\]\]|MATERIALIZED_READS|SOL_HIGH_WORKFLOW/);
   assert.match(config, /new_sqlite_classes = \["NtaFeedCoordinator"\]/);
   assert.match(config, /new_sqlite_classes = \["RiverFeedCoordinator"\]/);
   assert.match(config, /\[browser\]\s+binding = "BROWSER"/);
@@ -88,6 +91,7 @@ test("river coordinator reuses a fresh snapshot without spending Browser Run tim
   const stored = new Map([
     ["snapshot", {
       expiresAt: Date.now() + 60_000,
+      status: "live",
       rivers: [{
         id: "river-test",
         name: "Test gauge",
@@ -96,7 +100,15 @@ test("river coordinator reuses a fresh snapshot without spending Browser Run tim
         level: 1.2,
         observedAt: new Date().toISOString(),
         fresh: true
-      }]
+      }],
+      provenance: {
+        provider: "OPW waterlevel.ie",
+        endpoint: "https://waterlevel.ie/geojson/",
+        status: "live",
+        fetchedAt: new Date().toISOString(),
+        latestObservedAt: new Date().toISOString(),
+        fallback: null
+      }
     }]
   ]);
   const coordinator = new RiverFeedCoordinator({
