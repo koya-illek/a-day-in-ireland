@@ -1,7 +1,5 @@
 import {
   RIVER_ENDPOINT,
-  buildEirGridReading,
-  latestEirGridValue,
   latestObservedAt,
   makeRiverProvenance,
   normalizeRiverReadings,
@@ -12,6 +10,48 @@ import {
   readBoundedJsonResponse,
   readBoundedTextResponse
 } from "./river-source.js";
+import {
+  assessMetForecast,
+  fetchMetForecast,
+  fetchSolarDay,
+  findSolarDay,
+  normalizeMetForecast,
+  normalizeSolarYear,
+  selectForecastPeriod
+} from "./sky-source.js";
+import {
+  addEstimatedSpeeds,
+  classifyTideTrend,
+  eirGridDublinHourWindow,
+  fetchGrid,
+  fetchGridRows,
+  irishGridToLonLat,
+  numeric,
+  normalizeRadarFrames,
+  parseMeasuredAirStations,
+  tideQueryWindow,
+  EIRGRID_BODY_LIMIT
+} from "./live-normalize.js";
+export {
+  assessMetForecast,
+  fetchMetForecast,
+  fetchSolarDay,
+  findSolarDay,
+  normalizeMetForecast,
+  normalizeSolarYear,
+  selectForecastPeriod
+};
+export {
+  addEstimatedSpeeds,
+  classifyTideTrend,
+  eirGridDublinHourWindow,
+  fetchGrid,
+  fetchGridRows,
+  irishGridToLonLat,
+  normalizeRadarFrames,
+  tideQueryWindow,
+  EIRGRID_BODY_LIMIT
+};
 
 export const COORDINATOR_RAW_BODY_LIMIT = 900_000;
 
@@ -43,6 +83,8 @@ export const fetchTrains = async () => {
   );
   if (!response.ok) throw new Error(`Irish Rail returned ${response.status}`);
   const xml = await readBoundedTextResponse(response, "irish-rail", COORDINATOR_RAW_BODY_LIMIT);
+  // Irish Rail's realtime XML does not include a per-train observation clock.
+  // Stamp last-seen-at-refresh so stale detection measures fetch cadence, not GPS age.
   const observedAt = new Date().toISOString();
   return [...xml.matchAll(/<objTrainPositions>([\s\S]*?)<\/objTrainPositions>/g)]
     .map((match) => {
@@ -176,10 +218,6 @@ export const fetchRiversResult = async (env, fetcher = fetch, captureNow = Date.
 
 export const fetchRivers = async (env) => (await fetchRiversResult(env)).rivers;
 
-const numeric = (value) => {
-  const parsed = Number.parseFloat(String(value ?? ""));
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 const freshEnough = (value, hours = 6) => {
   const timestamp = new Date(value).getTime();
@@ -276,36 +314,6 @@ export const fetchMarine = async () => {
   };
 };
 
-const parseRadarTime = (id) => {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(id);
-  return match
-    ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`
-    : new Date().toISOString();
-};
-
-export const normalizeRadarFrames = (rows) => (Array.isArray(rows) ? rows : []).slice(-7).flatMap((row) => {
-  const id = String(row?.src ?? "");
-  const modifiedTime = Number(row?.modifiedTime);
-  let server;
-  try {
-    server = new URL(String(row?.server ?? "https://gdal.met.ie"));
-  } catch {
-    return [];
-  }
-  if (
-    !/^\d{12}$/.test(id) ||
-    !Number.isFinite(modifiedTime) ||
-    server.protocol !== "https:" ||
-    server.hostname !== "gdal.met.ie"
-  ) return [];
-  return [{
-    id,
-    observedAt: parseRadarTime(id),
-    modifiedTime,
-    provider: "Met Éireann",
-    tileTemplate: `${server.origin}/api/maps/radar/${id}/{x}/{y}/{z}/${modifiedTime}`
-  }];
-});
 
 const fetchRadar = async () => {
   const response = await fetch("https://gdal.met.ie/api/maps/radar", {
@@ -315,55 +323,6 @@ const fetchRadar = async () => {
   return normalizeRadarFrames(await response.json());
 };
 
-export const EIRGRID_BODY_LIMIT = 256_000;
-
-export const fetchGridRows = async (chartType, areas, fetcher = fetch, now = Date.now()) => {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", hourCycle: "h23"
-  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
-  const day = `${parts.year}-${parts.month}-${parts.day}`;
-  const hour = `${day}T${parts.hour}`;
-  const url = new URL("https://www.smartgriddashboard.com/api/chart/");
-  url.search = new URLSearchParams({
-    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day",
-    dateFrom: chartType === "frequency" ? `${hour}:00:00` : day,
-    dateTo: chartType === "frequency" ? `${hour}:59:59` : day, areas
-  }).toString();
-  const response = await fetcher(url, {
-    cf: { cacheEverything: true, cacheTtl: chartType === "frequency" ? 60 : 300 }
-  });
-  if (!response.ok) throw new Error(`EirGrid ${chartType} returned ${response.status}`);
-  const bounded = await readBoundedJsonResponse(response, `eirgrid-${chartType}`, EIRGRID_BODY_LIMIT);
-  return bounded.body.Rows ?? [];
-};
-
-export const fetchGrid = async (fetcher = fetch, now = Date.now()) => {
-  const settled = await Promise.allSettled([
-      fetchGridRows("demand", "demandactual", fetcher, now),
-      fetchGridRows("generation", "generationactual", fetcher, now),
-      fetchGridRows("wind", "windactual", fetcher, now),
-      fetchGridRows("co2", "co2intensity,co2emission", fetcher, now),
-      fetchGridRows("frequency", "frequency", fetcher, now),
-      fetchGridRows("interconnection", "interconnection", fetcher, now)
-    ]);
-  const rows = (index) => settled[index].status === "fulfilled" ? settled[index].value : [];
-  const [demandRows, generationRows, windRows, carbonRows, frequencyRows, interconnectionRows] = [0, 1, 2, 3, 4, 5].map(rows);
-  const demand = latestEirGridValue(demandRows, "SYSTEM_DEMAND", now);
-  const generation = latestEirGridValue(generationRows, "GEN_EXP", now);
-  const wind = latestEirGridValue(windRows, "WIND_ACTUAL", now);
-  const intensity = latestEirGridValue(carbonRows, "CO2_INTENSITY", now);
-  const emissions = latestEirGridValue(carbonRows, "CO2_EMISSIONS", now);
-  const frequency = latestEirGridValue(frequencyRows, "SYS_FREQUENCY", now);
-  const interconnector = latestEirGridValue(interconnectionRows, "INTER_NET", now);
-  const reading = buildEirGridReading({
-    demand, generation, wind, carbonIntensity: intensity, carbonEmissions: emissions,
-    frequency, interconnection: interconnector
-  });
-  if (!reading) return { reading: null, status: "unavailable" };
-  const metricCount = [demand, generation, wind, intensity, emissions, frequency, interconnector].filter(Boolean).length;
-  return { reading, status: metricCount === 7 ? "live" : "partial" };
-};
 
 const airLocations = [
   ["dublin-air", "Dublin", 53.35, -6.26],
@@ -404,30 +363,6 @@ export const fetchAirQuality = async () => {
   };
 };
 
-const webMercatorToLonLat = (x, y) => ({
-  longitude: x / 6378137 * 180 / Math.PI,
-  latitude: (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI
-});
-
-const eeaTimestamp = (value) => {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(String(value));
-  return match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z` : "";
-};
-
-const europeanAqiScore = ({ pm25, pm10, nitrogenDioxide, ozone }) => {
-  const bands = [
-    [pm25, [10, 20, 25, 50, 75]],
-    [pm10, [20, 40, 50, 100, 150]],
-    [nitrogenDioxide, [40, 90, 120, 230, 340]],
-    [ozone, [50, 100, 130, 240, 380]]
-  ];
-  const scores = bands.flatMap(([reading, thresholds]) => {
-    if (reading === null || !Number.isFinite(reading)) return [];
-    const index = thresholds.findIndex((threshold) => reading <= threshold);
-    return [index < 0 ? 110 : [10, 30, 50, 70, 90][index]];
-  });
-  return scores.length ? Math.max(...scores) : null;
-};
 
 const fetchMeasuredAirQuality = async () => {
   const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
@@ -448,93 +383,9 @@ const fetchMeasuredAirQuality = async () => {
     const reasons = results.flatMap((result) => result.status === "rejected" ? [String(result.reason)] : []);
     throw new Error(`EEA measured air unavailable: ${reasons.join("; ")}`);
   }
-  const stations = new Map();
-  for (const [field, csv] of responses) {
-    for (const line of csv.split(/\r?\n/).slice(1)) {
-      if (!line.startsWith("SPO.IE.")) continue;
-      const columns = line.split(",");
-      const value = numeric(columns[4]);
-      const x = numeric(columns[11]);
-      const y = numeric(columns[12]);
-      if (value === null || x === null || y === null) continue;
-      const id = columns[9];
-      const location = webMercatorToLonLat(x, y);
-      const current = stations.get(id) ?? {
-        id: `measured-${id}`,
-        name: columns[10].replace(/^(Ireland|Dublin|Cork|Kerry|Galway|Limerick|Clare|Mayo|Donegal|Wicklow|Kildare|Louth|Sligo|Offaly|Carlow|Cavan|Roscommon|Waterford)\s+/i, ""),
-        ...location,
-        observedAt: eeaTimestamp(columns[2]),
-        europeanAqi: null,
-        pm25: null,
-        pm10: null,
-        nitrogenDioxide: null,
-        ozone: null,
-        uvIndex: null,
-        grassPollen: null,
-        source: "measured",
-        stationClassification: columns[6] || null
-      };
-      current[field] = value;
-      stations.set(id, current);
-    }
-  }
-  return [...stations.values()].map((station) => ({
-    ...station,
-    europeanAqi: europeanAqiScore(station)
-  })).filter((station) =>
-    station.latitude >= 51.2 && station.latitude <= 55.6 &&
-    station.longitude >= -10.8 && station.longitude <= -5.2
-  );
+  return parseMeasuredAirStations(responses);
 };
 
-export const tideQueryWindow = (now = Date.now()) => {
-  const bucketMilliseconds = 15 * 60 * 1000;
-  const bucket = Math.floor(now / bucketMilliseconds) * bucketMilliseconds;
-  return {
-    // The trend algorithm only compares the last 30 minutes. A 45-minute
-    // window preserves a complete pair across a 15-minute bucket boundary
-    // without downloading a full day of gauge levels.
-    since: new Date(bucket - 45 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
-    until: new Date(bucket + 36 * 60 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z")
-  };
-};
-
-const TIDE_TREND_WINDOW_MS = 30 * 60 * 1000;
-const TIDE_TREND_CHANGE_THRESHOLD_METRES = .01;
-
-export const classifyTideTrend = (samples) => {
-  const valid = samples.flatMap((sample) => {
-    const observedAt = new Date(sample.observedAt).getTime();
-    const waterLevel = numeric(sample.waterLevel);
-    return Number.isFinite(observedAt) && waterLevel !== null
-      ? [{ observedAt, waterLevel }]
-      : [];
-  }).sort((first, second) => first.observedAt - second.observedAt);
-  if (valid.length < 3) return "unknown";
-
-  const latestAt = valid.at(-1).observedAt;
-  const recent = valid.filter((sample) => sample.observedAt >= latestAt - TIDE_TREND_WINDOW_MS);
-  if (recent.length < 3) return "unknown";
-
-  const origin = recent[0].observedAt;
-  const points = recent.map((sample) => ({
-    minutes: (sample.observedAt - origin) / 60_000,
-    waterLevel: sample.waterLevel
-  }));
-  const meanMinutes = points.reduce((sum, point) => sum + point.minutes, 0) / points.length;
-  const meanLevel = points.reduce((sum, point) => sum + point.waterLevel, 0) / points.length;
-  const variance = points.reduce((sum, point) => sum + (point.minutes - meanMinutes) ** 2, 0);
-  if (variance === 0) return "unknown";
-
-  const covariance = points.reduce(
-    (sum, point) => sum + (point.minutes - meanMinutes) * (point.waterLevel - meanLevel),
-    0
-  );
-  const estimatedChange = covariance / variance * points.at(-1).minutes;
-  if (estimatedChange > TIDE_TREND_CHANGE_THRESHOLD_METRES) return "rising";
-  if (estimatedChange < -TIDE_TREND_CHANGE_THRESHOLD_METRES) return "falling";
-  return "steady";
-};
 
 export const fetchTides = async () => {
   const { since, until } = tideQueryWindow();
@@ -599,38 +450,6 @@ export const fetchTides = async () => {
   };
 };
 
-export const irishGridToLonLat = (east, north) => {
-  const a = 6377340.189, b = 6356034.447, f0 = 1.000035;
-  const lat0 = 53.5 * Math.PI / 180, lon0 = -8 * Math.PI / 180;
-  const n0 = 250000, e0 = 200000;
-  const e2 = 1 - (b * b) / (a * a);
-  const n = (a - b) / (a + b);
-  let lat = lat0, meridional = 0;
-  do {
-    lat = (north - n0 - meridional) / (a * f0) + lat;
-    const ma = (1 + n + 5 / 4 * n ** 2 + 5 / 4 * n ** 3) * (lat - lat0);
-    const mb = (3 * n + 3 * n ** 2 + 21 / 8 * n ** 3) * Math.sin(lat - lat0) * Math.cos(lat + lat0);
-    const mc = (15 / 8 * n ** 2 + 15 / 8 * n ** 3) * Math.sin(2 * (lat - lat0)) * Math.cos(2 * (lat + lat0));
-    const md = 35 / 24 * n ** 3 * Math.sin(3 * (lat - lat0)) * Math.cos(3 * (lat + lat0));
-    meridional = b * f0 * (ma - mb + mc - md);
-  } while (Math.abs(north - n0 - meridional) >= .00001);
-  const sin = Math.sin(lat), cos = Math.cos(lat), tan = Math.tan(lat);
-  const nu = a * f0 / Math.sqrt(1 - e2 * sin ** 2);
-  const rho = a * f0 * (1 - e2) / (1 - e2 * sin ** 2) ** 1.5;
-  const eta2 = nu / rho - 1;
-  const d = east - e0;
-  const vii = tan / (2 * rho * nu);
-  const viii = tan / (24 * rho * nu ** 3) * (5 + 3 * tan ** 2 + eta2 - 9 * tan ** 2 * eta2);
-  const ix = tan / (720 * rho * nu ** 5) * (61 + 90 * tan ** 2 + 45 * tan ** 4);
-  const x = 1 / (cos * nu);
-  const xi = 1 / (6 * cos * nu ** 3) * (nu / rho + 2 * tan ** 2);
-  const xii = 1 / (120 * cos * nu ** 5) * (5 + 28 * tan ** 2 + 24 * tan ** 4);
-  const xiia = 1 / (5040 * cos * nu ** 7) * (61 + 662 * tan ** 2 + 1320 * tan ** 4 + 720 * tan ** 6);
-  return {
-    latitude: (lat - vii * d ** 2 + viii * d ** 4 - ix * d ** 6) * 180 / Math.PI,
-    longitude: (lon0 + x * d - xi * d ** 3 + xii * d ** 5 - xiia * d ** 7) * 180 / Math.PI
-  };
-};
 
 export const fetchBathingAlerts = async () => {
   const alertsResponse = await fetch("https://data.epa.ie/bw/api/v1/alerts?per_page=100", {
@@ -681,7 +500,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SATELLITE_LAYER = "VIIRS_SNPP_CorrectedReflectance_TrueColor";
 const SATELLITE_MATRIX_SET = "GoogleMapsCompatible_Level9";
 const SATELLITE_PROBE_TILES = [
-  [30, 20], [31, 20], [30, 21], [31, 21]
+  [30, 20], [31, 21]
 ];
 const SATELLITE_DOMAINS_URL =
   `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/1.0.0/${SATELLITE_LAYER}/default/${SATELLITE_MATRIX_SET}/all/all.xml`;
@@ -758,7 +577,7 @@ export const resolveSatelliteAvailability = async ({
 export const findLatestSatelliteFrame = async ({
   now = Date.now(),
   fetcher = fetch,
-  maximumLookbackDays = 14,
+  maximumLookbackDays = 5,
   startDate
 } = {}) => {
   const availability = typeof startDate === "string"
@@ -784,7 +603,7 @@ export const createSatelliteAvailabilityResolver = ({
   fetcher = (...args) => fetch(...args),
   resolveAvailability = resolveSatelliteAvailability,
   discoverFrame = findLatestSatelliteFrame,
-  maximumLookbackDays = 14,
+  maximumLookbackDays = 5,
   successCacheMs = SATELLITE_SUCCESS_CACHE_MS,
   failureCacheMs = SATELLITE_FAILURE_CACHE_MS
 } = {}) => {
@@ -1004,9 +823,10 @@ const livingLayers = async (env) => {
 
 const currentContexts = async (env) => {
   const measuredAirAtEdge = env.EDGE_RUNTIME !== "cloudflare";
+  const warningsPromise = fetchWarnings();
   const [
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, warnings
+    bathingAlerts, satellite, earthquakes, issTle, warnings, solar, forecast
   ] = await Promise.allSettled([
     fetchMarine(),
     fetchRadar(),
@@ -1019,16 +839,21 @@ const currentContexts = async (env) => {
     fetchSatellite(),
     fetchEarthquakes(),
     fetchIssTle(),
-    fetchWarnings()
+    warningsPromise,
+    fetchSolarDay({ now: Date.now() }),
+    warningsPromise.then(() => fetchMetForecast({ now: Date.now() }))
   ]);
   for (const [name, result] of Object.entries({
     marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, warnings
+    bathingAlerts, satellite, earthquakes, issTle, warnings, solar, forecast
   })) {
     if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
   }
   const modelled = modelledAir.status === "fulfilled" ? modelledAir.value.readings : [];
   const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
+  const warningsHealthy = warnings.status === "fulfilled";
+  const solarReading = solar.status === "fulfilled" ? solar.value.reading : null;
+  const forecastValue = warningsHealthy && forecast.status === "fulfilled" ? forecast.value.forecast : null;
   const contextStatus = {
     marine: marine.status === "fulfilled" ? marine.value.status : "unavailable",
     radar: radar.status === "fulfilled" && radar.value.length ? "live" : "unavailable",
@@ -1041,7 +866,9 @@ const currentContexts = async (env) => {
     satellite: satellite.status === "fulfilled" ? "fallback" : "unavailable",
     earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
     iss: issTle.status === "fulfilled" ? "live" : "unavailable",
-    warnings: warnings.status === "fulfilled" ? "live" : "unavailable"
+    warnings: warnings.status === "fulfilled" ? "live" : "unavailable",
+    solar: solar.status === "fulfilled" ? "live" : "unavailable",
+    forecast: warningsHealthy && forecast.status === "fulfilled" ? "live" : "unavailable"
   };
   return json({
     generatedAt: new Date().toISOString(),
@@ -1052,8 +879,10 @@ const currentContexts = async (env) => {
     aurora: aurora.status === "fulfilled" ? aurora.value : null,
     tides: tides.status === "fulfilled" ? tides.value.readings : [],
     bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value.alerts : [],
-    warnings: warnings.status === "fulfilled" ? warnings.value : [],
+    warnings: warningsHealthy ? warnings.value : [],
     warningsStatus: warnings.status === "fulfilled" ? "live" : "unavailable",
+    solar: solarReading,
+    forecast: forecastValue,
     satellite: satellite.status === "fulfilled" ? satellite.value : null,
     earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
     issTle: issTle.status === "fulfilled" ? issTle.value : null,
@@ -1099,7 +928,6 @@ const worker = {
       }
     }
     if (url.pathname === "/api/transit") return transitContext(env);
-
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404) return response;
     if (url.pathname.includes(".")) return response;

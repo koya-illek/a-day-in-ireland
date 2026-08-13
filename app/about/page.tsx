@@ -10,13 +10,14 @@ export const metadata: Metadata = {
 export default function AboutPage() {
   return (
     <InfoPage
+      current="about"
       eyebrow="About the project"
       title="A living portrait of the island."
       introduction="A Day in Ireland brings public observations together so the island can be understood as one changing place—not as a collection of disconnected dashboards."
     >
       <section>
         <h2>What it is</h2>
-        <p>The map combines weather, rain radar, public transport, rail, rivers, sea conditions, air quality, tides, electricity and occasional events such as aurora or seismic activity.</p>
+        <p>The map combines weather, authoritative daylight and lunar events, the official Met Éireann national text forecast, rain radar, public transport, rail, rivers, sea conditions, air quality, tides, electricity and occasional events such as aurora or seismic activity.</p>
         <p>It is an independent experimental project from <a href="https://illek.ie">Illek</a>. It is not operated by, endorsed by or affiliated with any of the public data providers shown.</p>
       </section>
       <section>

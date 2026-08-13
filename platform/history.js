@@ -64,6 +64,7 @@ const emptySnapshot = (capturedAt) => ({
   stations: [], warnings: [], marine: [], trains: [], rivers: [], radar: [], grid: null,
   airQuality: [], aurora: null, tides: [], bathingAlerts: [], iss: null, issTle: null,
   satellite: null, earthquakes: [], transit: [], transitStatus: "unavailable",
+  solar: null, forecast: null,
   sourceProvenance: {
     trains: unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
     rivers: unavailableProvenance("OPW waterlevel.ie", "https://waterlevel.ie/geojson/latest/", capturedAt)
@@ -71,7 +72,8 @@ const emptySnapshot = (capturedAt) => ({
   contextStatus: {
     marine: "unavailable", radar: "unavailable", grid: "unavailable", measuredAir: "unavailable",
     modelledAir: "unavailable", aurora: "unavailable", tides: "unavailable", bathing: "unavailable",
-    satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "unavailable"
+    satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "unavailable",
+    solar: "unavailable", forecast: "unavailable"
   },
   summary: { warmest: null, wettest: null, windiest: null, reporting: null, runningTrains: null, riverStations: null },
   timeline: []
@@ -197,6 +199,8 @@ export async function buildHistoryCapture({
     tides: Array.isArray(sources.tides?.data) ? sources.tides.data : [],
     bathingAlerts: Array.isArray(sources.bathing?.data) ? sources.bathing.data : [],
     earthquakes: Array.isArray(sources.earthquakes?.data) ? sources.earthquakes.data : [],
+    solar: null,
+    forecast: null,
     sourceProvenance: {
       trains: unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
       rivers: boundedProvenance(living.sourceProvenance?.rivers, {
@@ -209,7 +213,7 @@ export async function buildHistoryCapture({
       measuredAir: "unavailable", modelledAir: contextStatus(sources.air_modelled?.status), aurora: "unavailable",
       tides: contextStatus(sources.tides?.status), bathing: contextStatus(sources.bathing?.status),
       satellite: "unavailable", earthquakes: contextStatus(sources.earthquakes?.status), iss: "unavailable",
-      warnings: contextStatus(sources.warnings?.status)
+      warnings: contextStatus(sources.warnings?.status), solar: "unavailable", forecast: "unavailable"
     },
     summary: {
       warmest: weather.summary?.warmest ?? null,
@@ -234,6 +238,10 @@ export async function buildHistoryCapture({
     {
       source: "transit", scope: "history-v1", reason: "summary-only",
       detail: "Only NTA route-level aggregate counts are retained; vehicle IDs, positions and labels are excluded."
+    },
+    {
+      source: "sky", scope: "history-v1", reason: "not-retained",
+      detail: "Solar events and official forecast copy are not retained in history v1; use the current attributed sources."
     },
     ...(transitStatus === "live" ? [] : [{
       source: "transit", scope: "provider", reason: transitStatus,

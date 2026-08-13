@@ -28,6 +28,7 @@ export function warningTiming(
 ): "active" | "upcoming" | "future" | "expired";
 export function sortOfficialWeatherWarnings<T extends { id?: string; capId?: string; type?: string; severity?: string; level?: string; onset?: string; expiry?: string }>(warnings: T[], now?: number): T[];
 export function isActivityRelevantWeatherWarning(warning: { type?: string; headline?: string; description?: string }): boolean;
+export function normalizeBathingAlerts(rows: unknown[], now?: number): unknown[];
 export function normalizeProviderTimestamp(value: unknown): string | null;
 export function normalizeRiverReadings(readings: unknown[], now?: number): RiverReading[];
 export function parseRiverGeoJson(body: unknown, now?: number): RiverReading[];

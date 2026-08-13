@@ -16,7 +16,8 @@ A living, near-real-time portrait of weather, water, energy and movement across 
 - USGS detected earthquakes from the previous seven days around Ireland.
 - CelesTrak ISS orbital elements, with 48-hour passes calculated locally for central Ireland.
 - NTA GTFS-Realtime vehicle positions when an `NTA_API_KEY` production environment variable is configured.
-- Solar position and daylight state are calculated locally.
+- Sunrise-Sunset.org API v2 sunrise, twilight, golden/blue-hour, solar-position and lunar events for the Ireland centre point, with visible attribution. The Worker fetches a short Dublin-date window, not a whole calendar year.
+- Met Éireann live national text forecast, shown verbatim with the current official warnings feed.
 
 Weather, radar and the additional island contexts refresh every five minutes; train positions refresh every minute. OPW normally publishes river levels about every fifteen minutes, and deployed readings automatically expire after three hours if an upstream refresh is unavailable. Marine observations expire after six hours. Missing or stale values are not represented as zero.
 

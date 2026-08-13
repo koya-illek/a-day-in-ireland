@@ -8,6 +8,15 @@ import {
   normalizeOfficialWeatherWarnings,
   normalizeRiverReadings
 } from "../platform/river-source.js";
+import {
+  acceptClientForecast,
+  acceptClientSolar
+} from "../platform/sky-source.js";
+import {
+  addEstimatedSpeeds,
+  numeric,
+  parseMeasuredAirStations
+} from "../platform/live-normalize.js";
 import { isWeatherObservationFresh, matchesWeatherStationIdentity, WEATHER_STATIONS } from "./weather-stations";
 import { aggregateHourlyWeather } from "./weather-timeline.js";
 import {
@@ -23,26 +32,6 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const numeric = (value: unknown) => {
-  const parsed = Number.parseFloat(String(value ?? "").trim());
-  return Number.isFinite(parsed) ? parsed : null;
-};
-
-const distanceKm = (
-  first: { latitude: number; longitude: number },
-  second: { latitude: number; longitude: number }
-) => {
-  const radians = Math.PI / 180;
-  const latitudeDelta = (second.latitude - first.latitude) * radians;
-  const longitudeDelta = (second.longitude - first.longitude) * radians;
-  const firstLatitude = first.latitude * radians;
-  const secondLatitude = second.latitude * radians;
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-};
-
 export function addCalculatedSpeeds<
   T extends {
     id: string;
@@ -57,28 +46,7 @@ export function addCalculatedSpeeds<
   previous: T[],
   options: { maximumKmh: number; maximumIntervalMinutes: number }
 ): T[] {
-  const previousById = new Map(previous.map((item) => [item.id, item]));
-  return current.map((item) => {
-    if (item.speedKmh !== null && item.speedKmh !== undefined) {
-      return { ...item, speedSource: item.speedSource ?? "reported" };
-    }
-    const earlier = previousById.get(item.id);
-    if (!earlier) return { ...item, speedKmh: null, speedSource: null };
-    const elapsedHours =
-      (new Date(item.observedAt).getTime() - new Date(earlier.observedAt).getTime()) / 3_600_000;
-    if (
-      !Number.isFinite(elapsedHours) ||
-      elapsedHours <= 0 ||
-      elapsedHours > options.maximumIntervalMinutes / 60
-    ) {
-      return { ...item, speedKmh: null, speedSource: null };
-    }
-    const calculated = distanceKm(earlier, item) / elapsedHours;
-    if (!Number.isFinite(calculated) || calculated > options.maximumKmh) {
-      return { ...item, speedKmh: null, speedSource: null };
-    }
-    return { ...item, speedKmh: calculated, speedSource: "calculated" };
-  });
+  return addEstimatedSpeeds(current, previous, { ...options, clearUnusable: true });
 }
 
 type ProviderName = "weather" | "living" | "contexts" | "transit";
@@ -502,6 +470,13 @@ export const retainLastGoodContexts = (previous: LiveSnapshot, now = Date.now())
     ? previous.issTle
     : null;
   const warnings = normalizeBrowserWarnings(previous.warnings, now);
+  const currentDublinDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit"
+  }).format(new Date(now));
+  const solar = previous.solar?.date === currentDublinDate ? previous.solar : null;
+  const forecast = previous.forecast && isRecent(previous.forecast.issued, 36 * 60 * 60_000, now)
+    ? previous.forecast
+    : null;
   const staleOrUnavailable = (hasLastGood: boolean) => hasLastGood ? "stale" as const : "unavailable" as const;
   return {
     ...previous,
@@ -529,8 +504,12 @@ export const retainLastGoodContexts = (previous: LiveSnapshot, now = Date.now())
       satellite: staleOrUnavailable(Boolean(satellite)),
       earthquakes: staleOrUnavailable(earthquakes.length > 0),
       iss: staleOrUnavailable(Boolean(issTle && previous.iss)),
-      warnings: staleOrUnavailable(warnings.length > 0)
-    }
+      warnings: staleOrUnavailable(warnings.length > 0),
+      solar: staleOrUnavailable(Boolean(solar)),
+      forecast: staleOrUnavailable(Boolean(forecast))
+    },
+    solar,
+    forecast
   };
 };
 
@@ -604,7 +583,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const next = await response.json() as Partial<Pick<
       LiveSnapshot,
       "generatedAt" | "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
-      "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus"
+      "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus" |
+      "solar" | "forecast"
     >> & {
       warnings?: unknown;
       warningsStatus?: LiveSnapshot["contextStatus"]["warnings"];
@@ -665,6 +645,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const incomingGrid = next.grid && typeof next.grid === "object"
       ? { ...next.grid, observedAt: normalizeGridTimestamp(next.grid.observedAt) }
       : null;
+    const incomingSolar = acceptClientSolar(next.solar, now);
+    const incomingForecast = acceptClientForecast(next.forecast, now);
     const marineStatus = statusFor("marine", Array.isArray(next.marine));
     const radarStatus = statusFor("radar", Array.isArray(next.radar) && next.radar.length > 0, true);
     const gridStatus = statusFor("grid", Boolean(incomingGrid), true);
@@ -673,6 +655,10 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const satelliteStatus = statusFor("satellite", Boolean(next.satellite && typeof next.satellite === "object"), true);
     const earthquakeStatus = statusFor("earthquakes", Array.isArray(next.earthquakes));
     const issStatus = statusFor("iss", Boolean(next.issTle && typeof next.issTle === "object"));
+    const solarStatus = statusFor("solar", Boolean(incomingSolar), true);
+    const forecastStatus = warningStatus === "live"
+      ? statusFor("forecast", Boolean(incomingForecast), true)
+      : "unavailable";
     const useIncoming = (status: LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]) =>
       status !== "unavailable" && status !== "credential-required";
     const contextStatus: LiveSnapshot["contextStatus"] = {
@@ -687,7 +673,9 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       satellite: useIncoming(satelliteStatus) ? satelliteStatus : retained.contextStatus.satellite,
       earthquakes: useIncoming(earthquakeStatus) ? earthquakeStatus : retained.contextStatus.earthquakes,
       iss: useIncoming(issStatus) ? issStatus : retained.contextStatus.iss,
-      warnings: useIncoming(warningStatus) ? warningStatus : retained.contextStatus.warnings
+      warnings: useIncoming(warningStatus) ? warningStatus : retained.contextStatus.warnings,
+      solar: useIncoming(solarStatus) ? solarStatus : retained.contextStatus.solar,
+      forecast: useIncoming(forecastStatus) ? forecastStatus : retained.contextStatus.forecast
     };
     const refreshedAt = next.generatedAt ?? new Date(now).toISOString();
     const hasProviderSuccess = Object.values(contextStatus).some((status) => status === "live" || status === "fallback");
@@ -709,6 +697,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       issTle: useIncoming(issStatus) && next.issTle ? next.issTle : retained.issTle,
       satellite: useIncoming(satelliteStatus) ? next.satellite! : retained.satellite,
       earthquakes: useIncoming(earthquakeStatus) ? next.earthquakes! : retained.earthquakes,
+      solar: useIncoming(solarStatus) ? incomingSolar : retained.solar,
+      forecast: useIncoming(forecastStatus) ? incomingForecast : retained.forecast,
       contextStatus
     };
   }, () => retainLastGoodContexts(previous));
@@ -756,31 +746,6 @@ export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapsh
   }, () => retainLastGoodTransit(previous));
 }
 
-const eeaTimestamp = (value: string) => {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(value);
-  return match ? `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z` : "";
-};
-
-const webMercatorToLonLat = (x: number, y: number) => ({
-  longitude: x / 6378137 * 180 / Math.PI,
-  latitude: (2 * Math.atan(Math.exp(y / 6378137)) - Math.PI / 2) * 180 / Math.PI
-});
-
-const measuredAqi = (reading: Pick<LiveSnapshot["airQuality"][number], "pm25" | "pm10" | "nitrogenDioxide" | "ozone">) => {
-  const bands: Array<[number | null, number[]]> = [
-    [reading.pm25, [10, 20, 25, 50, 75]],
-    [reading.pm10, [20, 40, 50, 100, 150]],
-    [reading.nitrogenDioxide, [40, 90, 120, 230, 340]],
-    [reading.ozone, [50, 100, 130, 240, 380]]
-  ];
-  const scores = bands.flatMap(([value, thresholds]) => {
-    if (value === null) return [];
-    const index = thresholds.findIndex((threshold) => value <= threshold);
-    return [index < 0 ? 110 : [10, 30, 50, 70, 90][index]];
-  });
-  return scores.length ? Math.max(...scores) : null;
-};
-
 async function fetchMeasuredAirFallback(parentSignal?: AbortSignal): Promise<LiveSnapshot["airQuality"]> {
   try {
     const signal = parentSignal ?? new AbortController().signal;
@@ -799,45 +764,8 @@ async function fetchMeasuredAirFallback(parentSignal?: AbortSignal): Promise<Liv
       if (!response.ok) throw new Error(String(response.status));
       return [field, await response.text()] as const;
     }));
-    const stations = new Map<string, LiveSnapshot["airQuality"][number]>();
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
-      const [field, csv] = result.value;
-      for (const line of csv.split(/\r?\n/).slice(1)) {
-        if (!line.startsWith("SPO.IE.")) continue;
-        const columns = line.split(",");
-        const pollutantValue = numeric(columns[4]);
-        const x = numeric(columns[11]);
-        const y = numeric(columns[12]);
-        if (pollutantValue === null || x === null || y === null) continue;
-        const id = columns[9];
-        const location = webMercatorToLonLat(x, y);
-        const current = stations.get(id) ?? {
-          id: `measured-${id}`,
-          name: columns[10].replace(/^(Ireland|Dublin|Cork|Kerry|Galway|Limerick|Clare|Mayo|Donegal|Wicklow|Kildare|Louth|Sligo|Offaly|Carlow|Cavan|Roscommon|Waterford)\s+/i, ""),
-          ...location,
-          observedAt: eeaTimestamp(columns[2]),
-          europeanAqi: null,
-          pm25: null,
-          pm10: null,
-          nitrogenDioxide: null,
-          ozone: null,
-          uvIndex: null,
-          grassPollen: null,
-          source: "measured",
-          stationClassification: columns[6] || null
-        };
-        current[field] = pollutantValue;
-        stations.set(id, current);
-      }
-    }
-    return [...stations.values()].map((station) => ({
-      ...station,
-      europeanAqi: measuredAqi(station)
-    })).filter((station) =>
-      station.latitude >= 51.2 && station.latitude <= 55.6 &&
-      station.longitude >= -10.8 && station.longitude <= -5.2
-    );
+    const responses = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    return parseMeasuredAirStations(responses);
   } catch {
     return [];
   }

@@ -2,6 +2,8 @@ import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./serve
 import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
 import { captureHistory, handleHistoryRequest, maintainHistory } from "./history.js";
 import { summarizeTransit } from "./history-sources.js";
+import { addEstimatedSpeeds } from "./live-normalize.js";
+export { addEstimatedSpeeds } from "./live-normalize.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
@@ -25,33 +27,6 @@ const transitUnavailableHeaders = {
 const captureCutoff = (url, fallback = Date.now()) => {
   const value = Number(url.searchParams.get("captureBucketStartMs"));
   return Number.isInteger(value) && value >= 0 ? value : fallback;
-};
-
-const distanceKm = (first, second) => {
-  const radians = Math.PI / 180;
-  const latitudeDelta = (second.latitude - first.latitude) * radians;
-  const longitudeDelta = (second.longitude - first.longitude) * radians;
-  const firstLatitude = first.latitude * radians;
-  const secondLatitude = second.latitude * radians;
-  const haversine =
-    Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
-};
-
-export const addEstimatedSpeeds = (current, previous, maximumKmh = 130) => {
-  const previousById = new Map(previous.map((item) => [item.id, item]));
-  return current.map((item) => {
-    if (item.speedKmh != null) return { ...item, speedSource: item.speedSource ?? "reported" };
-    const earlier = previousById.get(item.id);
-    if (!earlier) return item;
-    const elapsedHours =
-      (new Date(item.observedAt).getTime() - new Date(earlier.observedAt).getTime()) / 3_600_000;
-    if (!Number.isFinite(elapsedHours) || elapsedHours <= 0 || elapsedHours > 10 / 60) return item;
-    const speedKmh = distanceKm(earlier, item) / elapsedHours;
-    if (!Number.isFinite(speedKmh) || speedKmh > maximumKmh) return item;
-    return { ...item, speedKmh, speedSource: "calculated" };
-  });
 };
 
 const transitUsable = (status) => status === "live" || status === "partial";

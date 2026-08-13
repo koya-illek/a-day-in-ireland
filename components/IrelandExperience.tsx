@@ -5,7 +5,6 @@ import {
   type PointerEvent as ReactPointerEvent,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
   type WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
@@ -21,20 +20,15 @@ import islandBoundary from "../public/map/island.json";
 import majorRoads from "../public/map/major-roads.json";
 import type {
   AirQualityReading,
-  BathingAlert,
-  EarthquakeReading,
   LiveSnapshot,
-  RiverReading,
-  StationReading,
-  TideReading,
   TrainPosition
 } from "../lib/types";
-import { maskRadarNoDataPixels } from "../lib/radar-tiles";
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
 import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { humaniseWarningRegions, transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
+import { ForecastStrip, SkyLightStrip } from "./SkyBriefing";
 import {
   DEFAULT_PLACE_ID,
   parseViewState,
@@ -52,61 +46,54 @@ import {
   fetchHistoryRange,
   fetchHistorySnapshot,
   formatIrelandHistoryTime,
-  irelandInputParts,
-  irelandWallTimeCandidates,
   isUsableHistoryEnvelope,
-  type HistoryEnvelope,
   type HistoryGap,
   type HistoryRange
 } from "../lib/history";
 
-type Layer =
-  | "weather"
-  | "rain"
-  | "wind"
-  | "warnings"
-  | "places"
-  | "sea"
-  | "trains"
-  | "rivers"
-  | "radar"
-  | "grid"
-  | "air"
-  | "aurora"
-  | "tides"
-  | "bathing"
-  | "iss"
-  | "satellite"
-  | "earthquakes"
-  | "transit";
+import {
+  type ConnectionStatus,
+  type ContextFocus,
+  type ExperienceSection,
+  type HistoryComparisonState,
+  type HistoryLoadState,
+  type Layer,
+  type LayerGroup,
+  type MapSelection,
+  type MovementSelection,
+  type MovementStack,
+  type NearbyReading,
+  type Place,
+  type Preset,
+  type Selection,
+  type TimeMode,
+  MOVEMENT_DRILL_THRESHOLD,
+  aqiLabel,
+  formatAge,
+  formatDate,
+  formatDistance,
+  formatTime,
+  movementItemIdentity,
+  movementMarkerId,
+  statusText
+} from "./experience-model";
+import {
+  MapMarker,
+  RadarTiles,
+  SatelliteTiles,
+  StationMarker,
+  createRadarTileStatusRecord,
+  IRELAND_RADAR_TILES,
+  windDirectionDegrees,
+  type MarkerInteraction,
+  type RadarPresentationState,
+  type RadarTileStatus,
+  type RadarTileStatusReporter
+} from "./MapLayers";
+import { AuroraPanel, DetailCard, GridPanel, IssPanel } from "./MapPanels";
+import { HistoryControls, historyResolutionLabel } from "./HistoryControls";
+import { ExplorePanel } from "./ExplorePanel";
 
-type Selection =
-  | { type: "station"; item: StationReading }
-  | { type: "train"; item: TrainPosition }
-  | { type: "river"; item: RiverReading }
-  | { type: "buoy"; item: LiveSnapshot["marine"][number] }
-  | { type: "air"; item: AirQualityReading }
-  | { type: "tide"; item: TideReading }
-  | { type: "bathing"; item: BathingAlert }
-  | { type: "earthquake"; item: EarthquakeReading }
-  | { type: "transit"; item: LiveSnapshot["transit"][number] };
-
-type MovementSelection = Extract<Selection, { type: "train" | "transit" }>;
-type MapSelection =
-  | Selection
-  | { type: "movement-stack"; items: MovementSelection[]; index: number };
-
-type MovementStack = {
-  key: string;
-  x: number;
-  y: number;
-  items: MovementSelection[];
-};
-
-const movementItemIdentity = (item: MovementSelection) => `${item.type}:${item.item.id}`;
-const movementMarkerId = (identity: string) => `movement:${identity}`;
-const MOVEMENT_DRILL_THRESHOLD = 12;
-const MOVEMENT_PAGE_SIZE = 12;
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
 
@@ -158,64 +145,6 @@ function deduplicateMovementRecords<T extends MovementRecord>(records: readonly 
   return [...byId.values()].sort((first, second) => compareStableIds(first.id, second.id));
 }
 
-type ContextFocus =
-  | "weather"
-  | "wind"
-  | "trains"
-  | "rivers"
-  | "sea"
-  | "warnings"
-  | "radar"
-  | "grid"
-  | "air"
-  | "aurora"
-  | "tides"
-  | "bathing"
-  | "iss"
-  | "satellite"
-  | "earthquakes"
-  | "transit";
-
-type Place = {
-  id: string;
-  name: string;
-  lon: number;
-  lat: number;
-};
-
-type Preset = "weather" | "movement" | "water" | "all" | "custom";
-
-type LayerDefinition = readonly [Layer, string, string];
-
-type LayerGroup = {
-  id: string;
-  label: string;
-  detail: string;
-  layers: LayerDefinition[];
-};
-
-type ConnectionStatus = "online" | "offline";
-
-type TimeMode = "now" | "past";
-
-type HistoryLoadState = {
-  status: "idle" | "loading" | "ready" | "gap" | "error";
-  requestedAt: string | null;
-  envelope: HistoryEnvelope | null;
-  error: string | null;
-};
-
-type HistoryComparisonState = {
-  status: "idle" | "loading" | "ready" | "error";
-  envelope: HistoryEnvelope | null;
-  error: string | null;
-};
-
-type NearbyReading<T> = {
-  item: T;
-  distanceKm: number;
-};
-
 const PLACES = [
   { id: "dublin", name: "Dublin", lon: -6.2603, lat: 53.3498 },
   { id: "belfast", name: "Belfast", lon: -5.9301, lat: 54.5973 },
@@ -229,6 +158,13 @@ const PLACES = [
 const PLACE_OPTIONS: Place[] = [
   { id: "island", name: "Ireland", lon: -8.05, lat: 53.45 },
   ...PLACES
+];
+
+const EXPERIENCE_SECTIONS: { id: string; key: ExperienceSection; label: string; detail: string; }[] = [
+  { id: "live-map", key: "map", label: "Map", detail: "Living island view" },
+  { id: "official-notices", key: "notices", label: "Notices", detail: "Official warnings" },
+  { id: "what-matters-now", key: "briefing", label: "Briefing", detail: "National signals" },
+  { id: "day-so-far", key: "day", label: "Day so far", detail: "Weather timeline" }
 ];
 
 const readStoredPlace = () => {
@@ -327,38 +263,11 @@ const LAYER_GROUPS: LayerGroup[] = [
   }
 ];
 
-const formatTime = (date: Date) => Number.isFinite(date.getTime())
-  ? new Intl.DateTimeFormat("en-IE", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "Europe/Dublin"
-    }).format(date)
-  : "Unavailable";
 
-const orderedTideEvents = (tide: TideReading) => [
-  { label: "Next high", at: tide.nextHighAt, level: tide.nextHighLevel, fallbackOrder: 0 },
-  { label: "Next low", at: tide.nextLowAt, level: tide.nextLowLevel, fallbackOrder: 1 }
-].sort((first, second) => {
-  const firstTime = first.at ? Date.parse(first.at) : Number.POSITIVE_INFINITY;
-  const secondTime = second.at ? Date.parse(second.at) : Number.POSITIVE_INFINITY;
-  const safeFirstTime = Number.isFinite(firstTime) ? firstTime : Number.POSITIVE_INFINITY;
-  const safeSecondTime = Number.isFinite(secondTime) ? secondTime : Number.POSITIVE_INFINITY;
-  return safeFirstTime !== safeSecondTime
-    ? safeFirstTime - safeSecondTime
-    : first.fallbackOrder - second.fallbackOrder;
-});
+const formatCount = (value: number) => new Intl.NumberFormat("en-IE").format(value);
 
-const provenanceLabel = (status: "live" | "partial" | "stale" | "fallback" | "unavailable") =>
-  ({ live: "live", partial: "partial", stale: "cached", fallback: "fallback", unavailable: "unavailable" })[status];
-
-const formatDate = (date: Date) =>
-  new Intl.DateTimeFormat("en-IE", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "Europe/Dublin"
-  }).format(date);
+const pluralise = (value: number, singular: string, plural = `${singular}s`) =>
+  value === 1 ? singular : plural;
 
 const irelandHour = (date: Date) =>
   Number.parseInt(
@@ -370,18 +279,92 @@ const irelandHour = (date: Date) =>
     10
   ) % 24;
 
+const irelandDayPhase = (date: Date) => {
+  const hour = irelandHour(date);
+  if (hour < 6 || hour >= 21) return "night";
+  if (hour < 9) return "dawn";
+  if (hour < 17) return "day";
+  return "dusk";
+};
+
+const irelandEditorialMoment = (date: Date) => {
+  const hour = irelandHour(date);
+  const weekday = new Intl.DateTimeFormat("en-IE", {
+    weekday: "long",
+    timeZone: "Europe/Dublin"
+  }).format(date);
+  const period = hour < 6
+    ? "before dawn"
+    : hour < 12
+      ? "morning"
+      : hour < 17
+        ? "afternoon"
+        : hour < 21
+          ? "evening"
+          : "night";
+  return `${weekday} ${period} across Ireland.`;
+};
+
+const joinClauses = (clauses: string[]) => {
+  if (clauses.length === 0) return "";
+  if (clauses.length === 1) return clauses[0]!;
+  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
+  return `${clauses.slice(0, -1).join(", ")}, and ${clauses.at(-1)}`;
+};
+
 function solarProgress(now: Date) {
   const hour = irelandHour(now) + now.getUTCMinutes() / 60;
   return Math.max(0, Math.min(1, (hour - 5) / 17));
 }
 
-function nationalNarrative(snapshot: LiveSnapshot, now: Date) {
-  const hour = irelandHour(now);
-  const period = hour < 6 ? "A quiet night across Ireland." : hour < 12 ? "Ireland is waking across the island." : hour < 18 ? "The day is in motion across Ireland." : hour < 22 ? "Evening is settling across Ireland." : "Ireland grows quieter across the island.";
+function authoritativeSolarProgress(solar: NonNullable<LiveSnapshot["solar"]> | null, now: Date) {
+  const sunrise = Date.parse(solar?.sunrise ?? "");
+  const sunset = Date.parse(solar?.sunset ?? "");
+  if (!Number.isFinite(sunrise) || !Number.isFinite(sunset) || sunset <= sunrise) return solarProgress(now);
+  return Math.max(0, Math.min(1, (now.getTime() - sunrise) / (sunset - sunrise)));
+}
+
+function authoritativeDayPhase(solar: NonNullable<LiveSnapshot["solar"]> | null, now: Date) {
+  if (!solar) return irelandDayPhase(now);
+  const timestamp = now.getTime();
+  const firstLight = Date.parse(solar.firstLight ?? "");
+  const blueMorning = Date.parse(solar.blueHourMorning ?? "");
+  const dawn = Date.parse(solar.dawn ?? "");
+  const sunrise = Date.parse(solar.sunrise ?? "");
+  const goldenMorning = Date.parse(solar.goldenHourMorning ?? "");
+  const goldenEvening = Date.parse(solar.goldenHourEvening ?? "");
+  const sunset = Date.parse(solar.sunset ?? "");
+  const blueEvening = Date.parse(solar.blueHourEvening ?? "");
+  const dusk = Date.parse(solar.dusk ?? "");
+  const lastLight = Date.parse(solar.lastLight ?? "");
+  if (Number.isFinite(lastLight) && timestamp >= lastLight) return "night";
+  if (Number.isFinite(firstLight) && timestamp < firstLight) return "night";
+  if (Number.isFinite(blueMorning) && timestamp < blueMorning &&
+      (!Number.isFinite(firstLight) || timestamp >= firstLight)) return "blue";
+  if (Number.isFinite(dawn) && timestamp < dawn) return "blue";
+  const morningGoldenEnd = Number.isFinite(sunrise) ? sunrise : dawn;
+  if (Number.isFinite(goldenMorning) && timestamp >= goldenMorning &&
+      Number.isFinite(morningGoldenEnd) && timestamp < morningGoldenEnd) return "golden";
+  if (Number.isFinite(sunrise) && timestamp < sunrise) return "dawn";
+  const eveningGoldenEnd = Number.isFinite(sunset) ? sunset : blueEvening;
+  if (Number.isFinite(goldenEvening) && timestamp >= goldenEvening &&
+      Number.isFinite(eveningGoldenEnd) && timestamp < eveningGoldenEnd) return "golden";
+  if (Number.isFinite(sunset) && timestamp >= sunset) {
+    if (Number.isFinite(blueEvening) && timestamp >= blueEvening &&
+        (!Number.isFinite(dusk) || timestamp < dusk)) return "blue";
+    if (Number.isFinite(dusk) && timestamp < dusk) return "dusk";
+    if (Number.isFinite(lastLight) && timestamp < lastLight) return "dusk";
+    return "night";
+  }
+  if (Number.isFinite(dusk) && timestamp >= dusk) return "dusk";
+  return "day";
+}
+
+function weatherNarrative(snapshot: LiveSnapshot) {
   const currentWeather = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
   const warm = snapshot.summary.warmest;
   const rain = snapshot.summary.wettest;
-  const detail = !currentWeather
+  return !currentWeather
     ? snapshot.sourceStatus === "stale"
       ? "The most recent weather snapshot is cached, so current national conditions are not stated."
       : "Current weather observations are unavailable."
@@ -390,7 +373,6 @@ function nationalNarrative(snapshot: LiveSnapshot, now: Date) {
     : rain && (rain.rainfall ?? 0) > 0
     ? `Rain is being observed around ${rain.name}, while ${warm?.name ?? "the warmest station"} reports ${warm?.temperature ?? "—"}°.`
     : `${warm?.name ?? "The warmest station"} is reporting ${warm?.temperature ?? "—"}°; no recent rain is represented among the reporting stations.`;
-  return { period, detail };
 }
 
 function distanceKm(first: Pick<Place, "lat" | "lon">, second: Pick<Place, "lat" | "lon">) {
@@ -437,7 +419,6 @@ function projectReadings<T extends { latitude: number; longitude: number }>(
   });
 }
 
-const formatDistance = (value: number) => value < 10 ? `${value.toFixed(1)} km away` : `${Math.round(value)} km away`;
 
 const ACTIVITY_STATUS_LABELS: Record<ReturnType<typeof getActivityGuidance>[number]["status"], string> = {
   "live-observations": "Live observations",
@@ -449,16 +430,6 @@ const ACTIVITY_STATUS_LABELS: Record<ReturnType<typeof getActivityGuidance>[numb
   unavailable: "Unavailable"
 };
 
-function formatAge(value: string | null | undefined, now: Date) {
-  if (!value) return "unknown age";
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "unknown age";
-  const ageMinutes = Math.max(0, Math.round((now.getTime() - timestamp) / 60_000));
-  if (ageMinutes < 1) return "just now";
-  if (ageMinutes < 60) return `${ageMinutes}m ago`;
-  const ageHours = Math.round(ageMinutes / 60);
-  return `${ageHours}h ago`;
-}
 
 const newestTimestamp = (first: string | null | undefined, second: string | null | undefined) => {
   const firstTime = Date.parse(first ?? "");
@@ -487,9 +458,6 @@ const formatWarningDate = (value: string) => {
     : "time unavailable";
 };
 
-function statusText(status: "live" | "partial" | "stale" | "fallback" | "unavailable") {
-  return status === "stale" ? "cached" : status;
-}
 
 const STALE_THRESHOLDS = {
   weather: WEATHER_OBSERVATION_MAX_AGE_MS,
@@ -522,799 +490,11 @@ function formatLocalObservation(
   return `${provider} · ${item.name} · ${formatDistance(distanceKm)} · ${timing}`;
 }
 
-type MarkerInteraction = {
-  markerId: string;
-  ariaLabel: string;
-  tabIndex: number;
-  onFocus: (event: ReactFocusEvent<SVGGElement>) => void;
-  onKeyDown: (event: ReactKeyboardEvent<SVGGElement>) => void;
-  onKeyUp: (event: ReactKeyboardEvent<SVGGElement>) => void;
-  onPointerActivate?: (element: SVGElement) => void;
-};
 
-function MapMarker({
-  className,
-  transform,
-  interaction,
-  focusRadius,
-  onActivate,
-  additionalHitCentres,
-  dataMovementMembers,
-  dataClusterSize,
-  children
-}: {
-  className: string;
-  transform: string;
-  interaction: MarkerInteraction;
-  focusRadius: number;
-  onActivate: () => void;
-  additionalHitCentres?: ReadonlyArray<{ x: number; y: number }>;
-  dataMovementMembers?: string;
-  dataClusterSize?: number;
-  children: ReactNode;
-}) {
-  return (
-    <g
-      className={className}
-      data-map-marker="true"
-      data-marker-id={interaction.markerId}
-      data-movement-members={dataMovementMembers}
-      data-cluster-size={dataClusterSize}
-      data-marker-pointer-target="true"
-      transform={transform}
-      role="button"
-      tabIndex={interaction.tabIndex}
-      aria-label={interaction.ariaLabel}
-      onClick={(event) => {
-        interaction.onPointerActivate?.(event.currentTarget);
-        onActivate();
-      }}
-      onFocus={interaction.onFocus}
-      onKeyDown={interaction.onKeyDown}
-      onKeyUp={interaction.onKeyUp}
-    >
-      <circle
-        className="map-marker-hit-target"
-        r="1"
-        aria-hidden="true"
-        vectorEffect="non-scaling-stroke"
-      />
-      {additionalHitCentres?.map(({ x, y }) => (
-        <circle
-          className="map-marker-hit-target"
-          cx={x}
-          cy={y}
-          key={`${x}:${y}`}
-          r="1"
-          aria-hidden="true"
-          vectorEffect="non-scaling-stroke"
-        />
-      ))}
-      <circle className="map-marker-focus-ring" r={focusRadius} aria-hidden="true" />
-      {children}
-    </g>
-  );
-}
-
-const windDirectionDegrees = (direction: string) => {
-  const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-  const index = points.indexOf(direction.toUpperCase());
-  return index < 0 ? 0 : index * 22.5;
-};
-
-function StationMarker({
-  station,
-  projection,
-  active,
-  showWind,
-  onSelect,
-  interaction
-}: {
-  station: StationReading;
-  projection: ReturnType<typeof geoMercator>;
-  active: boolean;
-  showWind: boolean;
-  onSelect: (station: StationReading) => void;
-  interaction: MarkerInteraction;
-}) {
-  const point = projection([station.longitude, station.latitude]);
-  if (!point) return null;
-  const [x, y] = point;
-  const wet = (station.rainfall ?? 0) > 0;
-  const hasWindGlyph = showWind && station.windSpeed !== null;
-  return (
-    <MapMarker
-      className={`station-marker ${active ? "is-active" : ""} ${wet ? "is-wet" : ""}`}
-      transform={`translate(${x} ${y})`}
-      interaction={interaction}
-      focusRadius={19}
-      onActivate={() => onSelect(station)}
-      additionalHitCentres={hasWindGlyph ? [{ x: 14, y: 12 }] : undefined}
-    >
-      {wet && <circle className="rain-ring" r="17" />}
-      <circle className="station-halo" r="11" />
-      <circle className="station-core" r="4" />
-      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "—"}°</text>
-    </MapMarker>
-  );
-}
-
-const aqiLabel = (value: number | null) => {
-  if (value === null) return "Unavailable";
-  if (value <= 20) return "Good";
-  if (value <= 40) return "Fair";
-  if (value <= 60) return "Moderate";
-  if (value <= 80) return "Poor";
-  if (value <= 100) return "Very poor";
-  return "Extremely poor";
-};
-
-const tileLatitude = (y: number, zoom: number) =>
-  Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2 ** zoom))) * 180 / Math.PI;
-
-const IRELAND_RADAR_TILES = [
-  [30, 20], [31, 20], [30, 21], [31, 21]
-] as const;
-type RadarTileStatus = "loading" | "ready" | "unavailable";
-type RadarPresentationState = "unchecked" | "loading" | "partial" | "live" | "cached" | "unavailable";
-type RadarTileStatusReporter = (
-  frameKey: string,
-  tileKey: string,
-  status: RadarTileStatus
-) => void;
-const createRadarTileStatusRecord = (): Record<string, RadarTileStatus> => Object.fromEntries(
-  IRELAND_RADAR_TILES.map(([x, y]) => [`${x}-${y}`, "loading" as const])
-);
-
-function RadarTileImage({
-  href,
-  frameKey,
-  tileKey,
-  onStatus,
-  x,
-  y,
-  width,
-  height
-}: {
-  href: string;
-  frameKey: string;
-  tileKey: string;
-  onStatus: RadarTileStatusReporter;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}) {
-  const [tile, setTile] = useState<{ href: string | null; status: "loading" | "ready" | "unavailable" }>({
-    href: null,
-    status: "loading"
-  });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    setTile({ href: null, status: "loading" });
-    onStatus(frameKey, tileKey, "loading");
-
-    const prepare = async () => {
-      try {
-        const response = await fetch(href, {
-          cache: "force-cache",
-          mode: "cors",
-          signal: controller.signal
-        });
-        if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("image/png")) {
-          throw new Error(`Radar tile returned ${response.status}`);
-        }
-        const bitmap = await createImageBitmap(await response.blob());
-        try {
-          if (!bitmap.width || !bitmap.height || bitmap.width > 1024 || bitmap.height > 1024) {
-            throw new Error("Radar tile dimensions are invalid");
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          const context = canvas.getContext("2d", { willReadFrequently: true });
-          if (!context) throw new Error("Radar tile canvas is unavailable");
-          context.drawImage(bitmap, 0, 0);
-          const image = context.getImageData(0, 0, bitmap.width, bitmap.height);
-          maskRadarNoDataPixels(image.data);
-          context.putImageData(image, 0, 0);
-          const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-          if (!blob) throw new Error("Radar tile could not be encoded");
-          objectUrl = URL.createObjectURL(blob);
-          if (controller.signal.aborted) {
-            URL.revokeObjectURL(objectUrl);
-            objectUrl = null;
-            return;
-          }
-          setTile({ href: objectUrl, status: "ready" });
-          onStatus(frameKey, tileKey, "ready");
-        } finally {
-          bitmap.close();
-        }
-      } catch {
-        if (!controller.signal.aborted) {
-          setTile({ href: null, status: "unavailable" });
-          onStatus(frameKey, tileKey, "unavailable");
-        }
-      }
-    };
-    void prepare();
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [frameKey, href, onStatus, tileKey]);
-
-  return (
-    <image
-      className="radar-tile"
-      data-radar-tile-state={tile.status}
-      href={tile.href ?? undefined}
-      x={x}
-      y={y}
-      width={width}
-      height={height}
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    />
-  );
-}
-
-function RadarTiles({
-  frame,
-  frameKey,
-  projection,
-  onTileStatus
-}: {
-  frame: LiveSnapshot["radar"][number];
-  frameKey: string;
-  projection: ReturnType<typeof geoMercator>;
-  onTileStatus: RadarTileStatusReporter;
-}) {
-  const zoom = 6;
-  return (
-    <g className="radar-tiles" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar tiles for ${formatTime(new Date(frame.observedAt))}`}>
-      {IRELAND_RADAR_TILES.map(([x, y]) => {
-        const west = x / 2 ** zoom * 360 - 180;
-        const east = (x + 1) / 2 ** zoom * 360 - 180;
-        const north = tileLatitude(y, zoom);
-        const south = tileLatitude(y + 1, zoom);
-        const topLeft = projection([west, north]);
-        const bottomRight = projection([east, south]);
-        if (!topLeft || !bottomRight) return null;
-        const tileKey = `${x}-${y}`;
-        return <RadarTileImage
-          key={tileKey}
-          href={frame.tileTemplate
-            .replace("{x}", String(x))
-            .replace("{y}", String(y))
-            .replace("{z}", String(zoom))}
-          frameKey={frameKey}
-          tileKey={tileKey}
-          onStatus={onTileStatus}
-          x={topLeft[0]}
-          y={topLeft[1]}
-          width={bottomRight[0] - topLeft[0]}
-          height={bottomRight[1] - topLeft[1]}
-        />;
-      })}
-    </g>
-  );
-}
-
-function SatelliteTiles({
-  frame,
-  projection
-}: {
-  frame: NonNullable<LiveSnapshot["satellite"]>;
-  projection: ReturnType<typeof geoMercator>;
-}) {
-  const zoom = 6;
-  return (
-    <g className="satellite-tiles" mask="url(#satelliteContextMask)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
-      {[30, 31].flatMap((x) => [20, 21].map((y) => {
-        const west = x / 2 ** zoom * 360 - 180;
-        const east = (x + 1) / 2 ** zoom * 360 - 180;
-        const north = tileLatitude(y, zoom);
-        const south = tileLatitude(y + 1, zoom);
-        const topLeft = projection([west, north]);
-        const bottomRight = projection([east, south]);
-        if (!topLeft || !bottomRight) return null;
-        return (
-          <image
-            key={`${x}-${y}`}
-            href={frame.tileTemplate
-              .replace("{x}", String(x))
-              .replace("{y}", String(y))
-              .replace("{z}", String(zoom))}
-            x={topLeft[0]}
-            y={topLeft[1]}
-            width={bottomRight[0] - topLeft[0]}
-            height={bottomRight[1] - topLeft[1]}
-            preserveAspectRatio="none"
-          />
-        );
-      }))}
-    </g>
-  );
-}
-
-function DetailCard({
-  selected,
-  onClose,
-  onStackChange,
-  openerRef,
-  historical = false
-}: {
-  selected: MapSelection;
-  onClose: () => void;
-  onStackChange: (index: number) => void;
-  openerRef: { current: SVGElement | null };
-  historical?: boolean;
-}) {
-  const stack = selected.type === "movement-stack" ? selected : null;
-  const resolved: Selection = selected.type === "movement-stack"
-    ? selected.items[selected.index]!
-    : selected;
-  const { type, item } = resolved;
-  const [movementQuery, setMovementQuery] = useState("");
-  const [movementKind, setMovementKind] = useState<"all" | "train" | "transit">("all");
-  const [movementPage, setMovementPage] = useState(0);
-  const transitDetail = type === "transit" ? transitPresentation(item) : null;
-  const dialogRef = useRef<HTMLElement | null>(null);
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  const movementMatches = useMemo(() => {
-    if (!stack) return [];
-    const query = movementQuery.trim().toLocaleLowerCase("en-IE");
-    return stack.items.map((movement, index) => ({ movement, index })).filter(({ movement }) => {
-      if (movementKind !== "all" && movement.type !== movementKind) return false;
-      if (!query) return true;
-      const searchable = movement.type === "train"
-        ? [movement.item.id, movement.item.direction, movement.item.message, "rail", "train"]
-        : [movement.item.id, movement.item.route, movement.item.label, "tfi", "public transport"];
-      return searchable.some((value) => value.toLocaleLowerCase("en-IE").includes(query));
-    });
-  }, [movementKind, movementQuery, stack]);
-  const movementPageCount = Math.max(1, Math.ceil(movementMatches.length / MOVEMENT_PAGE_SIZE));
-  const visibleMovementMatches = movementMatches.slice(
-    movementPage * MOVEMENT_PAGE_SIZE,
-    (movementPage + 1) * MOVEMENT_PAGE_SIZE
-  );
-
-  useEffect(() => {
-    setMovementPage(0);
-  }, [movementKind, movementQuery]);
-
-  useEffect(() => {
-    setMovementPage((current) => Math.min(current, movementPageCount - 1));
-  }, [movementPageCount]);
-
-  useLayoutEffect(() => {
-    const focused = document.activeElement instanceof HTMLElement || document.activeElement instanceof SVGElement
-      ? document.activeElement
-      : null;
-    const previouslyFocused = openerRef.current?.isConnected
-      ? openerRef.current
-      : focused && focused !== document.body
-        ? focused
-        : null;
-    openerRef.current = null;
-    const dialog = dialogRef.current;
-    const previousOverflow = document.documentElement.style.overflow;
-    document.documentElement.style.overflow = "hidden";
-    closeRef.current?.focus({ preventScroll: true });
-    if (!dialog) {
-      document.documentElement.style.overflow = previousOverflow;
-      return undefined;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = [...dialog.querySelectorAll<HTMLElement>(
-        "button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
-      )].filter((element) => !element.hasAttribute("disabled") && element.getClientRects().length > 0);
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.documentElement.style.overflow = previousOverflow;
-      if (previouslyFocused?.isConnected) {
-        window.requestAnimationFrame(() => {
-          if (previouslyFocused.isConnected) previouslyFocused.focus();
-        });
-      }
-    };
-  }, [openerRef]);
-
-  return (
-    <aside
-      ref={dialogRef}
-      className={`station-card detail-${type} ${stack ? "has-movement-browser" : ""}`}
-      aria-live="polite"
-      aria-modal="true"
-      aria-labelledby="map-detail-title"
-      role="dialog"
-      tabIndex={-1}
-    >
-      <button ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>
-      {stack && stack.items.length <= MOVEMENT_DRILL_THRESHOLD && (
-        <div className="detail-stack-navigation" role="navigation" aria-label="Overlapping map items">
-          <button
-            onClick={() => onStackChange((stack.index - 1 + stack.items.length) % stack.items.length)}
-            aria-label="Previous item at this location"
-          >
-            ←
-          </button>
-          <span>{stack.index + 1} of {stack.items.length}</span>
-          <button
-            onClick={() => onStackChange((stack.index + 1) % stack.items.length)}
-            aria-label="Next item at this location"
-          >
-            →
-          </button>
-        </div>
-      )}
-      {stack && (
-        <section className="movement-browser" aria-label={`${stack.items.length} transport positions in this area`}>
-          <div className="movement-browser-heading">
-            <strong>Transport in this area</strong>
-            <span>{movementMatches.length} of {stack.items.length}</span>
-          </div>
-          <div className="movement-browser-filters">
-            <label>
-              <span>Search route, direction or vehicle</span>
-              <input
-                type="search"
-                value={movementQuery}
-                onChange={(event) => setMovementQuery(event.target.value)}
-                placeholder="Try 42, Cork, or rail"
-              />
-            </label>
-            <label>
-              <span>Transport type</span>
-              <select value={movementKind} onChange={(event) => setMovementKind(event.target.value as typeof movementKind)}>
-                <option value="all">Rail and TFI</option>
-                <option value="train">Rail only</option>
-                <option value="transit">TFI only</option>
-              </select>
-            </label>
-          </div>
-          {visibleMovementMatches.length ? (
-            <ol className="movement-results">
-              {visibleMovementMatches.map(({ movement, index }) => {
-                const label = movement.type === "train"
-                  ? `Train ${movement.item.id} · ${movement.item.direction || "Direction unavailable"}`
-                  : `${movement.item.route ? `Route ${movement.item.route}` : "TFI vehicle"} · ${movement.item.label}`;
-                return (
-                  <li key={movementItemIdentity(movement)}>
-                    <button
-                      type="button"
-                      className={index === stack.index ? "active" : ""}
-                      aria-current={index === stack.index ? "true" : undefined}
-                      onClick={() => onStackChange(index)}
-                    >
-                      <b>{label}</b>
-                      <small>{movement.type === "train" ? "Iarnród Éireann" : "Transport for Ireland"} · updated {formatTime(new Date(movement.item.observedAt))}</small>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          ) : <p className="movement-results-empty">No transport positions match this search.</p>}
-          {movementPageCount > 1 && (
-            <nav className="movement-pagination" aria-label="Transport result pages">
-              <button type="button" disabled={movementPage === 0} onClick={() => setMovementPage((page) => page - 1)}>Previous</button>
-              <span>Page {movementPage + 1} of {movementPageCount}</span>
-              <button type="button" disabled={movementPage >= movementPageCount - 1} onClick={() => setMovementPage((page) => page + 1)}>Next</button>
-            </nav>
-          )}
-        </section>
-      )}
-      {type === "station" && (
-        <>
-          <p className="eyebrow">Met Éireann station</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.temperature ?? "—"}°</div>
-          <p>{item.description}</p>
-          <dl>
-            <div><dt>Rain</dt><dd>{item.rainfall ?? "—"} mm</dd></div>
-            <div><dt>Wind</dt><dd>{item.windSpeed ?? "—"} km/h {item.windDirection}</dd></div>
-            <div><dt>Observed</dt><dd>{item.observedAt ? formatTime(new Date(item.observedAt)) : "Unavailable"}</dd></div>
-          </dl>
-        </>
-      )}
-      {type === "train" && (
-        <>
-          <p className="eyebrow">Iarnród Éireann · {historical ? "stored position" : "live position"}</p>
-          <h2 id="map-detail-title">Train {item.id}</h2>
-          <div className="detail-emblem">↗</div>
-          <p>{item.message || item.direction}</p>
-          <dl>
-            <div><dt>Status</dt><dd>{item.status === "running" ? "Running" : "Due to start"}</dd></div>
-            <div>
-              <dt>Speed</dt>
-              <dd>{item.speedKmh == null ? "Awaiting next position" : `≈ ${item.speedKmh.toFixed(0)} km/h`}</dd>
-            </div>
-            <div><dt>Direction</dt><dd>{item.direction}</dd></div>
-            <div><dt>Checked</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-          </dl>
-          <small className="detail-method-note">
-            {item.speedSource === "calculated"
-              ? "Estimated from the distance and time between successive Irish Rail positions."
-              : "Irish Rail does not publish train speed; an estimate appears after a second usable position."}
-          </small>
-        </>
-      )}
-      {type === "river" && (
-        <>
-          <p className="eyebrow">OPW river gauge · {historical ? "stored observation" : "near real time"}</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.level.toFixed(2)}<small> m</small></div>
-          <p>A gauge measurement—not a flood warning. Levels are local to each station and should not be compared between gauges.</p>
-          <dl>
-            <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-            <div><dt>Freshness</dt><dd>{item.fresh ? historical ? "Fresh at capture" : "Current" : "Stale"}</dd></div>
-          </dl>
-        </>
-      )}
-      {type === "buoy" && (
-        <>
-          <p className="eyebrow">Marine Institute · {historical ? "stored observation" : "near real time"}</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.waveHeight?.toFixed(1) ?? "—"}<small> m waves</small></div>
-          <p>{item.kind === "weather-buoy" ? "Observed conditions at an offshore weather buoy." : "Observed conditions at a coastal marine observatory."} Measurements can be delayed or temporarily unavailable.</p>
-          <dl>
-            <div><dt>Wind</dt><dd>{item.windSpeedKnots?.toFixed(1) ?? "—"} knots</dd></div>
-            <div><dt>Wave period</dt><dd>{item.wavePeriod?.toFixed(1) ?? "—"} seconds</dd></div>
-            <div><dt>Sea temperature</dt><dd>{item.seaTemperature?.toFixed(1) ?? "—"}°C</dd></div>
-            <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-          </dl>
-        </>
-      )}
-      {type === "air" && (
-        <>
-          <p className="eyebrow">{item.source === "measured" ? "EEA · monitoring station" : "Open-Meteo CAMS · modelled"}</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.europeanAqi ?? "—"}<small> European AQI</small></div>
-          <p>
-            {aqiLabel(item.europeanAqi)} air quality. {item.source === "measured"
-              ? `This is a reported monitoring-station reading${item.stationClassification ? ` at a ${item.stationClassification} site` : ""}; EEA data normally arrives a few hours after measurement.`
-              : "This is regional model output, not a reading from a sensor at this marker."}
-          </p>
-          <dl>
-            <div><dt>PM2.5</dt><dd>{item.pm25?.toFixed(1) ?? "—"} μg/m³</dd></div>
-            <div><dt>PM10</dt><dd>{item.pm10?.toFixed(1) ?? "—"} μg/m³</dd></div>
-            <div><dt>Ozone</dt><dd>{item.ozone?.toFixed(0) ?? "—"} μg/m³</dd></div>
-            <div><dt>UV index</dt><dd>{item.uvIndex?.toFixed(1) ?? "—"}</dd></div>
-            <div><dt>Grass pollen</dt><dd>{item.grassPollen?.toFixed(1) ?? "—"} grains/m³</dd></div>
-            <div><dt>{item.source === "measured" ? "Observed" : "Model time"}</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-          </dl>
-        </>
-      )}
-      {type === "tide" && (
-        <>
-          <p className="eyebrow">Marine Institute · tide gauge</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "—"}<small> m relative to OD Malin</small></div>
-          <p>
-            Ordnance Datum Malin is Ireland&apos;s national height reference. A negative height means the sea is below that reference level—not that the water has negative depth.
-          </p>
-          <p>
-            {item.surge === null
-              ? "Observed sea level. The modelled tide and surge comparison is temporarily unavailable."
-              : `${Math.abs(item.surge).toFixed(2)} m ${item.surge >= 0 ? "above" : "below"} the modelled astronomical tide.`}
-          </p>
-          <dl>
-            <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-            <div><dt>Movement</dt><dd>{item.trend}</dd></div>
-            {orderedTideEvents(item).map((event) => (
-              <div key={event.label}>
-                <dt>{event.label}</dt>
-                <dd>{event.at ? `${formatTime(new Date(event.at))} · ${event.level?.toFixed(2) ?? "—"} m` : "—"}</dd>
-              </div>
-            ))}
-          </dl>
-        </>
-      )}
-      {type === "bathing" && (
-        <>
-          <p className="eyebrow">EPA · {historical ? "stored bathing-water alert" : "active bathing-water alert"}</p>
-          <h2 id="map-detail-title">{item.name}</h2>
-          <div className="detail-emblem warning">!</div>
-          <p><strong>{item.restriction}</strong></p>
-          <p>{item.description}</p>
-          <dl>
-            <div><dt>County</dt><dd>{item.county}</dd></div>
-            <div><dt>Updated</dt><dd>{formatTime(new Date(item.updatedAt))}</dd></div>
-          </dl>
-          {item.noticeUrl && <a className="detail-link" href={item.noticeUrl} target="_blank" rel="noreferrer">Open official notice ↗</a>}
-        </>
-      )}
-      {type === "earthquake" && (
-        <>
-          <p className="eyebrow">USGS · detected event</p>
-          <h2 id="map-detail-title">{item.place}</h2>
-          <div className="station-temperature">{item.magnitude.toFixed(1)}<small> magnitude</small></div>
-          <p>A detected seismic event, not an impact or safety assessment.</p>
-          <dl>
-            <div><dt>Depth</dt><dd>{item.depthKm.toFixed(1)} km</dd></div>
-            <div><dt>Detected</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-          </dl>
-          {item.detailUrl && <a className="detail-link" href={item.detailUrl} target="_blank" rel="noreferrer">Open USGS event ↗</a>}
-        </>
-      )}
-      {type === "transit" && (
-        <>
-          <p className="eyebrow">Transport for Ireland · {historical ? "stored position" : "live position"}</p>
-          <h2 id="map-detail-title">{transitDetail?.title}</h2>
-          <div className="detail-emblem">↗</div>
-          <p className="transit-direction">{transitDetail?.direction}</p>
-          {transitDetail?.label && <p className="transit-service-label">{transitDetail.label}</p>}
-          <dl>
-            <div><dt>Route</dt><dd>{transitDetail?.route || `Route unavailable from this TFI ${historical ? "stored record" : "live vehicle feed"}`}</dd></div>
-            <div><dt>Destination</dt><dd>{transitDetail?.destination}</dd></div>
-            <div><dt>Direction</dt><dd>{transitDetail?.direction}</dd></div>
-            <div>
-              <dt>Speed</dt>
-              <dd>
-                {item.speedKmh == null
-                  ? "Awaiting next position"
-                  : `${item.speedSource === "calculated" ? "≈ " : ""}${item.speedKmh.toFixed(0)} km/h`}
-              </dd>
-            </div>
-            <div><dt>Updated</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
-          </dl>
-          <small className="detail-method-note">
-            {item.speedSource === "reported"
-              ? "Speed reported by the NTA vehicle feed."
-              : item.speedSource === "calculated"
-                ? "Estimated from the distance and time between successive NTA positions."
-                : "The NTA is not reporting speed for this vehicle; an estimate appears after a second usable position."}
-          </small>
-        </>
-      )}
-    </aside>
-  );
-}
-
-function GridPanel({ grid, className = "", historical = false }: { grid: LiveSnapshot["grid"]; className?: string; historical?: boolean }) {
-  return (
-    <aside className={`map-data-panel grid-panel ${className}`} aria-label={`All-island electricity grid ${historical ? "at the selected time" : "now"}`}>
-      <p className="eyebrow">EirGrid · operational data</p>
-      <h2>{historical ? "The grid then" : "The grid now"}</h2>
-      {grid ? (
-        <>
-          <div className="grid-hero">
-            <strong>{grid.windSharePercent === null ? "—" : `${grid.windSharePercent.toFixed(0)}%`}</strong>
-            <span>{grid.windSharePercent === null ? "wind share is unavailable in this grid response" : `of ${historical ? "captured" : "current"} demand supplied by wind`}</span>
-          </div>
-          <dl>
-            <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Generation</dt><dd>{grid.generationMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Wind</dt><dd>{grid.windMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Carbon intensity</dt><dd>{grid.carbonIntensity?.toFixed(0) ?? "—"} gCO₂/kWh</dd></div>
-            <div><dt>CO₂ emissions</dt><dd>{grid.carbonEmissions?.toFixed(0) ?? "—"} tCO₂/hr</dd></div>
-            <div><dt>Frequency</dt><dd>{grid.frequencyHz?.toFixed(2) ?? "—"} Hz</dd></div>
-            <div>
-              <dt>Interconnection</dt>
-              <dd>
-                {grid.interconnectorMW === null
-                  ? "—"
-                  : grid.interconnectorMW > 0
-                    ? `Import ${grid.interconnectorMW.toLocaleString("en-IE")} MW`
-                    : grid.interconnectorMW < 0
-                      ? `Export ${Math.abs(grid.interconnectorMW).toLocaleString("en-IE")} MW`
-                      : "Balanced 0 MW"}
-              </dd>
-            </div>
-            <div><dt>Data through</dt><dd>{grid.observedAt ? formatTime(new Date(grid.observedAt)) : "—"}</dd></div>
-          </dl>
-        </>
-      ) : (
-        <>
-          <p>Operational grid data is temporarily unavailable.</p>
-          <dl>
-            <div><dt>Demand</dt><dd>— MW</dd></div>
-            <div><dt>Generation</dt><dd>— MW</dd></div>
-            <div><dt>Wind</dt><dd>— MW</dd></div>
-            <div><dt>Frequency</dt><dd>— Hz</dd></div>
-          </dl>
-        </>
-      )}
-    </aside>
-  );
-}
-
-function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["aurora"]; className?: string }) {
-  return (
-    <aside className={`map-data-panel aurora-panel ${className}`} aria-label="Aurora probability over Ireland">
-      <p className="eyebrow">NOAA OVATION · forecast</p>
-      <h2>Aurora over Ireland</h2>
-      {aurora ? (
-        <>
-          <div className="aurora-probability">
-            <strong>{aurora.probability}%</strong>
-            <span>maximum overhead probability</span>
-          </div>
-          <p>Kp {aurora.kpIndex?.toFixed(1) ?? "—"} · forecast for {formatTime(new Date(aurora.forecastAt))}</p>
-          <small>This is probability directly overhead—not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
-        </>
-      ) : (
-        <>
-          <p>NOAA aurora guidance is temporarily unavailable.</p>
-          <small>Aurora probability is guidance, not a guarantee of seeing aurora. Darkness, cloud and light pollution matter.</small>
-        </>
-      )}
-    </aside>
-  );
-}
-
-function IssPanel({ iss, className = "", historical = false }: { iss: LiveSnapshot["iss"]; className?: string; historical?: boolean }) {
-  const next = iss?.passes[0] ?? null;
-  const visible = iss?.passes.find((pass) => pass.visible) ?? null;
-  return (
-    <aside className={`map-data-panel iss-panel ${className}`} aria-label="International Space Station over Ireland">
-      <p className="eyebrow">CelesTrak · calculated locally</p>
-      <h2>ISS over Ireland{historical ? " at capture" : ""}</h2>
-      {iss ? (
-        <>
-          <div className="iss-orbit-value">
-            <strong>{iss.altitudeKm.toFixed(0)}</strong><span>km above Earth {historical ? "at capture" : "now"}</span>
-          </div>
-          <dl>
-            <div><dt>Next pass</dt><dd>{next ? `${formatDate(new Date(next.startsAt))}, ${formatTime(new Date(next.startsAt))}` : "No pass in 48 hours"}</dd></div>
-            <div><dt>Peak elevation</dt><dd>{next ? `${next.maxElevation.toFixed(0)}°` : "—"}</dd></div>
-            <div><dt>Approaches from</dt><dd>{next?.direction ?? "—"}</dd></div>
-            <div><dt>Next dark-sky pass</dt><dd>{visible ? `${formatDate(new Date(visible.startsAt))}, ${formatTime(new Date(visible.startsAt))}` : "None calculated in 48 hours"}</dd></div>
-          </dl>
-          <small>Passes are calculated for central Ireland. “Dark-sky” means the pass occurs at night; actual visibility also depends on sunlight on the station, cloud, your location and the horizon.</small>
-        </>
-      ) : <p>ISS orbital data is temporarily unavailable.</p>}
-    </aside>
-  );
-}
-
-const historyResolutionLabel = (minutes: number) => minutes >= 1440
-  ? "daily summary"
-  : minutes >= 60
-    ? `${Math.round(minutes / 60)}-hour representative snapshot`
-    : `${minutes}-minute snapshot`;
-
-const historySummaryMetric = (value: number | null, suffix = "") => value === null
-  ? "Unavailable"
-  : `${Number.isInteger(value) ? value.toLocaleString("en-IE") : value.toFixed(1)}${suffix}`;
 
 const availableCount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
   ? value
   : null;
-
-const historicalLayerDetail = (layer: Layer, detail: string) => {
-  if (layer === "trains") return "Historical rail positions are not retained; only an aggregate appears when permission and coverage allow.";
-  if (layer === "transit") return "Historical vehicle positions are not retained; only route and national aggregates appear when available.";
-  if (layer === "radar" || layer === "satellite") return "Imagery pixels are not archived in D1; the historical record exposes this as a gap rather than a blank live tile.";
-  return detail
-    .replace(/\bcurrent\b/gi, "stored")
-    .replace(/\blive\b/gi, "retained");
-};
 
 const HISTORY_FOCUS_TOKENS: Record<ContextFocus, string[]> = {
   weather: ["weather", "met éireann"],
@@ -1343,223 +523,6 @@ const historyGapForFocus = (gaps: HistoryGap[], focus: ContextFocus) => {
   }) ?? null;
 };
 
-const historyMetricRows = (past: HistoryEnvelope, comparison: HistoryEnvelope) => {
-  const metric = (value: number | null | undefined, suffix = "") => value === null || value === undefined
-    ? "Unavailable"
-    : `${Number.isInteger(value) ? value.toLocaleString("en-IE") : value.toFixed(1)}${suffix}`;
-  return [
-    {
-      label: "Warmest station",
-      past: metric(past.snapshot?.summary.warmest?.temperature, " °C"),
-      comparison: metric(comparison.snapshot?.summary.warmest?.temperature, " °C")
-    },
-    {
-      label: "Grid wind share",
-      past: metric(past.snapshot?.grid?.windSharePercent, "%"),
-      comparison: metric(comparison.snapshot?.grid?.windSharePercent, "%")
-    },
-    {
-      label: "Rail services represented",
-      past: metric(past.movementSummary.rail?.total),
-      comparison: metric(comparison.movementSummary.rail?.total)
-    },
-    {
-      label: "Official notices",
-      past: past.snapshot ? metric(past.snapshot.warnings.length) : "Unavailable",
-      comparison: comparison.snapshot ? metric(comparison.snapshot.warnings.length) : "Unavailable"
-    },
-    {
-      label: "Bathing-water alerts",
-      past: past.snapshot ? metric(past.snapshot.bathingAlerts.length) : "Unavailable",
-      comparison: comparison.snapshot ? metric(comparison.snapshot.bathingAlerts.length) : "Unavailable"
-    }
-  ];
-};
-
-function HistoryControls({
-  mode,
-  range,
-  history,
-  comparison,
-  onNow,
-  onPast,
-  onRequest,
-  onCompare
-}: {
-  mode: TimeMode;
-  range: HistoryRange | null;
-  history: HistoryLoadState;
-  comparison: HistoryComparisonState;
-  onNow: () => void;
-  onPast: () => void;
-  onRequest: (at: string) => void;
-  onCompare: () => void;
-}) {
-  const selectedAt = history.envelope?.resolvedAt ?? history.requestedAt ?? range?.availableTo ?? null;
-  const selectedParts = selectedAt ? irelandInputParts(selectedAt) : { date: "", time: "" };
-  const [dateInput, setDateInput] = useState(selectedParts.date);
-  const [timeInput, setTimeInput] = useState(selectedParts.time);
-  const [wallTimeError, setWallTimeError] = useState("");
-  const [ambiguousCandidates, setAmbiguousCandidates] = useState<string[]>([]);
-  const [chosenCandidate, setChosenCandidate] = useState("");
-  const selectedSeconds = selectedAt ? Math.floor(Date.parse(selectedAt) / 1000) : 0;
-  const [scrubberSeconds, setScrubberSeconds] = useState(selectedSeconds);
-  const submittedScrubberRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!selectedAt) return;
-    const parts = irelandInputParts(selectedAt);
-    setDateInput(parts.date);
-    setTimeInput(parts.time);
-    setScrubberSeconds(Math.floor(Date.parse(selectedAt) / 1000));
-  }, [selectedAt]);
-
-  useEffect(() => {
-    if (history.status !== "loading") submittedScrubberRef.current = null;
-  }, [history.status, selectedAt]);
-
-  const submitWallTime = () => {
-    const candidates = irelandWallTimeCandidates(dateInput, timeInput);
-    if (!candidates.length) {
-      setWallTimeError("That clock time does not exist in Ireland. Choose another time.");
-      setAmbiguousCandidates([]);
-      return;
-    }
-    if (candidates.length > 1 && !chosenCandidate) {
-      setWallTimeError("This clock time occurs twice in Ireland. Choose the intended timezone below.");
-      setAmbiguousCandidates(candidates);
-      return;
-    }
-    const candidate = chosenCandidate && candidates.includes(chosenCandidate) ? chosenCandidate : candidates[0]!;
-    const timestamp = Date.parse(candidate);
-    const from = Date.parse(range?.availableFrom ?? "");
-    const to = Date.parse(range?.availableTo ?? "");
-    if ((Number.isFinite(from) && timestamp < from) || (Number.isFinite(to) && timestamp > to)) {
-      setWallTimeError("Choose a time inside the available history range.");
-      return;
-    }
-    setWallTimeError("");
-    setAmbiguousCandidates([]);
-    setChosenCandidate("");
-    onRequest(candidate);
-  };
-
-  const submitScrubber = () => {
-    if (!Number.isFinite(scrubberSeconds) || submittedScrubberRef.current === scrubberSeconds) return;
-    submittedScrubberRef.current = scrubberSeconds;
-    onRequest(new Date(scrubberSeconds * 1000).toISOString());
-  };
-
-  const rangeStart = Date.parse(range?.availableFrom ?? "");
-  const rangeEnd = Date.parse(range?.availableTo ?? "");
-  const hasRange = Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd >= rangeStart;
-  const resolutionMinutes = history.envelope?.resolutionMinutes ?? range?.resolutionMinutes ?? 15;
-  const pickerResolutionMinutes = range?.resolutionMinutes ?? resolutionMinutes;
-  const gaps = history.envelope?.gaps ?? [];
-  const periodSummary = history.envelope?.periodSummary ?? null;
-  const periodStartAt = history.envelope?.periodStartAt ?? history.envelope?.resolvedAt ?? null;
-  const periodEndAt = history.envelope?.periodEndAt ?? null;
-  const comparisonEligible = history.status === "ready" && resolutionMinutes < 1440;
-
-  return (
-    <section className="history-controls" aria-labelledby="history-controls-heading" aria-busy={history.status === "loading"}>
-      <div className="history-mode-row">
-        <div>
-          <p className="eyebrow">Time view</p>
-          <h3 id="history-controls-heading">Now or past conditions</h3>
-        </div>
-        <div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
-          <button type="button" aria-pressed={mode === "now"} onClick={onNow}>Now</button>
-          <button type="button" aria-pressed={mode === "past"} onClick={onPast}>Past</button>
-        </div>
-      </div>
-
-      {mode === "past" && (
-        <>
-          <div className="history-picker">
-            <label>Date in Ireland<input type="date" value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); }} /></label>
-            <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); }} /></label>
-            <button type="button" className="history-apply" onClick={submitWallTime} disabled={!dateInput || !timeInput || history.status === "loading"}>Show past conditions</button>
-          </div>
-          {ambiguousCandidates.length > 1 && (
-            <fieldset className="history-ambiguity">
-              <legend>Which occurrence of {timeInput}?</legend>
-              {ambiguousCandidates.map((candidate) => (
-                <label key={candidate}><input type="radio" name="history-offset" value={candidate} checked={chosenCandidate === candidate} onChange={() => setChosenCandidate(candidate)} />{formatIrelandHistoryTime(candidate)}</label>
-              ))}
-            </fieldset>
-          )}
-          {wallTimeError && <p className="history-error" role="alert">{wallTimeError}</p>}
-
-          <label className="history-scrubber">
-            <span>Browse stored snapshots</span>
-            <input
-              type="range"
-              min={hasRange ? Math.floor(rangeStart / 1000) : 0}
-              max={hasRange ? Math.floor(rangeEnd / 1000) : 0}
-              step={Math.max(60, pickerResolutionMinutes * 60)}
-              value={hasRange ? Math.min(Math.floor(rangeEnd / 1000), Math.max(Math.floor(rangeStart / 1000), scrubberSeconds || Math.floor(rangeEnd / 1000))) : 0}
-              disabled={!hasRange || rangeStart === rangeEnd || history.status === "loading"}
-              aria-valuetext={selectedAt ? `${formatIrelandHistoryTime(new Date((scrubberSeconds || selectedSeconds) * 1000))}; ${historyResolutionLabel(resolutionMinutes)}; ${gaps.length} recorded gap${gaps.length === 1 ? "" : "s"}` : "No stored snapshots available"}
-              onChange={(event) => setScrubberSeconds(Number(event.target.value))}
-              onPointerUp={submitScrubber}
-              onKeyUp={submitScrubber}
-              onBlur={submitScrubber}
-            />
-            <small>{hasRange ? `${formatIrelandHistoryTime(range!.availableFrom!)} to ${formatIrelandHistoryTime(range!.availableTo!)}` : "History has not collected a snapshot yet."}</small>
-          </label>
-
-          <div className={`history-result ${history.status}`} role="status" aria-live="polite" aria-atomic="true">
-            {history.status === "loading" && <p>Loading the stored snapshot for {history.requestedAt ? formatIrelandHistoryTime(history.requestedAt) : "the selected time"}…</p>}
-            {history.status === "error" && <p>Historical conditions could not be loaded. {history.error}</p>}
-            {history.status === "gap" && <p>No stored snapshot exists at or before that time within the available resolution. Missing history remains missing.</p>}
-            {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes < 1440 && (
-              <p><b>Showing {formatIrelandHistoryTime(history.envelope.resolvedAt)}</b> · {historyResolutionLabel(history.envelope.resolutionMinutes)}{history.envelope.requestedAt !== history.envelope.resolvedAt ? ` · nearest stored record at or before ${formatIrelandHistoryTime(history.envelope.requestedAt)}` : ""}.</p>
-            )}
-            {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes >= 1440 && (
-              <p><b>Showing the retained daily summary for {formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt, false)}</b>{periodEndAt ? ` · full retained period ${formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt)} to ${formatIrelandHistoryTime(periodEndAt)}` : ""}. This is a whole-day summary, not conditions at the selected clock time, and it can include representatives later than that time. Daily summaries do not reconstruct a point-by-point map.</p>
-            )}
-            {gaps.length > 0 && <p><b>Recorded gaps:</b> {gaps.map((gap) => gap.detail).join(" ")}</p>}
-            {history.status === "ready" && <p><Link href="/data">Review sources, retention and attribution</Link>.</p>}
-          </div>
-
-          {history.status === "ready" && resolutionMinutes >= 1440 && periodSummary && (
-            <section className="history-period-summary" aria-labelledby="history-period-summary-heading">
-              <div>
-                <p className="eyebrow">Retained daily summary</p>
-                <h4 id="history-period-summary-heading">Across {periodSummary.representedSamples.toLocaleString("en-IE")} retained hourly representative{periodSummary.representedSamples === 1 ? "" : "s"}</h4>
-                <p>These values describe the retained hourly representatives only. They are not full-day extrema or a reconstructed point map.</p>
-              </div>
-              <dl>
-                <div><dt>Highest represented temperature</dt><dd>{historySummaryMetric(periodSummary.weather.highestTemperatureC, " °C")}</dd></div>
-                <div><dt>Highest represented wind speed</dt><dd>{historySummaryMetric(periodSummary.weather.highestWindSpeedKmh, " km/h")}</dd></div>
-                <div><dt>Represented grid wind-share range</dt><dd>{periodSummary.grid.minWindSharePercent === null || periodSummary.grid.maxWindSharePercent === null ? "Unavailable" : `${historySummaryMetric(periodSummary.grid.minWindSharePercent, "%")}–${historySummaryMetric(periodSummary.grid.maxWindSharePercent, "%")}`}</dd></div>
-                <div><dt>Highest represented TFI vehicle count</dt><dd>{historySummaryMetric(periodSummary.transit.maxVehicles)}</dd></div>
-                <div><dt>Distinct official notices represented</dt><dd>{historySummaryMetric(periodSummary.distinctCounts.officialWarnings)}</dd></div>
-              </dl>
-            </section>
-          )}
-
-          <div className="history-compare-actions">
-            <button type="button" onClick={onCompare} disabled={!comparisonEligible || comparison.status === "loading"}>{resolutionMinutes >= 1440 ? "Comparison unavailable for daily summary" : comparison.status === "loading" ? "Loading comparison…" : comparison.status === "ready" ? "Refresh latest stored comparison" : "Compare with latest stored"}</button>
-            <small>{resolutionMinutes >= 1440 ? "Comparison is available for point-in-time and hourly records. Daily retained representatives are not compared with a single latest snapshot." : "Uses the newest retained snapshot and labels its capture time; it does not restart live refresh."}</small>
-          </div>
-          {comparison.status === "error" && <p className="history-error" role="alert">Comparison unavailable. {comparison.error}</p>}
-          {comparison.status === "ready" && history.envelope && comparison.envelope?.resolvedAt && (
-            <div className="history-comparison" role="region" aria-label="Selected historical conditions compared with the latest stored snapshot">
-              <div className="history-comparison-heading"><b>Selected · {history.envelope.resolvedAt ? formatIrelandHistoryTime(history.envelope.resolvedAt) : "Unavailable"}</b><b>Latest stored · {formatIrelandHistoryTime(comparison.envelope.resolvedAt)}</b></div>
-              <dl>
-                {historyMetricRows(history.envelope, comparison.envelope).map((row) => (
-                  <div key={row.label}><dt>{row.label}</dt><dd><span>{row.past}</span><span>{row.comparison}</span></dd></div>
-                ))}
-              </dl>
-            </div>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
 
 export default function IrelandExperience({ initialSnapshot }: { initialSnapshot: LiveSnapshot }) {
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
@@ -1584,7 +547,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [markerAnnouncement, setMarkerAnnouncement] = useState("");
   const [selected, setSelected] = useState<MapSelection | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [openLayerGroups, setOpenLayerGroups] = useState<Set<string>>(() => new Set(["weather"]));
   const [activePreset, setActivePreset] = useState<Preset>("weather");
   const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
   const [initialRefreshComplete, setInitialRefreshComplete] = useState(() => initialSnapshot.lastSuccessAt !== null);
@@ -1604,6 +566,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [selectedPlaceId, setSelectedPlaceId] = useState(DEFAULT_PLACE_ID);
   const [ephemeralPlace, setEphemeralPlace] = useState<Place | null>(null);
   const [placeMessage, setPlaceMessage] = useState("");
+  const [activeSection, setActiveSection] = useState<ExperienceSection>("map");
   const [viewHydrated, setViewHydrated] = useState(false);
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
@@ -1622,14 +585,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const mapRef = useRef<SVGSVGElement | null>(null);
   const mapSectionRef = useRef<HTMLElement | null>(null);
   const pendingMapAnchorRef = useRef<number | null>(null);
+  const mapDocumentTopRef = useRef<number | null>(null);
   const markerOpenerRef = useRef<SVGElement | null>(null);
   const focusedMarkerRef = useRef<{ id: string; element: SVGGElement } | null>(null);
   const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
   const mapGestureRef = useRef<{ center: { x: number; y: number }; distance: number } | null>(null);
   const mapPointerOriginRef = useRef<{ x: number; y: number } | null>(null);
   const mapDidPanRef = useRef(false);
-  const panelRef = useRef<HTMLElement | null>(null);
-  const panelCloseRef = useRef<HTMLButtonElement | null>(null);
   const panelOpenerRef = useRef<HTMLButtonElement | null>(null);
   const experienceRef = useRef<HTMLElement | null>(null);
   const snapshot = timeMode === "past"
@@ -1890,6 +852,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         issTle: next.issTle,
         satellite: next.satellite,
         earthquakes: next.earthquakes,
+        solar: next.solar,
+        forecast: next.forecast,
         contextStatus: next.contextStatus,
         warnings: next.warnings
       }));
@@ -1955,58 +919,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [layers]);
 
   useEffect(() => {
-    if (!panelOpen) return;
-    const panel = panelRef.current;
-    const opener = panelOpenerRef.current;
-    if (!panel) return;
-
-    const closeButton = panelCloseRef.current;
-    closeButton?.focus();
-    const focusableSelector = [
-      "button:not([disabled])",
-      "a[href]",
-      "input:not([disabled])",
-      "select:not([disabled])",
-      "textarea:not([disabled])",
-      "summary",
-      "[tabindex]:not([tabindex=\"-1\"])",
-    ].join(", ");
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setPanelOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector))
-        .filter((element) => element.getAttribute("aria-hidden") !== "true" && element.getClientRects().length > 0);
-      if (!focusable.length) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !panel.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    panel.addEventListener("keydown", handleKeyDown);
-    document.body.style.overflow = "hidden";
-    return () => {
-      panel.removeEventListener("keydown", handleKeyDown);
-      if (opener?.isConnected) opener.focus();
-      document.body.style.overflow = "";
-    };
-  }, [panelOpen]);
-
-  useEffect(() => {
     const experience = experienceRef.current;
     if (!experience || !selected) return;
     experience.setAttribute("inert", "");
@@ -2018,7 +930,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       if (!snapshotReadable) return false;
       if (selection.type === "station") return snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
       if (selection.type === "train") return snapshot.sourceProvenance?.trains.status === "live";
-      if (selection.type === "river") return snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback";
+      if (selection.type === "river") return snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback";
       if (selection.type === "buoy") return snapshot.contextStatus.marine === "live";
       if (selection.type === "air") return selection.item.source === "measured"
         ? snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback"
@@ -2091,7 +1003,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   ).map(({ item }) => item), [activeMarkerId, activePreset, isDenseView, layers, mapViewport, projection, snapshot.sourceStatus, snapshot.stations, snapshotReadable]);
   const displayedRivers = useMemo(() => selectDeclutteredPoints(
     projectReadings(
-      snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback")
+      snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback")
         ? snapshot.rivers
         : [],
       projection,
@@ -2273,7 +1185,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     ? activeMarkerId
     : markerIds[0] ?? null;
   const rawPointMarkerCount =
-    (snapshotReadable && layers.has("rivers") && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback") ? snapshot.rivers.length : 0) +
+    (snapshotReadable && layers.has("rivers") && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback") ? snapshot.rivers.length : 0) +
     (snapshotReadable && layers.has("sea") && snapshot.contextStatus.marine === "live" ? snapshot.marine.length : 0) +
     (snapshotReadable && layers.has("tides") && (snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback") ? snapshot.tides.length : 0) +
     (snapshotReadable && layers.has("bathing") && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback") ? snapshot.bathingAlerts.length : 0) +
@@ -2282,11 +1194,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     (timeMode !== "past" && snapshotReadable && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live" ? deduplicateMovementRecords(snapshot.trains).length : 0) +
     (timeMode !== "past" && snapshotReadable && layers.has("transit") && snapshot.transitStatus === "live" ? deduplicateMovementRecords(snapshot.transit).length : 0) +
     (snapshotReadable && layers.has("earthquakes") && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback") ? snapshot.earthquakes.length : 0);
-  const activeLegendGroups = useMemo(() => LAYER_GROUPS.map((group) => ({
+  const visibleLayerGroups = LAYER_GROUPS;
+  const activeLegendGroups = useMemo(() => visibleLayerGroups.map((group) => ({
     id: group.id,
     label: group.label,
     layers: group.layers.filter(([id]) => layers.has(id)).map(([, label]) => label)
-  })).filter((group) => group.layers.length > 0), [layers]);
+  })).filter((group) => group.layers.length > 0), [layers, visibleLayerGroups]);
   const densitySummary = markerIds.length < rawPointMarkerCount
     ? `${markerIds.length} grouped markers represent ${rawPointMarkerCount} point observations at this zoom. Zoom in to reveal more.`
     : `${markerIds.length} point marker${markerIds.length === 1 ? "" : "s"} visible at this zoom.`;
@@ -2309,12 +1222,42 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     setActiveMarkerId((current) => current && markerIds.includes(current) ? current : markerIds[0] ?? null);
   }, [markerIds]);
 
-  const narrative = nationalNarrative(snapshot, now);
-  const daylight = solarProgress(now);
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const sections = EXPERIENCE_SECTIONS
+      .map((section) => {
+        const element = document.getElementById(section.id);
+        return element ? { key: section.key, element } : null;
+      })
+      .filter((section): section is { key: ExperienceSection; element: HTMLElement } => section !== null);
+    if (!sections.length) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((first, second) => second.intersectionRatio - first.intersectionRatio)[0];
+      if (!visible) return;
+      const active = sections.find((section) => section.element === visible.target);
+      if (active) setActiveSection(active.key);
+    }, {
+      rootMargin: "-18% 0px -52% 0px",
+      threshold: [0.2, 0.45, 0.7]
+    });
+
+    sections.forEach((section) => observer.observe(section.element));
+    return () => observer.disconnect();
+  }, []);
+
+  const weatherNarrativeDetail = weatherNarrative(snapshot);
+  const currentSolar = snapshot.contextStatus.solar === "live" ? snapshot.solar : null;
+  const daylight = authoritativeSolarProgress(currentSolar, now);
   const sunX = 880 - daylight * 760;
   const sunY = 145 - Math.sin(daylight * Math.PI) * 105;
   const currentHour = irelandHour(now);
-  const isNight = currentHour < 6 || currentHour >= 21;
+  const dayPhase = authoritativeDayPhase(currentSolar, now);
+  const isNight = currentSolar
+    ? dayPhase === "night"
+    : currentHour < 6 || currentHour >= 21;
   const selectedPlace = ephemeralPlace ?? PLACE_OPTIONS.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
   const selectedPlaceIsEphemeral = selectedPlace.id === "nearby";
   const selectedPlacePoint = selectedPlace.id === "island"
@@ -2332,7 +1275,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const localRiver = selectedPlace.id === "island"
     ? null
     : nearestReadingWithinRadius(
-        snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback")
+        snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback")
           ? snapshot.rivers.filter((river) => river.fresh)
           : [],
         selectedPlace,
@@ -2475,7 +1418,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     }, 850);
     return () => window.clearInterval(animation);
   }, [prefersReducedMotion, radarFrames.length, radarLayerActive, radarPlaying, radarPresentationState]);
-  const weatherCached = snapshot.sourceStatus === "stale" || (!online && snapshot.stations.length > 0);
   const trainsLive = online && snapshot.sourceProvenance?.trains.status === "live";
   const trainsCached = snapshot.sourceProvenance?.trains.status === "stale" || (!online && snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0);
   const riversLive = online && snapshot.sourceProvenance?.rivers.status === "live";
@@ -2521,22 +1463,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         fullyAssessed: false,
         unavailableSources: ["offline connection", ...assessedSources.unavailableSources]
       };
-  const liveServiceCount = online ? [
-    snapshot.sourceStatus === "live" && snapshot.stations.length > 0 && !weatherStale,
-    snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0 && !transitStale,
-    snapshot.sourceProvenance?.rivers.status === "live" && snapshot.rivers.length > 0 && !riverDataStale,
-    snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0,
-    radarPresentationState === "live",
-    snapshot.contextStatus.grid === "live" && Boolean(snapshot.grid),
-    snapshot.contextStatus.modelledAir === "live" && snapshot.airQuality.some((reading) => reading.source === "modelled"),
-    snapshot.contextStatus.tides === "live",
-    snapshot.contextStatus.bathing === "live",
-    snapshot.contextStatus.satellite === "live",
-    snapshot.contextStatus.earthquakes === "live",
-    snapshot.contextStatus.iss === "live",
-    snapshot.transitStatus === "live",
-    snapshot.contextStatus.aurora === "live" && Boolean(snapshot.aurora)
-  ].filter(Boolean).length : 0;
   const weatherBuoyCount = snapshot.marine.filter((reading) => reading.kind === "weather-buoy").length;
   const coastalObservatoryCount = snapshot.marine.length - weatherBuoyCount;
   const serviceDisplayState = timeMode === "past"
@@ -2630,13 +1556,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           }
       : mapNotice;
   const radarTimelineText = radarPresentationState === "live"
-    ? "Observed precipitation · all Ireland tiles loaded"
+    ? `Observed precipitation · all ${radarTileCount} Ireland tiles loaded`
     : radarPresentationState === "partial"
       ? `Partial radar coverage · ${radarReadyCount} of ${radarTileCount} Ireland tiles loaded`
       : radarPresentationState === "loading"
         ? `Loading radar tiles · ${radarReadyCount} of ${radarTileCount} loaded`
         : radarPresentationState === "cached"
           ? "Cached radar metadata · current imagery unavailable"
+        : radarFrame && radarUnavailableCount === radarTileCount
+          ? `Radar tiles unavailable · 0 of ${radarTileCount} Ireland tiles loaded · current precipitation cannot be assessed`
           : "Radar tiles unavailable · current precipitation cannot be assessed";
   const radarFrameValueText = radarFrame
     ? radarPresentationState === "live"
@@ -2647,6 +1575,151 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           ? `Radar tiles loading for ${formatTime(new Date(radarFrame.observedAt))}`
           : `Radar imagery unavailable for ${formatTime(new Date(radarFrame.observedAt))}`
     : "Radar frame unavailable";
+  const activeNoticeCount = currentWarnings.length;
+  const upcomingNoticeCount = Math.max(0, visibleWarnings.length - activeNoticeCount);
+  const liveSignals = [
+    activeNoticeCount > 0
+      ? `${formatCount(activeNoticeCount)} official ${pluralise(activeNoticeCount, "notice")} ${activeNoticeCount === 1 ? "is" : "are"} in effect`
+      : upcomingNoticeCount > 0
+        ? `${formatCount(upcomingNoticeCount)} official ${pluralise(upcomingNoticeCount, "notice")} ${upcomingNoticeCount === 1 ? "is" : "are"} due later`
+        : null,
+    railNotableCurrent && runningTrainCount !== null
+      ? runningTrainCount === 1
+        ? "1 train shares a live position"
+        : `${formatCount(runningTrainCount)} trains share live positions`
+      : null,
+    riversLive && !riverDataStale && riverStationCount !== null
+      ? `${formatCount(riverStationCount)} ${pluralise(riverStationCount, "river gauge")} ${riverStationCount === 1 ? "is" : "are"} reporting`
+      : riversPartial
+        ? `${formatCount(snapshot.rivers.length)} river readings are available with partial coverage`
+        : null,
+    online && snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0
+      ? `${formatCount(snapshot.marine.length)} ${pluralise(snapshot.marine.length, "marine site")} ${snapshot.marine.length === 1 ? "is" : "are"} reporting`
+      : null,
+    gridNotableCurrent && gridWindShare !== null
+      ? `wind supplies ${gridWindShare.toFixed(0)}% of all-island demand`
+      : null
+  ].filter((signal): signal is string => Boolean(signal));
+  const heroSentence = timeMode === "past"
+    ? historyState.status === "loading"
+      ? "Loading stored observations for the selected time…"
+      : historyState.status === "error"
+        ? "Historical conditions could not be loaded. Live data is not substituted."
+        : historyState.status === "gap"
+          ? "No stored record exists at or before the selected time. Missing history remains missing."
+          : `${irelandEditorialMoment(now)} ${isDailyHistorySummary
+            ? `This stored ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} preserves summary values and explicit gaps rather than a reconstructed point map.`
+            : "Stored observations are separated from live feeds and keep provider timestamps and recorded gaps."}`
+    : isConnectingWithoutSnapshot
+      ? "Connecting to live observations across the island…"
+      : servicesRefreshing
+        ? "Loading fresh observations across the island…"
+        : serviceDisplayState === "offline"
+          ? `Offline. Showing the last saved observations where available; last success ${lastSuccessLabel}.`
+          : serviceDisplayState === "cached"
+            ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.`
+            : serviceDisplayState === "unavailable"
+              ? "Live services are unavailable, so national conditions cannot be assessed."
+              : `${irelandEditorialMoment(now)} ${liveSignals.length ? `${joinClauses(liveSignals.slice(0, 3))}.` : weatherNarrativeDetail}`;
+  const heroSecondary = timeMode === "past"
+    ? `Stored observations from ${lastSuccessLabel}.`
+    : weatherNotableCurrent
+      ? weatherNarrativeDetail
+      : weatherDisplayStatus === "stale"
+        ? "Weather observations are cached and kept separate from the live story."
+        : "Weather observations are currently unavailable, so they are not used to frame the first impression.";
+  const heroFacts = [
+    !warningsUnavailable
+      ? {
+          key: "warnings",
+          family: "notices",
+          label: activeNoticeCount > 0 ? "official notices" : upcomingNoticeCount > 0 ? "notice outlook" : "official notices",
+          value: activeNoticeCount > 0
+            ? formatCount(activeNoticeCount)
+            : upcomingNoticeCount > 0
+              ? formatCount(upcomingNoticeCount)
+              : "Clear",
+          detail: activeNoticeCount > 0
+            ? `${activeNoticeCount === 1 ? "Notice" : "Notices"} now in effect`
+            : upcomingNoticeCount > 0
+              ? `${upcomingNoticeCount === 1 ? "Notice" : "Notices"} due later`
+              : "No current or upcoming notices",
+          onClick: () => document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" })
+        }
+      : null,
+    railNotableCurrent && runningTrainCount !== null
+      ? {
+          key: "trains",
+          family: "movement",
+          label: "rail positions",
+          value: formatCount(runningTrainCount),
+          detail: runningTrainCount === 1 ? "1 train sharing a live position" : `${formatCount(runningTrainCount)} trains sharing live positions`,
+          onClick: () => focusContext("trains")
+        }
+      : null,
+    riversAvailable && (riverStationCount ?? snapshot.rivers.length) > 0
+      ? {
+          key: "rivers",
+          family: "water",
+          label: "river gauges",
+          value: formatCount(riverStationCount ?? snapshot.rivers.length),
+          detail: riversLive && !riverDataStale
+            ? "Fresh river readings across the island"
+            : riversPartial
+              ? "Recent readings with partial coverage"
+              : riversFallback
+                ? "Labelled fallback coverage"
+                : "Saved river context",
+          onClick: () => focusContext("rivers")
+        }
+      : null,
+    gridWindShare !== null
+      ? {
+          key: "grid",
+          family: "energy",
+          label: "wind share",
+          value: `${gridWindShare.toFixed(0)}%`,
+          detail: gridNotableCurrent ? "All-island demand met by wind" : "Saved grid snapshot",
+          onClick: () => focusContext("grid")
+        }
+      : null,
+    online && snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0
+      ? {
+          key: "marine",
+          family: "sea",
+          label: "marine sites",
+          value: formatCount(snapshot.marine.length),
+          detail: "Weather buoys and coastal observatories reporting",
+          onClick: () => focusContext("sea")
+        }
+      : null,
+    weatherNotableCurrent && reportingCount !== null
+      ? {
+          key: "weather",
+          family: "weather",
+          label: "weather stations",
+          value: formatCount(reportingCount),
+          detail: snapshot.summary.warmest
+            ? `${snapshot.summary.warmest.temperature}° at ${snapshot.summary.warmest.name}`
+            : "Fresh observations across the island",
+          onClick: () => focusContext("weather")
+        }
+      : null
+  ].filter((fact): fact is {
+    key: string;
+    family: string;
+    label: string;
+    value: string;
+    detail: string;
+    onClick: () => void;
+  } => fact !== null).slice(0, 4);
+  const mapAnchorLayoutKey = [
+    activePreset,
+    [...layers].sort().join(","),
+    heroSentence,
+    heroSecondary,
+    heroFacts.map((fact) => `${fact.key}:${fact.value}:${fact.detail}`).join("|")
+  ].join("::");
   const constrainMapView = useCallback((scale: number, x: number, y: number) => {
     const nextScale = Math.min(4, Math.max(1, scale));
     return {
@@ -2832,13 +1905,29 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, []);
 
   useLayoutEffect(() => {
-    const previousTop = pendingMapAnchorRef.current;
     const map = mapSectionRef.current;
-    if (previousTop === null || !map) return;
+    if (!map) return;
+    const bounds = map.getBoundingClientRect();
+    const documentTop = bounds.top + window.scrollY;
+    const previousDocumentTop = mapDocumentTopRef.current;
+    const requestedViewportTop = pendingMapAnchorRef.current;
     pendingMapAnchorRef.current = null;
-    const delta = map.getBoundingClientRect().top - previousTop;
+    mapDocumentTopRef.current = documentTop;
+
+    const previousViewportTop = previousDocumentTop === null
+      ? null
+      : previousDocumentTop - window.scrollY;
+    const wasVisible = previousViewportTop !== null &&
+      previousViewportTop < window.innerHeight &&
+      previousViewportTop + bounds.height > 0;
+    const userHasLeftPageTop = window.scrollY > 1;
+    const delta = requestedViewportTop !== null
+      ? bounds.top - requestedViewportTop
+      : wasVisible && userHasLeftPageTop && previousDocumentTop !== null
+        ? documentTop - previousDocumentTop
+        : 0;
     if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: "auto" });
-  }, [activePreset, layers]);
+  }, [mapAnchorLayoutKey]);
 
   const activateNearestMapMarker = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest("[data-map-marker]")) return;
@@ -3255,7 +2344,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [activePreset, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
 
   return (
-    <main ref={experienceRef} className={`experience ${isNight ? "is-night" : ""} ${timeMode === "past" ? "is-history" : "is-now"}`}>
+    <main
+      ref={experienceRef}
+      className={`experience ${isNight ? "is-night" : ""} ${timeMode === "past" ? "is-history" : "is-now"}`}
+      data-day-phase={dayPhase}
+    >
       <a className="skip-link" href="#live-map">Skip to {timeMode === "past" ? "historical" : "live"} map</a>
       <header className="topbar">
         <Link className="brand" href="/" aria-label="A Day in Ireland, home">
@@ -3316,70 +2409,48 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </header>
 
       <section className="dashboard-shell">
-        <aside className="section-rail" aria-label={`${timeMode === "past" ? "Historical" : "Live"} view across Ireland`}>
-          <div className="rail-status">
-            <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} aria-hidden="true" />
-            <span><b>{timeMode === "past" ? "History mode" : "Live systems"}</b><small>{connectionLabel}</small><small>{timeMode === "past"
-              ? historyState.status === "ready"
-                ? `${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 15)} · ${historyGaps.length} recorded gap${historyGaps.length === 1 ? "" : "s"}`
-                : historyState.status === "loading" ? "Loading stored record…" : "No stored record"
-              : isConnectingWithoutSnapshot ? "Connecting…" : `${liveServiceCount} live · last success ${lastSuccessLabel}`}</small></span>
-          </div>
-          <nav aria-label="Map view shortcuts" aria-describedby="preset-scroll-hint">
-            <button type="button" className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span aria-hidden="true">☁</span><b className="rail-label">Weather</b></button>
-            <button type="button" className="rail-extra" onClick={() => focusContext("radar")}><span aria-hidden="true">◉</span><b className="rail-label">Rain radar</b></button>
-            <button type="button" className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span aria-hidden="true">↗</span><b className="rail-label">Movement</b></button>
-            <button type="button" className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span aria-hidden="true">≈</span><b className="rail-label">Water</b></button>
-            <button type="button" className="rail-extra" onClick={() => focusContext("sea")}><span aria-hidden="true">⌁</span><b className="rail-label">Sea</b></button>
-            <button type="button" className="rail-extra" onClick={() => focusContext("grid")}><span aria-hidden="true">ϟ</span><b className="rail-label">Energy</b></button>
-            <button type="button" className="rail-extra" onClick={() => focusContext("air")}><span aria-hidden="true">◌</span><b className="rail-label">Air</b></button>
-            <button type="button" className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span aria-hidden="true">⌘</span><b className="rail-label">All layers</b></button>
-            <button
-              type="button"
-              className={activePreset === "custom" ? "active rail-custom" : "rail-custom"}
-              aria-pressed={activePreset === "custom"}
-              onClick={(event) => {
-                panelOpenerRef.current = event.currentTarget;
-                setPanelOpen(true);
-              }}
-            ><span aria-hidden="true">⋯</span><b className="rail-label">Custom · {layers.size}</b></button>
+        <aside className="section-rail" aria-label="Section shortcuts">
+          <p className="section-rail-kicker">{timeMode === "past" ? "Historical atlas" : "Living atlas"}</p>
+          <nav className="section-nav" aria-label="Section shortcuts">
+            {EXPERIENCE_SECTIONS.map((section) => (
+              <a
+                key={section.key}
+                href={`#${section.id}`}
+                aria-current={activeSection === section.key ? "location" : undefined}
+              >
+                <b>{section.label}</b>
+                <small>{section.detail}</small>
+              </a>
+            ))}
           </nav>
-          <small id="preset-scroll-hint" className="preset-scroll-hint">Swipe or scroll for more views →</small>
-          {activePreset === "custom" && (
-            <p className="custom-view-state" role="status" aria-live="polite">Custom view · {layers.size} active layer{layers.size === 1 ? "" : "s"}</p>
-          )}
-          <a className="rail-map-action" href="#live-map">View {timeMode === "past" ? "historical" : "live"} map <span aria-hidden="true">↓</span></a>
-          <div className="rail-metrics">
-            <p><span>Warmest</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? `${snapshot.summary.warmest?.temperature ?? "—"}°` : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : weatherNotableCurrent ? `${snapshot.summary.warmest?.name ?? "No usable report"}${timeMode === "past" ? " · at capture" : ""}` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? "Weather summary not retained" : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
-            <p><span>Strongest wind</span><strong>{isConnectingWithoutSnapshot ? "…" : weatherNotableCurrent ? snapshot.summary.windiest?.windSpeed ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : weatherNotableCurrent ? `km/h · ${snapshot.summary.windiest?.name ?? "No usable report"}${timeMode === "past" ? " · at capture" : ""}` : timeMode === "past" ? historyGapForFocus(historyGaps, "wind")?.detail ?? "Wind summary not retained" : weatherCached ? "Saved weather; summary withheld" : "Provider unavailable"}</small></p>
-            <p><span>{timeMode === "past" ? "Rail services" : "Trains moving"}</span><strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "—" : trainsLive || trainsCached ? runningTrainCount ?? "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored rail coverage" : "Connecting" : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "Retained aggregate at capture" : historyGapForFocus(historyGaps, "trains")?.detail ?? "Not retained — permission pending" : trainsLive ? runningTrainCount === null ? "Count unavailable" : "Current positions" : trainsCached ? runningTrainCount === null ? "Count unavailable" : "Cached positions" : "Provider unavailable"}</small></p>
-            <p><span>River gauges</span><strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "—" : "—"}</strong><small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored record" : "Connecting" : riversLive ? riverStationCount === null ? "Count unavailable" : timeMode === "past" ? "Readings retained at capture" : "Fresh readings" : riversPartial ? `${snapshot.rivers.length} readings · partial` : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations not retained" : riversCached ? riverStationCount === null ? "Count unavailable" : "Cached readings" : riversFallback ? riverStationCount === null ? "Count unavailable" : "Fallback source" : "Provider unavailable"}</small></p>
-          </div>
+          <p className="section-rail-note">{timeMode === "past"
+            ? "Move between the retained map, notices, national briefing and the recorded shape of the day."
+            : "Map presets stay with the map. Explore opens the full layer drawer without repeating the main view controls."}</p>
         </aside>
 
         <div className="map-workspace">
           <div className="workspace-heading" id="ireland-now">
-            <div>
-              <p className="eyebrow">Ireland {timeMode === "past" ? "then" : "now"}<span className="moment-time"> · {formatDate(now)} · {formatTime(now)} Irish time</span></p>
+            <div className="workspace-copy">
+              <p className="eyebrow">{formatDate(now)}<span className="moment-time"> · {formatTime(now)} Irish time</span></p>
               <h1 id="moment-heading">Ireland {timeMode === "past" ? "then" : "now"}.</h1>
-              <p>{timeMode === "past"
-                ? historyState.status === "loading" ? "Loading stored observations for the selected time…"
-                  : historyState.status === "error" ? "Historical conditions could not be loaded. Live data is not substituted."
-                    : historyState.status === "gap" ? "No stored record exists at or before the selected time. Missing history remains missing."
-                      : isDailyHistorySummary ? `This is a ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} captured ${lastSuccessLabel}. Summary values and recorded gaps are shown; a point-by-point map is not reconstructed.`
-                        : `Stored observations captured ${lastSuccessLabel}. They are separate from live feeds and retain provider timestamps and gaps.`
-                : isConnectingWithoutSnapshot ? "Connecting to live observations across the island…" : servicesRefreshing ? "Loading fresh observations across the island…" : serviceDisplayState === "offline" ? `Offline. Showing the last saved observations where available; last success ${lastSuccessLabel}.` : serviceDisplayState === "cached" ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.` : serviceDisplayState === "unavailable" ? "Live services are unavailable, so national conditions cannot be assessed." : `${narrative.period} ${narrative.detail}`}</p>
-              <p className="moment-summary" aria-hidden="true">{timeMode === "past"
-                ? `Stored observations from ${lastSuccessLabel}.`
-                : isConnectingWithoutSnapshot ? "Connecting to live island observations…"
-                : snapshot.summary.reporting ? `${snapshot.summary.reporting} stations reporting · ${snapshot.summary.warmest ? `${snapshot.summary.warmest.temperature}° warmest` : "temperatures varied"}${snapshot.summary.wettest?.rainfall ? ` · ${snapshot.summary.wettest.rainfall} mm rain` : ""}`
-                  : "Connecting to live observations…"}</p>
-              <a className="view-map-action" href="#live-map">View {timeMode === "past" ? "historical" : "live"} map <span aria-hidden="true">↓</span></a>
+              <p className="hero-sentence">{heroSentence}</p>
+              <p className="moment-summary">{heroSecondary}</p>
             </div>
             <div className="workspace-facts" role="group" aria-label={`${timeMode === "past" ? "Historical" : "Current"} national highlights across Ireland`}>
-              <button onClick={() => focusContext("grid")}><b>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? `${snapshot.grid.windSharePercent.toFixed(0)}%` : "—"}</b><small>{gridNotableCurrent && snapshot.grid?.windSharePercent !== null && snapshot.grid?.windSharePercent !== undefined ? `demand met by wind${timeMode === "past" ? " at capture" : ""}` : "grid wind share unavailable"}</small></button>
-              <button onClick={() => focusContext("sea")}><b>{online && snapshot.contextStatus.marine === "live" ? snapshot.marine.length : "—"}</b><small>{online && snapshot.contextStatus.marine === "live" ? timeMode === "past" ? "marine sites represented at capture" : "marine sites reporting" : "marine observations unavailable"}</small></button>
-              <button onClick={() => focusContext("radar")}><b>{weatherNotableCurrent && snapshot.summary.wettest?.rainfall !== null && snapshot.summary.wettest?.rainfall !== undefined ? `${snapshot.summary.wettest.rainfall} mm` : "—"}</b><small>{weatherNotableCurrent ? "recent observed rain" : "rain observations unavailable"}</small></button>
+              {heroFacts.length ? heroFacts.map((fact) => (
+                <button
+                  type="button"
+                  key={fact.key}
+                  className={`hero-fact ${fact.family}`}
+                  onClick={fact.onClick}
+                >
+                  <span>{fact.label}</span>
+                  <b>{fact.value}</b>
+                  <small>{fact.detail}</small>
+                </button>
+              )) : (
+                <p className="workspace-facts-empty">Awaiting fresh island-wide signals.</p>
+              )}
             </div>
           </div>
 
@@ -3471,6 +2542,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             )}
           </section>
 
+          <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
+          <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
+
           <div className="freshness-strip" role="status" aria-label="Data freshness and provider status">
             {timeMode === "past" ? (
               <>
@@ -3517,7 +2591,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             )}
           </div>
 
-          <section className={`official-notices ${compactNotices ? "compact" : ""}`} data-scope="across-ireland" aria-labelledby="official-notices-heading">
+          <section
+            id="official-notices"
+            className={`official-notices ${compactNotices ? "compact" : ""}`}
+            data-scope="across-ireland"
+            aria-labelledby="official-notices-heading"
+          >
             {compactNotices ? (
               <div className="official-notices-compact-row">
                 <span className="live-dot live" aria-hidden="true" />
@@ -3597,20 +2676,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       >
         <div className="map-explorer-heading">
           <div>
-            <p className="eyebrow">Explore map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
+            <p className="eyebrow">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
             <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
-            <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "Choose a view, zoom into grouped markers, or open the layer catalogue. Observations keep their provider meaning and timestamps."}</p>
+            <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
           </div>
-          <button
-            type="button"
-            aria-label="Choose map layers"
-            onClick={(event) => {
-              panelOpenerRef.current = event.currentTarget;
-              setPanelOpen(true);
-            }}
-          >
-            Layers
-          </button>
         </div>
         <HistoryControls
           mode={timeMode}
@@ -3622,11 +2691,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onRequest={(at) => void loadHistoryAt(at)}
           onCompare={() => void compareHistoryWithNow()}
         />
-        <nav className="map-presets" aria-label="Map views">
-          <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" />Weather</button>
-          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" />Movement</button>
-          <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" aria-hidden="true" />Water</button>
-          <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}>All layers</button>
+        <nav className="map-presets" aria-label="Map view shortcuts">
+          <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" /><span className="preset-label">Weather</span></button>
+          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" /><span className="preset-label">Movement</span></button>
+          <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" aria-hidden="true" /><span className="preset-label">Water</span></button>
+          <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span className="preset-label">All layers</span></button>
           <button
             className={activePreset === "custom" ? "active custom" : "custom"}
             aria-pressed={activePreset === "custom"}
@@ -3635,9 +2704,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               setPanelOpen(true);
             }}
           >
-            Custom · {layers.size} layers
+            <span className="preset-label">Custom · {layers.size} layers</span>
           </button>
         </nav>
+        <small className="preset-scroll-hint">Swipe for more views →</small>
         <details className="map-legend">
           <summary>Legend · {layers.size} layers shown</summary>
           <div className="map-legend-content">
@@ -3692,37 +2762,37 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         >
           <title id="map-title">{timeMode === "past" ? "Stored conditions across Ireland at the selected time" : "Near-real-time conditions across Ireland"}</title>
           <desc id="map-description">{timeMode === "past" ? "A map of retained historical observations across Ireland. Provider gaps and unavailable positions or imagery remain missing; daily summaries do not reconstruct point markers." : "A close map of Ireland showing weather, radar rain, observed wind, rail and public transport, river and tide gauges, sea conditions, measured and modelled air quality, bathing alerts, satellite imagery, seismic detections, ISS passes, aurora guidance and the live power grid."}</desc>
-          <defs>
-            <radialGradient id="sunGlow">
-              <stop offset="0" stopColor="#ffe9a3" stopOpacity=".85" />
-              <stop offset="1" stopColor="#ffd56a" stopOpacity="0" />
-            </radialGradient>
-            <radialGradient id="rainMist">
-              <stop offset="0" stopColor="#5689a0" stopOpacity=".48" />
-              <stop offset=".55" stopColor="#5689a0" stopOpacity=".2" />
-              <stop offset="1" stopColor="#5689a0" stopOpacity="0" />
-            </radialGradient>
+	          <defs>
+	            <radialGradient id="sunGlow">
+	              <stop offset="0" stopColor="#f4d8a2" stopOpacity=".88" />
+	              <stop offset="1" stopColor="#c78f58" stopOpacity="0" />
+	            </radialGradient>
+	            <radialGradient id="rainMist">
+	              <stop offset="0" stopColor="#6d97b2" stopOpacity=".42" />
+	              <stop offset=".55" stopColor="#6d97b2" stopOpacity=".18" />
+	              <stop offset="1" stopColor="#6d97b2" stopOpacity="0" />
+	            </radialGradient>
             <radialGradient id="satelliteFade">
               <stop offset=".68" stopColor="white" stopOpacity="1" />
               <stop offset="1" stopColor="white" stopOpacity="0" />
             </radialGradient>
-            <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#163d3d" />
-              <stop offset="1" stopColor="#071f22" />
-            </linearGradient>
-            <linearGradient id="land" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stopColor="#94a86c" />
-              <stop offset=".45" stopColor="#667f57" />
-              <stop offset="1" stopColor="#344f45" />
-            </linearGradient>
-            <linearGradient id="auroraGlow" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="#55ffc1" stopOpacity=".78" />
-              <stop offset=".5" stopColor="#7a7cff" stopOpacity=".25" />
-              <stop offset="1" stopColor="#55ffc1" stopOpacity="0" />
-            </linearGradient>
-            <filter id="landShadow" x="-30%" y="-30%" width="160%" height="160%">
-              <feDropShadow dx="0" dy="0" stdDeviation="12" floodColor="#00dbe9" floodOpacity=".22" />
-            </filter>
+	            <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
+	              <stop offset="0" stopColor="#1e3d42" />
+	              <stop offset="1" stopColor="#102326" />
+	            </linearGradient>
+	            <linearGradient id="land" x1="0" y1="0" x2="1" y2="1">
+	              <stop offset="0" stopColor="#889a6b" />
+	              <stop offset=".45" stopColor="#5f7354" />
+	              <stop offset="1" stopColor="#31453f" />
+	            </linearGradient>
+	            <linearGradient id="auroraGlow" x1="0" y1="0" x2="0" y2="1">
+	              <stop offset="0" stopColor="#8fc9a0" stopOpacity=".62" />
+	              <stop offset=".5" stopColor="#6b86a2" stopOpacity=".22" />
+	              <stop offset="1" stopColor="#8fc9a0" stopOpacity="0" />
+	            </linearGradient>
+	            <filter id="landShadow" x="-30%" y="-30%" width="160%" height="160%">
+	              <feDropShadow dx="0" dy="10" stdDeviation="18" floodColor="#081413" floodOpacity=".38" />
+	            </filter>
             <clipPath id="viewportClip"><rect width="1000" height="900" rx="42" /></clipPath>
             <mask id="satelliteContextMask"><ellipse cx="520" cy="470" rx="315" ry="445" fill="url(#satelliteFade)" /></mask>
           </defs>
@@ -4105,13 +3175,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <span>{timeMode === "past" ? "Stored observations, operational records and clearly labelled model data" : "Observed, operational, and clearly labelled model data"} · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></span>
         </div>
 
-        <div className="live-signal-dock" role="status" aria-label={`${timeMode === "past" ? "Stored provider coverage" : "Provider signal status"} across Ireland`}>
-          <strong><span className={`live-dot ${timeMode === "past" ? "partial" : liveServiceCount ? "live" : "partial"}`} />{timeMode === "past" ? "Stored coverage" : "Provider feeds"}</strong>
-          <span><time>{latestWeatherObs > 0 ? formatTime(new Date(latestWeatherObs)) : "—"}</time>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations` : weatherNotableCurrent ? reportingCount === null ? "Weather station count unavailable" : `${reportingCount} weather stations ${timeMode === "past" ? "retained" : "reporting"}` : weatherCached ? reportingCount === null ? "Saved weather station count unavailable" : `${reportingCount} saved weather stations` : "Weather observations unavailable"}</span>
-          <span><time>{snapshot.sourceProvenance?.trains.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.trains.latestObservedAt)) : "—"}</time>{timeMode === "past" ? historyState.envelope?.movementSummary.rail ? `${historyState.envelope.movementSummary.rail.total} rail services in retained aggregate; positions not shown` : historyGapForFocus(historyGaps, "trains")?.detail ?? "Rail history unavailable" : isConnectingWithoutSnapshot ? "Connecting to rail positions" : railNotableCurrent ? runningTrainCount === null ? "Rail service count unavailable" : `${runningTrainCount} trains sharing current positions` : trainsCached ? runningTrainCount === null ? "Cached rail service count unavailable" : `${runningTrainCount} trains in cached positions` : "Rail positions unavailable"}</span>
-          <span><time>{snapshot.sourceProvenance?.rivers.latestObservedAt ? formatTime(new Date(snapshot.sourceProvenance.rivers.latestObservedAt)) : "—"}</time>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges` : riversLive && !riverDataStale ? riverStationCount === null ? "River gauge count unavailable" : `${riverStationCount} ${timeMode === "past" ? "retained" : "fresh"} river gauges` : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "Cached river gauge count unavailable" : `${riverStationCount} cached river gauges` : riversFallback ? riverStationCount === null ? "Fallback river gauge count unavailable" : `${riverStationCount} fallback-source river gauges` : "River readings unavailable"}</span>
-        </div>
-
       </section>
                 {briefing}
               </>
@@ -4140,7 +3203,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         document.body
       )}
 
-      <section className="what-matters-now" data-scope="across-ireland" aria-labelledby="what-matters-heading">
+      <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
           <div>
             <p className="eyebrow">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
@@ -4287,40 +3350,35 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </details>
       </section>
 
-      <section className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
+      <section id="day-so-far" className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
         <div className="dayline-heading">
           <div><p className="eyebrow">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
-          <p>Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below.</p>
+          <p>{snapshot.timeline.length
+            ? "Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below."
+            : "Hourly weather appears here only when recent Met Éireann observations can support it."}</p>
         </div>
-        <div className="timeline-legend" role="img" aria-label="Chart legend">
-          <span><i className="temperature" />Average temperature (°C)</span>
-          <span><i className="rain" />Average observed rain per station (mm)</span>
-        </div>
-        {timeMode !== "past" && (snapshot.sourceStatus === "stale" || serviceDisplayState === "offline") && snapshot.timeline.length > 0 && (
-          <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
-        )}
-        <div
-          className="timeline-plot-scroll"
-          role="region"
-          aria-label="Scrollable hourly chart"
-          tabIndex={snapshot.timeline.length ? 0 : -1}
-        >
-          <div className="timeline-plot">
-            <div className="timeline-axis temperature-axis" aria-hidden="true">
-              <span>{timelineTemperatureMax}°C</span>
-              <strong>Temperature</strong>
-              <span>{timelineTemperatureMin}°C</span>
+        {snapshot.timeline.length ? (
+          <>
+            <div className="timeline-legend" role="img" aria-label="Chart legend">
+              <span><i className="temperature" />Average temperature (°C)</span>
+              <span><i className="rain" />Average observed rain per station (mm)</span>
             </div>
-            <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : snapshot.sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
-              {snapshot.timeline.length === 0 && (
-                <p className="timeline-empty">{isConnectingWithoutSnapshot
-                  ? "Connecting to hourly weather observations…"
-                  : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"
-                    ? timeMode === "past" ? "This historical record contains no retained hourly observations." : "The current provider response contains no hourly observations yet."
-                    : snapshot.sourceStatus === "stale"
-                      ? "No saved hourly observations remain within the retention window."
-                      : "Hourly weather observations are unavailable."}</p>
-              )}
+            {timeMode !== "past" && (snapshot.sourceStatus === "stale" || serviceDisplayState === "offline") && (
+              <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
+            )}
+            <div
+              className="timeline-plot-scroll"
+              role="region"
+              aria-label="Scrollable hourly chart"
+              tabIndex={0}
+            >
+              <div className="timeline-plot">
+                <div className="timeline-axis temperature-axis" aria-hidden="true">
+                  <span>{timelineTemperatureMax}°C</span>
+                  <strong>Temperature</strong>
+                  <span>{timelineTemperatureMin}°C</span>
+                </div>
+                <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : snapshot.sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
               {snapshot.timeline.map((point) => {
                 const temperatureHeight = point.temperature === null
                   ? 4
@@ -4345,35 +3403,50 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   </button>
                 );
               })}
+                </div>
+                <div className="timeline-axis rain-axis" aria-hidden="true">
+                  <span>{timelineRainMax.toFixed(1)} mm</span>
+                  <strong>Average rain</strong>
+                  <span>0 mm</span>
+                </div>
+                <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
+              </div>
             </div>
-            <div className="timeline-axis rain-axis" aria-hidden="true">
-              <span>{timelineRainMax.toFixed(1)} mm</span>
-              <strong>Average rain</strong>
-              <span>0 mm</span>
+            <details className="timeline-data-list">
+              <summary>View hourly values as a list</summary>
+              <div className="timeline-table-scroll" role="region" aria-label="Hourly weather data table" tabIndex={0}>
+                <table>
+                  <caption>Hourly averages across reporting Met Éireann stations; rain is the mean of available station observations, not an island-wide total</caption>
+                  <thead><tr><th scope="col">Time</th><th scope="col">Average temperature</th><th scope="col">Average rain</th><th scope="col">Average wind</th></tr></thead>
+                  <tbody>
+                    {snapshot.timeline.map((point) => (
+                      <tr key={`list-${point.time}`}>
+                        <th scope="row">{point.time}</th>
+                        <td>{point.temperature === null ? "Unavailable" : `${point.temperature.toFixed(1)} °C`}</td>
+                        <td>{point.rainfall === null ? "Unavailable" : `${point.rainfall.toFixed(1)} mm`}</td>
+                        <td>{point.windSpeed === null ? "Unavailable" : `${point.windSpeed.toFixed(0)} km/h`}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          </>
+        ) : (
+          <div className="timeline-empty-state" role="status">
+            <span aria-hidden="true">◌</span>
+            <div>
+              <h3>Hourly weather is not available yet</h3>
+              <p>{isConnectingWithoutSnapshot
+                ? "Connecting to recent Met Éireann observations…"
+                : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"
+                  ? timeMode === "past" ? "This historical record contains no retained hourly observations." : "The current provider response contains no hourly observations yet."
+                  : snapshot.sourceStatus === "stale"
+                    ? "No saved hourly observations remain within the retention window."
+                    : "Hourly weather observations are unavailable. The chart will return when recent station data can support it."}</p>
             </div>
-            <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
           </div>
-        </div>
-        <details className="timeline-data-list">
-          <summary>View hourly values as a list</summary>
-          <div className="timeline-table-scroll" role="region" aria-label="Hourly weather data table" tabIndex={0}>
-            <table>
-              <caption>Hourly averages across reporting Met Éireann stations; rain is the mean of available station observations, not an island-wide total</caption>
-              <thead><tr><th scope="col">Time</th><th scope="col">Average temperature</th><th scope="col">Average rain</th><th scope="col">Average wind</th></tr></thead>
-              <tbody>
-                {snapshot.timeline.map((point) => (
-                  <tr key={`list-${point.time}`}>
-                    <th scope="row">{point.time}</th>
-                    <td>{point.temperature === null ? "Unavailable" : `${point.temperature.toFixed(1)} °C`}</td>
-                    <td>{point.rainfall === null ? "Unavailable" : `${point.rainfall.toFixed(1)} mm`}</td>
-                    <td>{point.windSpeed === null ? "Unavailable" : `${point.windSpeed.toFixed(0)} km/h`}</td>
-                  </tr>
-                ))}
-                {!snapshot.timeline.length && <tr><td colSpan={4}>No hourly observations are available yet.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </details>
+        )}
         {selectedTimelinePoint && (
           <p className="timeline-selection" role="status">
             <b>{selectedTimelinePoint.time}</b> · {selectedTimelinePoint.temperature?.toFixed(1) ?? "—"}° average temperature · {selectedTimelinePoint.rainfall?.toFixed(1) ?? "—"} mm average observed rain per reporting station · {selectedTimelinePoint.windSpeed?.toFixed(0) ?? "—"} km/h average wind.
@@ -4381,100 +3454,20 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         )}
       </section>
 
-      {panelOpen && (
-        <button
-          className="panel-backdrop"
-          aria-label="Close layer panel backdrop"
-          onClick={() => setPanelOpen(false)}
-        />
-      )}
-      <aside
-        ref={panelRef}
-        className={`explore-panel ${panelOpen ? "is-open" : ""}`}
-        aria-hidden={!panelOpen}
-        aria-modal={panelOpen}
-        role="dialog"
-        aria-label={`Explore ${timeMode === "past" ? "historical" : "live"} map layers`}
-        inert={!panelOpen}
-      >
-        <div className="panel-heading">
-          <div><p className="eyebrow">Explore the moment</p><h2>Live layers</h2></div>
-          <button ref={panelCloseRef} onClick={() => setPanelOpen(false)} aria-label="Close explore panel">×</button>
-        </div>
-        <div className="panel-layer-state" role="status">
-          <strong>{activePreset === "custom"
-            ? `Custom · ${layers.size} layers`
-            : `${activePreset === "all" ? "All layers" : `${activePreset[0]!.toUpperCase()}${activePreset.slice(1)}`} preset · ${layers.size} layers`}</strong>
-          <small>Named presets reset the map. Individual switches create a shareable custom view.</small>
-        </div>
-        <nav className="panel-presets" aria-label="Layer panel presets">
-          {(["weather", "movement", "water", "all"] as const).map((preset) => (
-            <button
-              type="button"
-              key={preset}
-              className={activePreset === preset ? "active" : ""}
-              aria-pressed={activePreset === preset}
-              onClick={() => showPreset(preset)}
-            >
-              {preset === "all" ? "All layers" : `${preset[0]!.toUpperCase()}${preset.slice(1)}`}
-            </button>
-          ))}
-        </nav>
-        <div className="layer-list" role="group" aria-label="Explore layer categories">
-          {LAYER_GROUPS.map((group) => (
-            <details
-              className="layer-group"
-              data-layer-group={group.id}
-              key={group.id}
-              open={openLayerGroups.has(group.id)}
-              onToggle={(event) => {
-                const isOpen = event.currentTarget.open;
-                setOpenLayerGroups((current) => {
-                  if (current.has(group.id) === isOpen) return current;
-                  const next = new Set(current);
-                  if (isOpen) next.add(group.id);
-                  else next.delete(group.id);
-                  return next;
-                });
-              }}
-            >
-              <summary className="layer-group-heading">
-                <h3 id={`layer-group-${group.id}`}>{group.label}</h3>
-                <p>{group.detail}</p>
-              </summary>
-              <div className="layer-group-controls">
-                {group.layers.map(([id, label, detail]) => (
-                  <button
-                    key={id}
-                    data-layer-id={id}
-                    className={layers.has(id) ? "active" : ""}
-                    onClick={() => toggleLayer(id)}
-                    aria-pressed={layers.has(id)}
-                  >
-                    <span className="layer-toggle" /><span><b>{label}</b><small>{timeMode === "past" ? historicalLayerDetail(id, detail) : detail}</small></span>
-                  </button>
-                ))}
-              </div>
-            </details>
-          ))}
-        </div>
-        <div className="source-note">
-          <p className="eyebrow">About the data</p>
-          <p>{timeMode === "past" ? "This view uses retained observations, representative rollups and explicit collector gaps. Raw rail or TFI positions and radar or satellite pixels are not archived. Missing history is never replaced with newer data or shown as zero." : "Weather, radar, rail, marine, grid and public signals refresh automatically. Air markers explicitly distinguish delayed station measurements from model output. Satellite imagery is near-real-time rather than live; ISS passes are calculations; river and tide readings are observations, not safety warnings. Missing data is never shown as zero."}</p>
-          <p>{timeMode === "past" ? `Stored record: ${historyState.envelope?.resolutionMinutes ? historyResolutionLabel(historyState.envelope.resolutionMinutes) : "resolution unavailable"}; ${historyGaps.length} recorded gap${historyGaps.length === 1 ? "" : "s"}.` : <>Provider status: rail {provenanceLabel(snapshot.sourceProvenance?.trains.status ?? "unavailable")}; rivers {provenanceLabel(snapshot.sourceProvenance?.rivers.status ?? "unavailable")}{snapshot.sourceProvenance?.rivers.fallback ? ` via ${snapshot.sourceProvenance.rivers.fallback}` : ""}.</>}</p>
-          <a href="https://www.met.ie/about-us/specialised-services/open-data" target="_blank" rel="noreferrer">Met Éireann open data ↗</a>
-          <a href="https://waterlevel.ie/page/api/" target="_blank" rel="noreferrer">OPW water levels ↗</a>
-          <a href="https://www.smartgriddashboard.com/" target="_blank" rel="noreferrer">EirGrid Smart Grid Dashboard ↗</a>
-          <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo air quality ↗</a>
-          <a href="https://www.swpc.noaa.gov/products/aurora-30-minute-forecast" target="_blank" rel="noreferrer">NOAA aurora guidance ↗</a>
-          <a href="https://aqportal.discomap.eea.europa.eu/" target="_blank" rel="noreferrer">EEA measured air quality ↗</a>
-          <a href="https://data.epa.ie/api-list/bathing-water-open-data/" target="_blank" rel="noreferrer">EPA bathing-water alerts ↗</a>
-          <a href="https://earthdata.nasa.gov/gibs/" target="_blank" rel="noreferrer">NASA satellite imagery ↗</a>
-          <a href="https://earthquake.usgs.gov/earthquakes/feed/v1.0/" target="_blank" rel="noreferrer">USGS earthquake feed ↗</a>
-          <a href="https://celestrak.org/NORAD/elements/" target="_blank" rel="noreferrer">CelesTrak orbital elements ↗</a>
-          <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA developer portal ↗</a>
-        </div>
-      </aside>
+      <ExplorePanel
+        open={panelOpen}
+        onOpenChange={(open) => setPanelOpen(open)}
+        openerRef={panelOpenerRef}
+        timeMode={timeMode}
+        activePreset={activePreset}
+        layers={layers}
+        layerGroups={LAYER_GROUPS}
+        onShowPreset={showPreset}
+        onToggleLayer={toggleLayer}
+        snapshot={snapshot}
+        historyEnvelope={historyState.envelope}
+        historyGaps={historyGaps}
+      />
 
       <footer>
         <div>
@@ -4486,7 +3479,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <Link href="/contact">Contact</Link>
           </nav>
         </div>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; Sunrise-Sunset.org solar events; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
   );

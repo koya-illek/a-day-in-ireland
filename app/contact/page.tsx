@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 export default function ContactPage() {
   return (
     <InfoPage
+      current="contact"
       eyebrow="Contact"
       title="Feedback makes the map better."
       introduction="Report a misleading signal, inaccessible interaction, broken source or an idea that would make the island more understandable."

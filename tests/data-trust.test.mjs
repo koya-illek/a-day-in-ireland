@@ -35,6 +35,8 @@ const importWarningAdapter = async (relativePath) => {
   const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
   const latestUrl = `data:text/javascript,${encodeURIComponent(latestOutput.replace('"./weather-stations"', JSON.stringify(weatherUrl)))}`;
   const platformUrl = new URL("../platform/river-source.js", import.meta.url).href;
+  const liveNormalizeUrl = new URL("../platform/live-normalize.js", import.meta.url).href;
+  const skySourceUrl = new URL("../platform/sky-source.js", import.meta.url).href;
   const satelliteUrl = new URL("../node_modules/satellite.js/lib/index.js", import.meta.url).href;
   const timelineUrl = new URL("../lib/weather-timeline.js", import.meta.url).href;
   const output = ts.transpileModule(source, {
@@ -44,6 +46,8 @@ const importWarningAdapter = async (relativePath) => {
     .replace('"./weather-stations"', JSON.stringify(weatherUrl))
     .replace('"./weather-timeline.js"', JSON.stringify(timelineUrl))
     .replace('"../platform/river-source.js"', JSON.stringify(platformUrl))
+    .replace('"../platform/live-normalize.js"', JSON.stringify(liveNormalizeUrl))
+    .replace('"../platform/sky-source.js"', JSON.stringify(skySourceUrl))
     .replace('"satellite.js"', JSON.stringify(satelliteUrl));
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
@@ -80,7 +84,7 @@ const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
     }
     if (url.includes("gibs.earthdata.nasa.gov") && url.endsWith(".jpeg")) {
       tileRequests += 1;
-      if (tileRequests <= 8) {
+      if (tileRequests <= 4) {
         return new Promise((resolve) => tileResolvers.push(resolve));
       }
       return new Response(null, { status: 503 });
@@ -108,18 +112,18 @@ const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
       new Request("https://day.illek.ie/api/contexts"),
       { EDGE_RUNTIME: "cloudflare" }
     );
-    await waitForTileBatches(4);
+    await waitForTileBatches(2);
     const newerResponse = api.default.fetch(
       new Request("https://day.illek.ie/api/contexts"),
       { EDGE_RUNTIME: "cloudflare" }
     );
-    await waitForTileBatches(8);
+    await waitForTileBatches(4);
 
-    const newerResolvers = tileResolvers.slice(4, 8);
+    const newerResolvers = tileResolvers.slice(2, 4);
     newerResolvers.forEach((resolve) => resolve(newerSucceeds ? satelliteTile() : failedTile()));
     const newerBody = await (await newerResponse).json();
 
-    const olderResolvers = tileResolvers.slice(0, 4);
+    const olderResolvers = tileResolvers.slice(0, 2);
     olderResolvers.forEach((resolve) => resolve(newerSucceeds ? failedTile() : satelliteTile()));
     const olderBody = await (await olderResponse).json();
     const tileRequestsBeforeThirdContext = tileRequests;
@@ -166,6 +170,22 @@ test("service display states keep connecting, refreshing, offline, cached, stale
   const stale = { ...empty, sourceStatus: "live", stations: [observation], summary: { ...empty.summary, reporting: 1 } };
   assert.equal(getServiceDisplayState(stale, { initialRefreshComplete: true, refreshing: false, online: true, now }), "stale");
   assert.equal(getServiceDisplayState({ ...stale, sourceStatus: "stale" }, { initialRefreshComplete: true, refreshing: false, online: true, now }), "cached");
+
+  const liveCore = {
+    ...empty,
+    sourceStatus: "live",
+    stations: [{ ...observation, observedAt: new Date(now - 60_000).toISOString() }],
+    summary: { ...empty.summary, reporting: 1 },
+    sourceProvenance: {
+      trains: { ...empty.sourceProvenance.trains, status: "live" },
+      rivers: { ...empty.sourceProvenance.rivers, status: "live" }
+    },
+    transitStatus: "credential-required",
+    contextStatus: Object.fromEntries(
+      Object.keys(empty.contextStatus).map((name) => [name, name === "satellite" ? "fallback" : "live"])
+    )
+  };
+  assert.equal(getServiceDisplayState(liveCore, { initialRefreshComplete: true, refreshing: false, online: true, now }), "live");
 });
 
 test("selected-source assessment never reassures when a chosen provider is unavailable or cached", async () => {
@@ -510,7 +530,7 @@ test("satellite discovery walks back from the advertised GIBS date until every I
     frame.tileTemplate,
     "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/2026-08-02/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpeg"
   );
-  assert.equal(probes.length, 8);
+  assert.equal(probes.length, 4);
   assert.ok(probes.every((probe) => probe.method === "HEAD"));
   assert.ok(probes.some((probe) => probe.url.endsWith("/6/20/30.jpeg")));
   assert.ok(probes.some((probe) => probe.url.endsWith("/6/21/31.jpeg")));
@@ -546,6 +566,30 @@ test("satellite discovery suppresses the layer when no recent Ireland tile is va
     }),
     /no verified Ireland satellite frame/
   );
+});
+
+test("satellite discovery defaults to five lookback days and two Ireland tiles", async () => {
+  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const probes = [];
+  const fetcher = async (url, init = {}) => {
+    if (String(url).endsWith("/all/all.xml")) {
+      return new Response("<Domain>2026-08-03/2026-08-03/P1D</Domain>");
+    }
+    probes.push({ url: String(url), method: init.method });
+    return new Response(null, { status: 404, headers: { "content-type": "text/html" } });
+  };
+
+  await assert.rejects(
+    findLatestSatelliteFrame({
+      now: Date.parse("2026-08-04T12:00:00Z"),
+      fetcher
+    }),
+    /no verified Ireland satellite frame/
+  );
+
+  assert.equal(probes.length, 12);
+  assert.ok(probes.every((probe) => probe.method === "HEAD"));
+  assert.equal(new Set(probes.map((probe) => probe.url.replace(/.*\/6\/(\d+)\/(\d+)\.jpeg$/, "$1/$2"))).size, 2);
 });
 
 test("an older failed satellite context cannot clear a newer successful cache publication", async () => {
@@ -1446,4 +1490,24 @@ test("shared view state round-trips only explicit RFC3339 history instants", asy
     layers: [],
     at: "not-a-date"
   })).searchParams.has("at"), false);
+});
+
+test("Pages CSP permits the browser-side live providers without broad connect access", async () => {
+  const headers = await readFile(new URL("../public/_headers", import.meta.url), "utf8");
+  const csp = headers.match(/^\s*Content-Security-Policy:\s*(.+)$/m)?.[1] ?? "";
+  const connectDirective = csp.split(";")
+    .map((directive) => directive.trim())
+    .find((directive) => directive.startsWith("connect-src ")) ?? "";
+  const sources = connectDirective.slice("connect-src ".length).split(/\s+/).filter(Boolean);
+
+  assert.deepEqual(sources, [
+    "'self'",
+    "https://a-day-in-ireland-api.koya-illek.workers.dev",
+    "https://prodapi.metweb.ie",
+    "https://www.met.ie",
+    "https://gdal.met.ie",
+    "https://discomap.eea.europa.eu",
+    "https://cloudflareinsights.com"
+  ]);
+  assert.equal(sources.some((source) => source.includes("*")), false);
 });

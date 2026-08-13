@@ -35,6 +35,8 @@ export function createInitialSnapshot(generatedAt = new Date().toISOString()): L
     earthquakes: [],
     transit: [],
     transitStatus: "unavailable",
+    solar: null,
+    forecast: null,
     sourceProvenance: {
       trains: unavailableProvenance(
         "Irish Rail",
@@ -59,7 +61,9 @@ export function createInitialSnapshot(generatedAt = new Date().toISOString()): L
       satellite: "unavailable",
       earthquakes: "unavailable",
       iss: "unavailable",
-      warnings: "unavailable"
+      warnings: "unavailable",
+      solar: "unavailable",
+      forecast: "unavailable"
     },
     summary: {
       warmest: null,

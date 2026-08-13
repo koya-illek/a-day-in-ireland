@@ -36,6 +36,7 @@ export type TrainPosition = {
   status: "running" | "not-started";
   direction: string;
   message: string;
+  /** Last successful retrieval time. Irish Rail XML has no per-train observation clock. */
   observedAt: string;
   speedKmh: number | null;
   speedSource: "calculated" | null;
@@ -184,6 +185,41 @@ export type TransitVehicle = {
   observedAt: string;
 };
 
+export type SolarReading = {
+  date: string;
+  tzid: string;
+  sunrise: string | null;
+  sunset: string | null;
+  dawn: string | null;
+  dusk: string | null;
+  firstLight: string | null;
+  lastLight: string | null;
+  goldenHourMorning: string | null;
+  goldenHourEvening: string | null;
+  blueHourMorning: string | null;
+  blueHourEvening: string | null;
+  solarPosition: { azimuth: number; elevation: number } | null;
+  moonrise: string | null;
+  moonset: string | null;
+  moonPhase: number | null;
+  moonPhaseName: string | null;
+  moonIllumination: number | null;
+  source: "Sunrise-Sunset.org";
+  attributionUrl: "https://sunrise-sunset.org/";
+};
+
+export type OfficialForecast = {
+  region: string;
+  issued: string;
+  today: string;
+  tonight: string;
+  tomorrow: string;
+  outlook: string;
+  source: "Met Éireann";
+  sourceUrl: "https://www.met.ie/Open_Data/json/National.json";
+  datasetUrl: "https://data.gov.ie/dataset/met-eireann-live-text-forecast-data";
+};
+
 export type ProviderProvenance = {
   provider: string;
   endpoint: string;
@@ -217,6 +253,8 @@ export type LiveSnapshot = {
   earthquakes: EarthquakeReading[];
   transit: TransitVehicle[];
   transitStatus: "live" | "partial" | "stale" | "credential-required" | "unavailable";
+  solar: SolarReading | null;
+  forecast: OfficialForecast | null;
   sourceProvenance?: {
     trains: ProviderProvenance;
     rivers: ProviderProvenance;
@@ -234,6 +272,8 @@ export type LiveSnapshot = {
     earthquakes: ContextSourceStatus;
     iss: ContextSourceStatus;
     warnings: ContextSourceStatus;
+    solar: ContextSourceStatus;
+    forecast: ContextSourceStatus;
   };
   summary: {
     warmest: StationReading | null;

@@ -24,13 +24,15 @@ const latestTimestamp = (items: Array<{ observedAt: string | null }>) => items
   .at(-1) ?? null;
 
 const contextStatuses = (snapshot: LiveSnapshot): ContextSourceStatus[] =>
-  Object.values(snapshot.contextStatus);
+  Object.entries(snapshot.contextStatus).map(([name, status]) =>
+    name === "satellite" && status === "fallback" ? "live" : status
+  );
 
 const providerStatuses = (snapshot: LiveSnapshot) => [
   snapshot.sourceStatus,
   snapshot.sourceProvenance?.trains.status ?? "unavailable",
   snapshot.sourceProvenance?.rivers.status ?? "unavailable",
-  snapshot.transitStatus === "credential-required" ? "unavailable" : snapshot.transitStatus,
+  ...(snapshot.transitStatus === "credential-required" ? [] : [snapshot.transitStatus]),
   ...contextStatuses(snapshot)
 ] as Array<ObservationSourceStatus | ContextSourceStatus>;
 
@@ -47,7 +49,7 @@ export function getServiceDisplayState(
     snapshot.stations.length || snapshot.trains.length || snapshot.rivers.length || snapshot.radar.length ||
     snapshot.grid || snapshot.airQuality.length || snapshot.marine.length || snapshot.tides.length ||
     snapshot.bathingAlerts.length || snapshot.satellite || snapshot.earthquakes.length || snapshot.iss ||
-    snapshot.transit.length || snapshot.aurora || snapshot.contextStatus.warnings === "live"
+    snapshot.transit.length || snapshot.aurora || snapshot.solar || snapshot.forecast || snapshot.contextStatus.warnings === "live"
   );
   if (!hasData && statuses.every((status) => status === "unavailable" || status === "fallback")) {
     return "unavailable";
@@ -97,7 +99,7 @@ export function getSelectedSourceAssessment(
   if (selectedLayers.has("sea")) add("marine observations", availableContext(snapshot.contextStatus.marine) && snapshot.marine.length > 0);
   if (selectedLayers.has("trains")) add("rail positions", snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0 &&
     timestampIsCurrent(snapshot.sourceProvenance.trains.latestObservedAt, 3 * 60_000, now));
-  if (selectedLayers.has("rivers")) add("river gauges", (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "fallback") && snapshot.rivers.length > 0 &&
+  if (selectedLayers.has("rivers")) add("river gauges", (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback") && snapshot.rivers.length > 0 &&
     timestampIsCurrent(snapshot.sourceProvenance.rivers.latestObservedAt, 3 * 60 * 60_000, now));
   if (selectedLayers.has("radar")) add("rain radar", availableContext(snapshot.contextStatus.radar) && snapshot.radar.length > 0);
   if (selectedLayers.has("grid")) add("electricity grid", availableContext(snapshot.contextStatus.grid) && Boolean(snapshot.grid));
@@ -112,7 +114,6 @@ export function getSelectedSourceAssessment(
   if (selectedLayers.has("satellite")) add("satellite imagery", availableContext(snapshot.contextStatus.satellite) && Boolean(snapshot.satellite));
   if (selectedLayers.has("earthquakes")) add("earthquake detections", availableContext(snapshot.contextStatus.earthquakes));
   if (selectedLayers.has("transit")) add("public-transport positions", ["live", "partial"].includes(snapshot.transitStatus) && snapshot.transit.length > 0);
-
   return {
     assessedSourceCount: checks.length,
     fullyAssessed: checks.length > 0 && checks.every((check) => check.current),

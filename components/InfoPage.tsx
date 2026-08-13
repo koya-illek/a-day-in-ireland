@@ -1,12 +1,22 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+const INFO_LINKS = [
+  { href: "/", label: "Live map" },
+  { href: "/about", label: "About" },
+  { href: "/data", label: "Data" },
+  { href: "/privacy", label: "Privacy" },
+  { href: "/contact", label: "Contact" }
+] as const;
+
 export default function InfoPage({
+  current,
   eyebrow,
   title,
   introduction,
   children
 }: {
+  current: "about" | "data" | "privacy" | "contact";
   eyebrow: string;
   title: string;
   introduction: string;
@@ -17,8 +27,19 @@ export default function InfoPage({
       <header className="info-header">
         <Link className="info-brand" href="/">
           <span aria-hidden="true">←</span>
-          <span><b>A Day in Ireland</b><small>Return to the live island</small></span>
+          <span><b>A Day in Ireland</b><small>Live island view</small></span>
         </Link>
+        <nav className="info-nav" aria-label="Project information">
+          {INFO_LINKS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={item.href === `/${current}` ? "page" : undefined}
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
       </header>
       <article>
         <p className="eyebrow">{eyebrow}</p>
@@ -28,10 +49,15 @@ export default function InfoPage({
       </article>
       <footer className="info-footer">
         <nav aria-label="Project information">
-          <Link href="/about">About</Link>
-          <Link href="/data">Data &amp; methodology</Link>
-          <Link href="/privacy">Privacy</Link>
-          <Link href="/contact">Contact</Link>
+          {INFO_LINKS.filter((item) => item.href !== "/").map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={item.href === `/${current}` ? "page" : undefined}
+            >
+              {item.label}
+            </Link>
+          ))}
         </nav>
       </footer>
     </main>

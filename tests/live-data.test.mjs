@@ -5,7 +5,9 @@ import test from "node:test";
 test("project declares production scripts", async () => {
   const packageJson = await import("../package.json", { with: { type: "json" } });
   assert.match(packageJson.default.scripts.build, /^next build/);
+  assert.match(packageJson.default.scripts.build, /bounded-io\.js/);
   assert.match(packageJson.default.scripts.build, /river-source\.js/);
+  assert.match(packageJson.default.scripts.build, /sky-source\.js/);
   assert.ok(packageJson.default.scripts["test:e2e"]);
   assert.ok(packageJson.default.scripts["deploy:cloudflare:api"]);
   assert.ok(packageJson.default.scripts["deploy:cloudflare:pages"]);

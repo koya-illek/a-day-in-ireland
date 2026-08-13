@@ -9,7 +9,14 @@ import {
   parseIrelandLocalTimestamp,
   readBoundedJsonResponse
 } from "./river-source.js";
-import { classifyTideTrend, irishGridToLonLat, tideQueryWindow } from "./server-entry.js";
+import {
+  classifyTideTrend,
+  eirGridChartUrl,
+  irishGridToLonLat,
+  numeric,
+  tideQueryWindow,
+  EIRGRID_HISTORY_BODY_LIMIT
+} from "./live-normalize.js";
 
 export const HISTORY_SOURCE_KEYS = [
   "weather", "warnings", "marine", "rivers", "tides", "grid",
@@ -28,12 +35,6 @@ const WEATHER_STATIONS = [
   { id: "cork-airport", endpoint: "cork", providerName: "Cork", name: "Cork", latitude: 51.847, longitude: -8.486 },
   { id: "johnstown-castle", endpoint: "johnstown-castle", providerName: "Johnstown Castle", name: "Wexford", latitude: 52.298, longitude: -6.497 }
 ];
-
-const numeric = (value) => {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 const validTimestamp = (value) => {
   const timestamp = Date.parse(String(value ?? ""));
@@ -227,30 +228,10 @@ export async function collectMarine(fetcher, now) {
   }, fetchedAt);
 }
 
-const dublinDate = (now) => new Intl.DateTimeFormat("en-CA", {
-  timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit"
-}).format(new Date(now));
-
-export const eirGridDublinHourWindow = (now) => {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/Dublin", year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", hourCycle: "h23"
-  }).formatToParts(new Date(now)).map((part) => [part.type, part.value]));
-  const prefix = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}`;
-  return { dateFrom: `${prefix}:00:00`, dateTo: `${prefix}:59:59` };
-};
+export { eirGridDublinHourWindow } from "./live-normalize.js";
 
 const fetchGridRows = async (fetcher, chartType, areas, now) => {
-  const day = dublinDate(now);
-  const hour = eirGridDublinHourWindow(now);
-  const url = new URL("https://www.smartgriddashboard.com/api/chart/");
-  url.search = new URLSearchParams({
-    region: "ALL", chartType, dateRange: chartType === "frequency" ? "hour" : "day",
-    dateFrom: chartType === "frequency" ? hour.dateFrom : day,
-    dateTo: chartType === "frequency" ? hour.dateTo : day,
-    areas
-  }).toString();
-  const body = await fetchJson(fetcher, url, chartType === "frequency" ? 60 : 300);
+  const body = await fetchJson(fetcher, eirGridChartUrl(chartType, areas, now), chartType === "frequency" ? 60 : 300, EIRGRID_HISTORY_BODY_LIMIT);
   return body.Rows ?? [];
 };
 

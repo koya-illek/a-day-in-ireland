@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   experimental: {
-    optimizePackageImports: ["d3-geo", "topojson-client"]
+    optimizePackageImports: ["d3-geo"]
   }
 };
 

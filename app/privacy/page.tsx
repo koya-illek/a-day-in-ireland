@@ -10,6 +10,7 @@ export const metadata: Metadata = {
 export default function PrivacyPage() {
   return (
     <InfoPage
+      current="privacy"
       eyebrow="Privacy"
       title="No account. No personal profile."
       introduction="The public map does not ask you to sign in, create an account or submit personal information. If you choose to use your browser location, the app uses it to select the nearest mapped place."

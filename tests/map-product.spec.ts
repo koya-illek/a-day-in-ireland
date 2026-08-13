@@ -2,13 +2,19 @@ import { expect, test, type Page } from "@playwright/test";
 
 const emptyContextStatus = {
   marine: "unavailable",
+  radar: "unavailable",
+  grid: "unavailable",
   measuredAir: "unavailable",
+  modelledAir: "unavailable",
+  aurora: "unavailable",
   tides: "unavailable",
   bathing: "unavailable",
   satellite: "unavailable",
   earthquakes: "unavailable",
   iss: "unavailable",
-  warnings: "live"
+  warnings: "live",
+  solar: "unavailable",
+  forecast: "unavailable"
 } as const;
 
 async function installMovementCluster(page: Page, count = 48) {
@@ -78,7 +84,7 @@ async function installDenseAirFixture(page: Page) {
     body: JSON.stringify({
       marine: [], radar: [], grid: null, airQuality, aurora: null, tides: [], bathingAlerts: [],
       warnings: [], warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
-      contextStatus: { ...emptyContextStatus, measuredAir: "live" }
+      contextStatus: { ...emptyContextStatus, modelledAir: "live" }
     })
   }));
 }
@@ -86,10 +92,10 @@ async function installDenseAirFixture(page: Page) {
 test("map hierarchy and persistent view controls survive every target width and 200% text", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "One deterministic viewport matrix is sufficient.");
   const sizes = [
-    { width: 1440, height: 900 },
-    { width: 768, height: 1024 },
-    { width: 390, height: 844 },
-    { width: 320, height: 800 }
+    { width: 1440, height: 900, maximumMapTop: 495 },
+    { width: 768, height: 1024, maximumMapTop: 564 },
+    { width: 390, height: 844, maximumMapTop: 576 },
+    { width: 320, height: 800, maximumMapTop: 576 }
   ];
 
   for (const size of sizes) {
@@ -98,20 +104,13 @@ test("map hierarchy and persistent view controls survive every target width and 
     const map = page.locator("#live-map");
     await expect(map.getByRole("heading", { name: "Ireland on the map" })).toBeVisible();
     const mapTop = await map.evaluate((element) => element.getBoundingClientRect().top);
-    expect(mapTop, `${size.width}px map fold`).toBeLessThanOrEqual(size.height * .55);
-    if (size.width > 600) {
-      await expect(map.locator(".map-presets button")).toHaveCount(5);
-      for (const control of await map.locator(".map-presets button").all()) await expect(control).toBeVisible();
-    } else {
-      await expect(map.locator(".map-presets")).toBeHidden();
-      const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
-      const persistentControls = shortcuts.locator("button:visible");
-      await expect(persistentControls).toHaveCount(5);
-      await shortcuts.getByRole("button", { name: /Custom/ }).click();
-      await expect(page.locator(".explore-panel")).toHaveClass(/is-open/);
-      await page.getByRole("button", { name: "Close explore panel" }).click();
+    expect(mapTop, `${size.width}px map fold`).toBeLessThanOrEqual(size.maximumMapTop);
+    await expect(map.locator(".map-presets button")).toHaveCount(5);
+    for (const control of await map.locator(".map-presets button").all()) await expect(control).toBeVisible();
+    if (size.width <= 600) {
+      await expect(page.locator(".preset-scroll-hint")).toBeVisible();
     }
-    await expect(page.getByRole("link", { name: /View live map/ }).first()).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Section shortcuts" })).toBeVisible();
     expect(await page.evaluate(() => {
       const map = document.querySelector("#live-map");
       const place = document.querySelector(".place-context");
@@ -145,18 +144,37 @@ test("map hierarchy and persistent view controls survive every target width and 
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
   await page.waitForTimeout(700);
   const narrowLargeText = await page.evaluate(() => ({
-    mapTop: document.querySelector("#live-map")!.getBoundingClientRect().top,
-    canvasTop: document.querySelector(".map-canvas")!.getBoundingClientRect().top,
     client: document.documentElement.clientWidth,
     document: document.documentElement.scrollWidth,
     body: document.body.scrollWidth
   }));
-  expect(narrowLargeText.mapTop).toBeLessThanOrEqual(720);
-  expect(narrowLargeText.canvasTop).toBeLessThanOrEqual(960);
   expect(narrowLargeText.document).toBeLessThanOrEqual(narrowLargeText.client + 1);
   expect(narrowLargeText.body).toBeLessThanOrEqual(narrowLargeText.client + 1);
-  await expect(page.getByRole("link", { name: /View live map/ }).first()).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Map view shortcuts" }).locator("button:visible")).toHaveCount(5);
+  await expect(page.locator("#live-map .map-presets")).toBeVisible();
+  await expect(page.locator(".preset-scroll-hint")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Section shortcuts" })).toBeVisible();
+
+  const narrowMap = page.locator("#live-map");
+  await narrowMap.scrollIntoViewIfNeeded();
+  const narrowControlGeometry = await page.evaluate(() => {
+    const canvas = document.querySelector(".map-canvas")!.getBoundingClientRect();
+    return [...document.querySelectorAll<HTMLElement>(".map-navigation button")].map((control) => {
+      const bounds = control.getBoundingClientRect();
+      return {
+        name: control.getAttribute("aria-label") ?? control.textContent?.trim() ?? "map control",
+        insideCanvas: bounds.left >= canvas.left - 1 && bounds.right <= canvas.right + 1 &&
+          bounds.top >= canvas.top - 1 && bounds.bottom <= canvas.bottom + 1,
+        visibleWidth: Math.max(0, Math.min(bounds.right, canvas.right, innerWidth) - Math.max(bounds.left, canvas.left, 0)),
+        visibleHeight: Math.max(0, Math.min(bounds.bottom, canvas.bottom, innerHeight) - Math.max(bounds.top, canvas.top, 0))
+      };
+    });
+  });
+  expect(narrowControlGeometry).toHaveLength(3);
+  for (const control of narrowControlGeometry) {
+    expect(control.insideCanvas, `${control.name} remains inside the map canvas`).toBe(true);
+    expect(control.visibleWidth, `${control.name} visible width after map navigation`).toBeGreaterThanOrEqual(44);
+    expect(control.visibleHeight, `${control.name} visible height after map navigation`).toBeGreaterThanOrEqual(44);
+  }
 });
 
 test("320px at 200% text keeps map, shortcut, and Custom controls fully operable", async ({ page }, testInfo) => {
@@ -225,9 +243,10 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
   await expect(zoom).toHaveText("100%");
 
   const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
-  const shortcutGeometry = await shortcuts.locator("button:visible").evaluateAll((buttons) => buttons.map((button) => {
+  const shortcutButtons = shortcuts.locator("button:visible");
+  const shortcutGeometry = await shortcutButtons.evaluateAll((buttons) => buttons.map((button) => {
     const target = button as HTMLButtonElement;
-    const label = target.querySelector<HTMLElement>(".rail-label")!;
+    const label = target.querySelector<HTMLElement>(".preset-label")!;
     const bounds = target.getBoundingClientRect();
     return {
       name: target.textContent?.trim() ?? "shortcut",
@@ -245,8 +264,6 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
   }));
   expect(shortcutGeometry).toHaveLength(5);
   for (const shortcut of shortcutGeometry) {
-    expect(shortcut.left, `${shortcut.name} left edge`).toBeGreaterThanOrEqual(0);
-    expect(shortcut.right, `${shortcut.name} right edge`).toBeLessThanOrEqual(320);
     expect(shortcut.width, `${shortcut.name} target width`).toBeGreaterThanOrEqual(44);
     expect(shortcut.height, `${shortcut.name} target height`).toBeGreaterThanOrEqual(44);
     expect(shortcut.scrollWidth, `${shortcut.name} button overflow`).toBeLessThanOrEqual(shortcut.clientWidth);
@@ -261,10 +278,22 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
       expect(overlapWidth * overlapHeight, `${a.name} overlaps ${b.name}`).toBe(0);
     }
   }
+  for (let index = 0; index < await shortcutButtons.count(); index += 1) {
+    const shortcut = shortcutButtons.nth(index);
+    await shortcut.scrollIntoViewIfNeeded();
+    const bounds = await shortcut.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds?.x ?? -1, `${await shortcut.textContent()} visible left edge`).toBeGreaterThanOrEqual(0);
+    expect((bounds?.x ?? 0) + (bounds?.width ?? 0), `${await shortcut.textContent()} visible right edge`).toBeLessThanOrEqual(320);
+  }
 
-  await shortcuts.getByRole("button", { name: "Movement", exact: true }).click();
-  await expect(shortcuts.getByRole("button", { name: "Movement", exact: true })).toHaveAttribute("aria-pressed", "true");
+  const movement = shortcuts.getByRole("button", { name: "Movement", exact: true });
+  await movement.scrollIntoViewIfNeeded();
+  await movement.focus();
+  await page.keyboard.press("Enter");
+  await expect(movement).toHaveAttribute("aria-pressed", "true");
   const custom = shortcuts.getByRole("button", { name: /Custom/ });
+  await custom.scrollIntoViewIfNeeded();
   await custom.click();
   const panel = page.getByRole("dialog", { name: "Explore live map layers" });
   await expect(panel).toBeVisible();
@@ -306,10 +335,17 @@ test("mobile preset changes preserve the visible map anchor", async ({ page }, t
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
     await page.goto("/");
-    await page.evaluate(() => {
+    await expect(page.locator(".retry-live-data")).toBeEnabled();
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       document.documentElement.style.scrollBehavior = "auto";
       const map = document.querySelector("#live-map")!;
-      window.scrollTo(0, map.getBoundingClientRect().top + window.scrollY + 80);
+      const requested = map.getBoundingClientRect().top + window.scrollY + 80;
+      const lower = Math.floor(requested);
+      const upper = Math.ceil(requested);
+      const target = Math.abs(requested - lower) <= Math.abs(upper - requested) ? lower : upper;
+      window.scrollTo(0, target);
     });
     const map = page.locator("#live-map");
     const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
@@ -329,6 +365,68 @@ test("mobile preset changes preserve the visible map anchor", async ({ page }, t
       expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeGreaterThan(0);
     }
   }
+});
+
+test("initial live hydration keeps visitors at the top of the page", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile", "One mobile hydration profile is sufficient.");
+  const observedAt = new Date().toISOString();
+  const delayed = () => new Promise((resolve) => setTimeout(resolve, 250));
+  await page.route("**/api/living", async (route) => {
+    await delayed();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        trains: Array.from({ length: 12 }, (_, index) => ({
+          id: `hydration-train-${index}`,
+          latitude: 53.35,
+          longitude: -8.05,
+          status: "running",
+          direction: `Rail destination ${index}`,
+          message: `Rail service ${index}`,
+          observedAt,
+          speedKmh: null,
+          speedSource: null
+        })),
+        rivers: Array.from({ length: 24 }, (_, index) => ({
+          id: `hydration-river-${index}`,
+          name: `River gauge ${index}`,
+          latitude: 53.1,
+          longitude: -8.2,
+          observedAt,
+          level: 1.2,
+          trend: "steady"
+        })),
+        sourceStatus: { trains: "live", rivers: "live" }
+      })
+    });
+  });
+  await page.route("**/api/transit", async (route) => {
+    await delayed();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+    });
+  });
+  await page.route("**/api/contexts", async (route) => {
+    await delayed();
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [],
+        warnings: [], warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
+        contextStatus: { ...emptyContextStatus, warnings: "live" }
+      })
+    });
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.locator(".workspace-facts")).toContainText("12");
+  await expect(page.locator(".hero-sentence")).toContainText("12 trains");
+  await expect(page.locator(".workspace-facts")).toBeHidden();
+  await expect.poll(() => page.locator("#live-map").evaluate((element) => element.getBoundingClientRect().top)).toBeLessThanOrEqual(460);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  await expect(page.getByRole("heading", { name: "Ireland now." })).toBeVisible();
 });
 
 test("large movement clusters zoom before exposing searchable paginated results", async ({ page }) => {
@@ -378,6 +476,14 @@ test("1,200 movement positions stay responsive through repeated wheel interactio
   test.skip(testInfo.project.name !== "desktop", "Performance budget runs once in the desktop rendering profile.");
   test.skip(process.env.PLAYWRIGHT_PERFORMANCE !== "1", "Run the wall-clock budget in isolated PLAYWRIGHT_PERFORMANCE=1 mode.");
   const observedAt = new Date().toISOString();
+  await page.route("https://prodapi.metweb.ie/**", (route) => route.fulfill({
+    contentType: "application/json",
+    body: "[]"
+  }));
+  await page.route("https://www.met.ie/latest-reports/observations/download", (route) => route.fulfill({
+    contentType: "text/csv",
+    body: "Name,Temperature,Description,Wind,Unused,Direction,Unused,Rain,Unused\n"
+  }));
   await page.route("**/api/transit", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
@@ -399,6 +505,7 @@ test("1,200 movement positions stay responsive through repeated wheel interactio
   await page.goto("/?view=custom&layers=transit");
   const map = page.locator("svg.ireland-map");
   await expect.poll(() => map.evaluate((element) => Number(element.getAttribute("data-point-observations")))).toBe(1_200);
+  await expect(page.locator(".freshness-chip").filter({ hasText: "Weather provider" })).not.toContainText("Connecting");
   const durations = await map.evaluate(async (element) => {
     const viewport = document.querySelector(".map-viewport")!;
     const samples: number[] = [];

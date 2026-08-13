@@ -411,7 +411,9 @@ test("boot refresh uses canonical weather stations and one contexts request", as
 
   await page.goto("/");
   await expect(page.locator(".live-state")).toHaveAttribute("data-service-state", "connecting");
-  await expect(page.locator(".rail-status")).toContainText("Connecting to live services");
+  await expect(page.locator(".live-state")).toContainText("Connecting");
+  await expect(page.locator(".workspace-heading .hero-sentence"))
+    .toHaveText("Connecting to live observations across the island…");
   await expect(page.locator(".station-marker")).toHaveCount(9);
   const weatherChip = page.locator(".freshness-chip").filter({ hasText: "Weather provider" });
   await expect(weatherChip).toContainText(/live · observed/);
@@ -993,6 +995,52 @@ test("independent service refreshes merge without erasing one another", async ({
   await expect(page.locator(".river-marker")).toHaveCount(1);
 });
 
+test("partial OPW coverage remains visible and explicitly labelled", async ({ page }) => {
+  await installMapMarkerFixtures(page);
+  await page.unroute("**/api/living");
+  const observedAt = new Date().toISOString();
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      generatedAt: observedAt,
+      trains: [],
+      rivers: [{
+        id: "partial-river",
+        name: "Partial coverage gauge",
+        latitude: 53.1,
+        longitude: -8.1,
+        level: 1.42,
+        observedAt,
+        fresh: true
+      }],
+      sourceStatus: { trains: "unavailable", rivers: "partial" },
+      sourceProvenance: {
+        trains: {
+          provider: "Irish Rail",
+          endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
+          status: "unavailable",
+          fetchedAt: observedAt,
+          latestObservedAt: null,
+          fallback: null
+        },
+        rivers: {
+          provider: "OPW waterlevel.ie",
+          endpoint: "https://waterlevel.ie/geojson/latest/",
+          status: "partial",
+          fetchedAt: observedAt,
+          latestObservedAt: observedAt,
+          fallback: "Cloudflare Browser Run"
+        }
+      }
+    })
+  }));
+
+  await page.goto("/?view=water");
+  await expect(page.locator(".river-marker")).toHaveCount(1);
+  await expect(page.locator(".pulse-card.rivers")).toContainText("partial coverage");
+  await expect(page.locator(".river-marker")).toHaveAttribute("aria-label", /Partial coverage gauge/);
+});
+
 test("a slower context refresh cannot erase a newer public transport refresh", async ({ page }) => {
   const observedAt = new Date().toISOString();
   await page.route("**/api/contexts", async (route) => {
@@ -1052,6 +1100,8 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   const timelinePoints = await page.locator(".timeline-point").count();
   if (timelinePoints === 0) {
     await expect(page.getByText(/Connecting to hourly weather observations|current provider response contains no hourly observations|No saved hourly observations|Hourly weather observations are unavailable/)).toBeVisible();
+    await expect(page.locator(".timeline-empty-state")).toBeVisible();
+    await expect(page.locator(".timeline-plot-scroll")).toHaveCount(0);
   } else {
     expect(timelinePoints).toBeGreaterThanOrEqual(1);
     const firstPoint = page.locator(".timeline-point").first();
@@ -1144,12 +1194,6 @@ test("overlapping rail and transport positions stay anchored and can be browsed"
 });
 
 test("moving transport keeps its marker identity through a boundary crossing and cluster split", async ({ page }) => {
-  await page.addInitScript(() => {
-    const originalSetInterval = window.setInterval;
-    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
-      originalSetInterval(handler, timeout === 65_000 ? 250 : timeout, ...args)
-    ) as typeof window.setInterval;
-  });
   const observedAt = new Date().toISOString();
   let refreshes = 0;
   const vehicle = (id: string, longitude: number) => ({
@@ -1174,6 +1218,8 @@ test("moving transport keeps its marker identity through a boundary crossing and
   });
 
   await page.goto("/?view=custom&layers=transit");
+  const refresh = page.locator(".retry-live-data");
+  await expect(refresh).toBeEnabled();
   const marker = page.locator("[data-marker-id='movement:transit:boundary-bus']");
   await expect(marker).toHaveCount(1);
   await marker.focus();
@@ -1182,12 +1228,17 @@ test("moving transport keeps its marker identity through a boundary crossing and
     const current = document.querySelector("[data-marker-id='movement:transit:boundary-bus']");
     (window as unknown as { __boundaryMarker?: Element }).__boundaryMarker = current ?? undefined;
   });
+  await refresh.evaluate((button: HTMLButtonElement) => button.click());
   await expect.poll(() => refreshes).toBeGreaterThanOrEqual(2);
   await expect.poll(() => page.locator(".movement-stack-marker").count()).toBe(1);
+  await expect(marker).toHaveAttribute("data-cluster-size", "2");
   await expect.poll(() => marker.getAttribute("transform")).not.toBe(firstTransform);
   await expect(marker).toBeFocused();
 
+  await expect(refresh).toBeEnabled();
+  await refresh.evaluate((button: HTMLButtonElement) => button.click());
   await expect.poll(() => refreshes).toBeGreaterThanOrEqual(3);
+  await expect(marker).toHaveAttribute("data-cluster-size", "1");
   await expect(marker).toBeFocused();
   expect(await page.evaluate(() => {
     const current = document.querySelector("[data-marker-id='movement:transit:boundary-bus']");
@@ -1764,16 +1815,21 @@ test("Stitch map workspace uses an island-only coastline and visible roads", asy
   expect(roadCount).toBeGreaterThan(50);
   await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
   if (test.info().project.name === "desktop") {
-    await expect(page.getByText("Provider feeds", { exact: true })).toBeVisible();
-    await expect.poll(() => page.locator(".live-signal-dock").textContent())
-      .toMatch(/weather stations|observations unavailable/i);
+    const dataDetails = page.locator("details.freshness-details");
+    await dataDetails.locator("summary").click();
+    await expect(dataDetails.locator(".freshness-chip b")).toHaveText([
+      "Weather provider",
+      "Rail provider",
+      "River provider"
+    ]);
+    await expect(dataDetails).toContainText("Provider:");
   }
 
   const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
   const map = await page.getByLabel("Live map of Ireland").boundingBox();
   expect(heading).not.toBeNull();
   expect(map).not.toBeNull();
-  expect((heading?.y ?? 0) + (heading?.height ?? 0)).toBeLessThan(map?.y ?? 0);
+  expect((map?.y ?? 0) + (map?.height ?? 0)).toBeLessThan(heading?.y ?? 0);
 });
 
 test("map supports accessible zoom, pan and reset controls", async ({ page }) => {
@@ -1874,10 +1930,11 @@ test("sea context distinguishes weather buoys from coastal observatories", async
   }));
   await page.goto("/");
   if (test.info().project.name === "desktop") {
-    const marineSummary = page.getByRole("button", { name: /marine sites reporting/ });
-    await expect(marineSummary).toContainText("2");
-    await marineSummary.click();
-    await expect(page.getByText("Marine conditions", { exact: true })).toBeVisible();
+    const marineContext = page.locator(".hero-fact.sea");
+    await expect(marineContext).toContainText("marine sites");
+    await expect(marineContext).toContainText("2");
+    await marineContext.click();
+    await expect(page.locator(".map-notice > strong")).toHaveText("Marine conditions");
   } else {
     await enableExploreLayer(page, /Sea conditions/);
   }
@@ -1926,23 +1983,14 @@ test("wind context displays measured station speeds and directions", async ({ pa
 
 test("radar context exposes five-minute imagery and playback controls", async ({ page }) => {
   await page.goto("/");
-  if (test.info().project.name === "desktop") {
-    await page
-      .getByRole("navigation", { name: "Map view shortcuts" })
-      .getByRole("button", { name: /Rain radar/ })
-      .click();
-  } else {
-    await enableExploreLayer(page, /Rainfall radar/);
-  }
+  await enableExploreLayer(page, /Rainfall radar/);
   await expect(page.getByLabel("Rainfall radar timeline")).toBeVisible();
   if (await page.locator(".radar-tiles image").count()) {
     await expect(page.locator(".radar-tiles image")).toHaveCount(4);
     await expect(page.getByLabel("Rainfall radar timeline")).toBeVisible();
     await expect(page.getByLabel("Radar frame")).toBeEnabled();
   } else {
-    const unavailable = test.info().project.name === "desktop"
-      ? page.locator(".map-notice").getByText(/radar imagery is unavailable/i)
-      : page.getByLabel("Rainfall radar timeline").getByText(/Radar tiles unavailable/);
+    const unavailable = page.getByLabel("Rainfall radar timeline").getByText(/Radar tiles unavailable/);
     await expect(unavailable).toBeVisible();
   }
 });
@@ -2276,12 +2324,21 @@ test("unavailable providers and old observations never appear live or as zero ac
 
   await page.goto("/");
   await expect(page.locator(".station-marker")).toHaveCount(0);
-  await expect(page.locator(".freshness-chip").filter({ hasText: "Rail provider" })).toContainText("unavailable");
-  await expect(page.locator(".rail-metrics p").filter({ hasText: "Trains moving" })).toContainText("Provider unavailable");
-  await expect(page.locator(".workspace-facts button").filter({ hasText: "marine observations unavailable" })).toContainText("—");
+  const dataDetails = page.locator("details.freshness-details");
+  await dataDetails.locator("summary").click();
+  await expect(dataDetails.locator(".freshness-chip").filter({ hasText: "Rail provider" })).toContainText("unavailable");
+  await expect(page.locator(".workspace-facts .hero-fact.movement")).toHaveCount(0);
+  await expect(page.locator(".workspace-facts .hero-fact.sea")).toHaveCount(0);
+  await expect(page.locator(".workspace-facts .hero-fact.energy")).toHaveCount(0);
   await expect(page.locator(".pulse-card.grid strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.grid")).toContainText("EirGrid data unavailable");
   await expect(page.locator(".pulse-card.trains strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.trains")).toContainText("rail positions unavailable");
   await expect(page.locator(".pulse-card.rivers strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.rivers")).toContainText("river readings unavailable");
+  await expect(page.locator(".timeline-empty-state")).toContainText("Hourly weather observations are unavailable");
+  await expect(page.locator(".timeline-plot-scroll")).toHaveCount(0);
+  await expect(page.locator(".timeline-data-list")).toHaveCount(0);
   await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ }).click();
   await expect(page.locator(".movement-stack-marker")).toHaveCount(0);
   await expect(page.locator('[data-activity-id="outdoor-walk"] .guidance-status')).toHaveText("Unavailable");
@@ -2412,32 +2469,29 @@ test("connection state settles truthfully, retries, and retains last-good data o
 
 test("all failed radar tiles are unavailable rather than observed precipitation", async ({ page }, testInfo) => {
   await installRadarTileAvailabilityFixture(page, "unavailable");
-  await page.goto(testInfo.project.name === "mobile" ? "/?view=custom&layers=radar" : "/");
-  if (testInfo.project.name === "desktop") {
-    await page.locator(".workspace-facts button").filter({ hasText: "rain observations unavailable" }).click();
-  }
+  await page.goto("/");
+  await enableExploreLayer(page, /Rainfall radar/);
 
   const control = page.getByLabel("Rainfall radar timeline");
   await expect(control).toHaveAttribute("data-radar-availability", "unavailable");
   await expect(control).toHaveAttribute("data-radar-ready-tiles", "0");
   await expect(control).toHaveAttribute("data-radar-unavailable-tiles", "4");
   await expect(page.locator('.radar-tile[data-radar-tile-state="unavailable"]')).toHaveCount(4);
-  await expect(control).toContainText("Radar tiles unavailable · current precipitation cannot be assessed");
-  await expect(control).not.toContainText("Observed precipitation");
+  await expect(control).toContainText("Radar tiles unavailable · 0 of 4 Ireland tiles loaded · current precipitation cannot be assessed");
   if (testInfo.project.name === "desktop") {
-    await expect(page.locator('.map-notice[data-radar-availability="unavailable"]')).toContainText("none of the 4 Ireland tiles loaded");
-    await expect(page.locator(".map-notice")).not.toContainText(/1 Met Éireann frame/);
+    await expect(control.locator("#radar-motion-note"))
+      .toHaveText("Radar tiles unavailable · 0 of 4 Ireland tiles loaded · current precipitation cannot be assessed");
   }
+  await expect(control).not.toContainText("Observed precipitation");
+  await expect(control).not.toContainText(/1 Met Éireann frame/);
   await expect(page.locator(".signal-assessment")).toContainText("rain radar");
   await expect(page.locator(".notable-signals")).toHaveCount(0);
 });
 
 test("partial radar tiles are labelled incomplete and never aggregate to live", async ({ page }, testInfo) => {
   await installRadarTileAvailabilityFixture(page, "partial");
-  await page.goto(testInfo.project.name === "mobile" ? "/?view=custom&layers=radar" : "/");
-  if (testInfo.project.name === "desktop") {
-    await page.locator(".workspace-facts button").filter({ hasText: "rain observations unavailable" }).click();
-  }
+  await page.goto("/");
+  await enableExploreLayer(page, /Rainfall radar/);
 
   const control = page.getByLabel("Rainfall radar timeline");
   await expect(control).toHaveAttribute("data-radar-availability", "partial");
@@ -2446,10 +2500,11 @@ test("partial radar tiles are labelled incomplete and never aggregate to live", 
   await expect(page.locator('.radar-tile[data-radar-tile-state="ready"]')).toHaveCount(2);
   await expect(page.locator('.radar-tile[data-radar-tile-state="unavailable"]')).toHaveCount(2);
   await expect(control).toContainText("Partial radar coverage · 2 of 4 Ireland tiles loaded");
-  await expect(control).not.toContainText("Observed precipitation");
   if (testInfo.project.name === "desktop") {
-    await expect(page.locator('.map-notice[data-radar-availability="partial"]')).toContainText("Displayed imagery is incomplete");
+    await expect(control.locator("#radar-motion-note"))
+      .toHaveText("Partial radar coverage · 2 of 4 Ireland tiles loaded");
   }
+  await expect(control).not.toContainText("Observed precipitation");
   await expect(page.locator(".signal-assessment")).toContainText("rain radar");
   await expect(page.locator(".notable-signals")).toHaveCount(0);
 });
@@ -2457,21 +2512,20 @@ test("partial radar tiles are labelled incomplete and never aggregate to live", 
 test("browser radar rendering masks the neutral no-data wedge and preserves precipitation colour", async ({ page }, testInfo) => {
   await installRadarTileAvailabilityFixture(page, "valid");
 
-  await page.goto(testInfo.project.name === "mobile" ? "/?view=custom&layers=radar" : "/");
-  if (testInfo.project.name === "desktop") {
-    await page.locator(".workspace-facts button").filter({ hasText: "rain observations unavailable" }).click();
-  }
+  await page.goto("/");
+  await enableExploreLayer(page, /Rainfall radar/);
   const control = page.getByLabel("Rainfall radar timeline");
   await expect(control).toHaveAttribute("data-radar-availability", "live");
   await expect(control).toHaveAttribute("data-radar-ready-tiles", "4");
   await expect(control).toHaveAttribute("data-radar-unavailable-tiles", "0");
-  await expect(control).toContainText("Observed precipitation · all Ireland tiles loaded");
+  await expect(control).toContainText("Observed precipitation · all 4 Ireland tiles loaded");
   if (testInfo.project.name === "desktop") {
-    await expect(page.locator('.map-notice[data-radar-availability="live"]')).toContainText("all 4 Ireland tiles loaded");
+    await expect(control.locator("#radar-motion-note"))
+      .toHaveText("Observed precipitation · all 4 Ireland tiles loaded");
   }
   await expect(page.locator('.radar-tile[data-radar-tile-state="ready"]')).toHaveCount(4);
   await expect(page.locator(".notable-signals")).toHaveCount(0);
-  await expect(page.locator(".signal-assessment")).toHaveCount(0);
+  await expect(page.locator(".signal-assessment")).not.toContainText("rain radar");
   const pixels = await page.locator('.radar-tile[data-radar-tile-state="ready"]').first().evaluate(async (tile) => {
     const href = (tile as SVGImageElement).href.baseVal;
     const image = new Image();
@@ -2547,7 +2601,8 @@ test("visible presets expose pressed state, clean names, and an explicit custom 
   await expect(movement).toHaveAttribute("aria-pressed", "false");
   await expect(water).toHaveAttribute("aria-pressed", "false");
   await expect(all).toHaveAttribute("aria-pressed", "false");
-  expect(await presets.locator("button > span").evaluateAll((glyphs) =>
+  await expect(presets.locator(".preset-dot")).toHaveCount(3);
+  expect(await presets.locator(".preset-dot").evaluateAll((glyphs) =>
     glyphs.every((glyph) => glyph.getAttribute("aria-hidden") === "true")
   )).toBe(true);
 
@@ -2555,7 +2610,12 @@ test("visible presets expose pressed state, clean names, and an explicit custom 
   await expect(movement).toHaveAttribute("aria-pressed", "true");
   await expect(weather).toHaveAttribute("aria-pressed", "false");
   await enableExploreLayer(page, /Air & exposure/);
-  await expect(page.locator(".custom-view-state")).toHaveText(/Custom view · \d+ active layers?/);
+  const custom = presets.getByRole("button", { name: /Custom · \d+ layers?/ });
+  await expect(custom).toHaveAttribute("aria-pressed", "true");
+  const customLabel = (await custom.textContent())?.trim() ?? "";
+  expect(customLabel).toMatch(/^Custom · \d+ layers?$/);
+  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await expect(page.locator(".explore-panel .panel-layer-state strong")).toHaveText(customLabel);
 });
 
 test("mobile warnings prioritise human scope and expiry with an official source", async ({ page }, testInfo) => {
@@ -2785,49 +2845,64 @@ test("320px at 200 percent text keeps actions, preset overflow, map, and list us
 test("every visible meaningful term and map label stays above the practical type floor", async ({ page }, testInfo) => {
   if (testInfo.project.name !== "desktop") testInfo.skip();
   await installMapMarkerFixtures(page);
-  await page.goto("/?view=all");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const viewports = [
+    { width: 1440, height: 900 },
+    { width: 768, height: 1024 }
+  ];
 
-  const result = await page.evaluate(() => {
-    const root = document.querySelector(".experience");
-    if (!root) return { inspected: 0, undersized: [{ text: "experience missing", size: 0, selector: "body" }] };
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const seen = new Set<Element>();
-    const undersized: Array<{ text: string; size: number; selector: string }> = [];
-    let inspected = 0;
-    while (walker.nextNode()) {
-      const text = walker.currentNode.textContent?.replace(/\s+/g, " ").trim() ?? "";
-      const element = walker.currentNode.parentElement;
-      if (!text || !element || seen.has(element)) continue;
-      if (element.closest(".sr-only, [hidden], script, style")) continue;
-      const hiddenAncestor = element.closest("[aria-hidden='true']");
-      if (hiddenAncestor && element.tagName.toLowerCase() !== "text") continue;
-      if (!/[\p{L}\p{N}]/u.test(text)) continue;
-      const style = getComputedStyle(element);
-      const bounds = element.getBoundingClientRect();
-      if (style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.opacity) === 0 || !bounds.width || !bounds.height) continue;
-      seen.add(element);
-      inspected += 1;
-      const size = Number.parseFloat(style.fontSize);
-      if (size < 12) {
-        undersized.push({
-          text: text.slice(0, 80),
-          size,
-          selector: `${element.tagName.toLowerCase()}.${String(element.className).replace(/\s+/g, ".")}`
-        });
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto("/?view=all");
+    await page.getByRole("button", { name: "Explore", exact: true }).click();
+
+    const result = await page.evaluate(() => {
+      const root = document.querySelector(".experience");
+      if (!root) return { inspected: 0, undersized: [{ text: "experience missing", size: 0, selector: "body" }] };
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      const seen = new Set<Element>();
+      const undersized: Array<{ text: string; size: number; selector: string }> = [];
+      let inspected = 0;
+      while (walker.nextNode()) {
+        const text = walker.currentNode.textContent?.replace(/\s+/g, " ").trim() ?? "";
+        const element = walker.currentNode.parentElement;
+        if (!text || !element || seen.has(element)) continue;
+        if (element.closest(".sr-only, [hidden], script, style")) continue;
+        const hiddenAncestor = element.closest("[aria-hidden='true']");
+        if (hiddenAncestor && element.tagName.toLowerCase() !== "text") continue;
+        if (!/[\p{L}\p{N}]/u.test(text)) continue;
+        const style = getComputedStyle(element);
+        const bounds = element.getBoundingClientRect();
+        if (style.display === "none" || style.visibility === "hidden" || Number.parseFloat(style.opacity) === 0 || !bounds.width || !bounds.height) continue;
+        seen.add(element);
+        inspected += 1;
+        const size = Number.parseFloat(style.fontSize);
+        if (size < 12) {
+          undersized.push({
+            text: text.slice(0, 80),
+            size,
+            selector: `${element.tagName.toLowerCase()}.${String(element.className).replace(/\s+/g, ".")}`
+          });
+        }
       }
-    }
-    return { inspected, undersized };
-  });
-  expect(result.inspected).toBeGreaterThan(100);
-  expect(result.undersized).toEqual([]);
+      return { inspected, undersized };
+    });
+    expect(result.inspected, `${viewport.width}px inspected text`).toBeGreaterThan(100);
+    expect(result.undersized, `${viewport.width}px practical type floor`).toEqual([]);
 
-  const mapLabelSizes = await page.locator("svg.ireland-map text").evaluateAll((labels) => labels.map((label) => ({
-    text: label.textContent?.trim(),
-    size: Number.parseFloat(getComputedStyle(label).fontSize)
-  })));
-  expect(mapLabelSizes.length).toBeGreaterThan(10);
-  expect(mapLabelSizes.filter((label) => label.size < 12)).toEqual([]);
+    const sectionLabelSizes = await page.locator(".section-nav small:visible").evaluateAll((labels) => labels.map((label) => ({
+      text: label.textContent?.trim(),
+      size: Number.parseFloat(getComputedStyle(label).fontSize)
+    })));
+    expect(sectionLabelSizes.length, `${viewport.width}px visible section labels`).toBeGreaterThan(0);
+    expect(sectionLabelSizes.filter((label) => label.size < 12), `${viewport.width}px section label floor`).toEqual([]);
+
+    const mapLabelSizes = await page.locator("svg.ireland-map text").evaluateAll((labels) => labels.map((label) => ({
+      text: label.textContent?.trim(),
+      size: Number.parseFloat(getComputedStyle(label).fontSize)
+    })));
+    expect(mapLabelSizes.length, `${viewport.width}px map labels`).toBeGreaterThan(10);
+    expect(mapLabelSizes.filter((label) => label.size < 12), `${viewport.width}px map label floor`).toEqual([]);
+  }
 });
 
 test("forced colours and reduced motion retain visible focus and non-animated map semantics", async ({ page }, testInfo) => {

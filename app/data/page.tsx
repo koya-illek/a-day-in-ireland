@@ -20,19 +20,22 @@ const sources = [
   ["NASA GIBS", "Latest complete daylight satellite imagery", "https://earthdata.nasa.gov/gibs/"],
   ["CelesTrak", "Orbital elements used to calculate ISS positions and passes", "https://celestrak.org/NORAD/elements/"],
   ["USGS", "Seismic detections around Ireland", "https://earthquake.usgs.gov/earthquakes/feed/v1.0/"],
+  ["Sunrise-Sunset.org", "Authoritative Dublin sunrise, twilight and lunar events", "https://sunrise-sunset.org/api"],
+  ["Met Éireann live text forecast", "Official national forecast copy; displayed verbatim with current notices", "https://data.gov.ie/dataset/met-eireann-live-text-forecast-data"],
   ["OpenStreetMap", "Road and island boundary context", "https://www.openstreetmap.org/copyright"]
 ] as const;
 
 export default function DataPage() {
   return (
     <InfoPage
+      current="data"
       eyebrow="Data & methodology"
       title="What the map knows—and what it does not."
       introduction="A Day in Ireland combines sources with different meanings and update schedules. The interface keeps observations, models, forecasts and local calculations distinct."
     >
       <section>
         <h2>Freshness</h2>
-        <p>Weather and movement are checked roughly every minute where provider limits allow. Radar is normally issued every five minutes. Marine, river, tide, air-quality and grid sources update on their own schedules and may be delayed.</p>
+        <p>Weather and movement are checked roughly every minute where provider limits allow. Radar is normally issued every five minutes. Solar events use a bounded Dublin-day response and are reused for the current date. The official text forecast follows its issued timestamp and a short official-feed cache. Marine, river, tide, air-quality and grid sources update on their own schedules and may be delayed.</p>
         <p>A timestamp describes the underlying observation or model time whenever the source provides one. A service can be online while an individual measurement is older than expected.</p>
       </section>
       <section>
@@ -40,6 +43,7 @@ export default function DataPage() {
         <p>History is collected every 15 minutes once collection begins. Fifteen-minute snapshots—the raw history tier, not copies of every provider payload—are kept for 30 days. Hourly rollups are kept for 12 months, and daily summaries are retained thereafter.</p>
         <p>Exact cross-provider playback begins when collection starts. Missing provider observations and collection gaps remain missing; they are never inferred as zero. Hourly rollups and daily summaries describe the available observations rather than recreating every value that was visible at the time.</p>
         <p>Transport history contains only national or route-level NTA summaries. It does not retain raw train or public-transport vehicle positions, vehicle identifiers or public messages. Radar and satellite image bytes are not archived, so historical imagery is not guaranteed.</p>
+        <p>Solar events and official forecast text are not retained in history v1; a historical view exposes an explicit gap rather than substituting today&apos;s sky or forecast.</p>
         <p>Historical Iarnród Éireann / Irish Rail data is not retained while permission for archival and derivative display remains pending.</p>
       </section>
       <section>
@@ -48,7 +52,7 @@ export default function DataPage() {
       </section>
       <section>
         <h2>Safety and limitations</h2>
-        <p>River readings are gauge measurements, not flood warnings. Tide levels are not coastal-flood forecasts. Modelled air quality is regional guidance rather than a local sensor reading. Aurora probability is not a promise of visibility. This project is not suitable for safety-critical decisions.</p>
+        <p>River readings are gauge measurements, not flood warnings. Tide levels are not coastal-flood forecasts. Modelled air quality is regional guidance rather than a local sensor reading. Solar times describe astronomical events, not visibility. Aurora probability is not a promise of visibility. This project is not suitable for safety-critical decisions.</p>
       </section>
       <section>
         <h2>Sources</h2>
@@ -64,7 +68,7 @@ export default function DataPage() {
       </section>
       <section>
         <h2>Attribution</h2>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Met Éireann forecast copy is shown verbatim after safe markup/entity normalization and is displayed with current official warnings. Sunrise and lunar events are attributed to <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Sunrise-Sunset.org</a>. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
         <p>
           Contains NTA GTFS data © 2025 NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalized by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
         </p>

@@ -1,8 +1,25 @@
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 
 const root = join(process.cwd(), "dist", "client");
+const staticHeaders = (() => {
+  const path = join(root, "_headers");
+  if (!existsSync(path)) return [];
+  const headers = [];
+  let inGlobalBlock = false;
+  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
+    if (line.trim() === "/*") {
+      inGlobalBlock = true;
+      continue;
+    }
+    if (inGlobalBlock && line && !/^\s/.test(line)) break;
+    if (!inGlobalBlock) continue;
+    const match = line.match(/^\s+([^:]+):\s*(.+)$/);
+    if (match) headers.push([match[1], match[2]]);
+  }
+  return headers;
+})();
 const port = Number.parseInt(process.env.PORT ?? process.env.PLAYWRIGHT_PORT ?? "3000", 10);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error(`Invalid static server port: ${process.env.PORT ?? process.env.PLAYWRIGHT_PORT}`);
@@ -20,7 +37,10 @@ createServer(async (request, response) => {
   if (pathname.startsWith("/api/")) {
     if (process.env.LIVE_CONTEXTS === "1") {
       const { default: worker } = await import("../platform/server-entry.js");
-      const env = process.env.NTA_API_KEY ? { NTA_API_KEY: process.env.NTA_API_KEY } : {};
+      const env = {};
+      for (const name of ["NTA_API_KEY"]) {
+        if (process.env[name]) env[name] = process.env[name];
+      }
       const upstream = await worker.fetch(new Request(`http://127.0.0.1:${port}${request.url}`), env);
       response.writeHead(upstream.status, Object.fromEntries(upstream.headers));
       response.end(Buffer.from(await upstream.arrayBuffer()));
@@ -30,6 +50,7 @@ createServer(async (request, response) => {
     response.end(JSON.stringify({ unavailable: true }));
     return;
   }
+  for (const [name, value] of staticHeaders) response.setHeader(name, value);
   const requested = normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, requested === "/" ? "index.html" : requested);
   if (!existsSync(file) && !extname(file) && existsSync(`${file}.html`)) file = `${file}.html`;
