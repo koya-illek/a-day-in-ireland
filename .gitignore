@@ -5,6 +5,8 @@ dist
 out
 test-results
 playwright-report
+.artifacts/
+.dev.vars
 .env*
 !.env.example
 *.log

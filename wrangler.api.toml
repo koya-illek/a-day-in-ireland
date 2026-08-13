@@ -23,6 +23,7 @@ migrations_dir = "migrations"
 [vars]
 EDGE_RUNTIME = "cloudflare"
 PAGES_ORIGIN = "https://a-day-in-ireland.pages.dev"
+# NTA_API_KEY is a Wrangler secret, not a [vars] value.
 
 [[durable_objects.bindings]]
 name = "NTA_FEED"

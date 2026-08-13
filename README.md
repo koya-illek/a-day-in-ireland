@@ -49,7 +49,7 @@ npx wrangler secret put NTA_API_KEY --config wrangler.api.toml
 npm run deploy:cloudflare:pages
 ```
 
-Never place the NTA key in `wrangler.api.toml`, `.env`, or source control.
+Never place the NTA key in `wrangler.api.toml` `[vars]`, `.dev.vars` committed to git, `.env`, or source control. For local Worker runs, copy `.dev.vars.example` to `.dev.vars`. For production, use `wrangler secret put` so Cloudflare stores the encrypted secret.
 
 ## Development
 
