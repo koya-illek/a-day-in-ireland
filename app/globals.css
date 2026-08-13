@@ -4475,3 +4475,27 @@ body {
     padding: .85rem;
   }
 }
+
+@media (max-width: 600px) {
+  .section-rail .section-nav {
+    display: grid;
+    gap: .35rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow: visible;
+    width: 100%;
+  }
+
+  .section-rail .section-nav a {
+    align-content: center;
+    min-width: 0;
+    padding: .65rem .3rem;
+    text-align: center;
+    width: 100%;
+  }
+
+  .section-rail .section-nav b {
+    font-size: clamp(12px, 3.5vw, 15px);
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+}

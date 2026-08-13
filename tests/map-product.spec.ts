@@ -110,7 +110,34 @@ test("map hierarchy and persistent view controls survive every target width and 
     if (size.width <= 600) {
       await expect(page.locator(".preset-scroll-hint")).toBeVisible();
     }
-    await expect(page.getByRole("navigation", { name: "Section shortcuts" })).toBeVisible();
+    const sectionShortcuts = page.getByRole("navigation", { name: "Section shortcuts" });
+    await expect(sectionShortcuts).toBeVisible();
+    if (size.width <= 600) {
+      const sectionShortcutGeometry = await sectionShortcuts.locator("a").evaluateAll((links) => links.map((link) => {
+        const bounds = link.getBoundingClientRect();
+        return {
+          name: link.textContent?.trim() ?? "section shortcut",
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          bottom: bounds.bottom,
+          clientWidth: link.clientWidth,
+          scrollWidth: link.scrollWidth
+        };
+      }));
+      for (const shortcut of sectionShortcutGeometry) {
+        expect(shortcut.scrollWidth, `${shortcut.name} internal overflow`).toBeLessThanOrEqual(shortcut.clientWidth);
+      }
+      for (let first = 0; first < sectionShortcutGeometry.length; first += 1) {
+        for (let second = first + 1; second < sectionShortcutGeometry.length; second += 1) {
+          const a = sectionShortcutGeometry[first]!;
+          const b = sectionShortcutGeometry[second]!;
+          const overlapWidth = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+          const overlapHeight = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+          expect(overlapWidth * overlapHeight, `${a.name} overlaps ${b.name}`).toBe(0);
+        }
+      }
+    }
     expect(await page.evaluate(() => {
       const map = document.querySelector("#live-map");
       const place = document.querySelector(".place-context");
