@@ -28,11 +28,7 @@ const importWarningAdapter = async (relativePath) => {
   const latestOutput = ts.transpileModule(latestSource, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText;
-  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
-  const weatherOutput = ts.transpileModule(weatherSource, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
   const latestUrl = `data:text/javascript,${encodeURIComponent(latestOutput.replace('"./weather-stations"', JSON.stringify(weatherUrl)))}`;
   const platformUrl = new URL("../platform/river-source.js", import.meta.url).href;
   const liveNormalizeUrl = new URL("../platform/live-normalize.js", import.meta.url).href;
@@ -54,11 +50,7 @@ const importWarningAdapter = async (relativePath) => {
 
 const importDataStateAdapter = async () => {
   const source = await readFile(new URL("../lib/data-state.ts", import.meta.url), "utf8");
-  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
-  const weatherOutput = ts.transpileModule(weatherSource, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText.replace('"./weather-stations"', JSON.stringify(weatherUrl));
@@ -147,7 +139,9 @@ test("the static page starts with a truthful empty shell", async () => {
   assert.deepEqual(snapshot.stations, []);
   assert.deepEqual(snapshot.radar, []);
   assert.equal(snapshot.grid, null);
-  assert.equal(snapshot.summary.reporting, 0);
+  assert.equal(snapshot.summary.reporting, null);
+  assert.equal(snapshot.summary.runningTrains, null);
+  assert.equal(snapshot.summary.riverStations, null);
   assert.ok(Object.values(snapshot.contextStatus).every((status) => status === "unavailable"));
 });
 
@@ -440,7 +434,7 @@ test("browser weather resolves both autumn folds by capture time and rejects the
 });
 
 test("Met Éireann station definitions use canonical endpoints and reject mismatched identities", async () => {
-  const weather = await importStandaloneTypeScript("../lib/weather-stations.ts");
+  const weather = await import("../platform/weather-stations.js");
   const dublin = weather.WEATHER_STATIONS.find((station) => station.name === "Dublin");
   const cork = weather.WEATHER_STATIONS.find((station) => station.name === "Cork");
 
@@ -454,12 +448,35 @@ test("Met Éireann station definitions use canonical endpoints and reject mismat
 });
 
 test("weather freshness follows the provider's hourly cadence", async () => {
-  const weather = await importStandaloneTypeScript("../lib/weather-stations.ts");
+  const weather = await import("../platform/weather-stations.js");
   const now = Date.parse("2026-08-03T09:50:00.000Z");
 
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T09:00:00.000Z", now), true);
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T06:50:00.000Z", now), false);
   assert.equal(weather.isWeatherObservationFresh("2026-08-03T10:00:00.000Z", now), false);
+});
+
+test("history weather and marine ingest reuse the shared station and buoy modules", async () => {
+  const historySource = await readFile(new URL("../platform/history-sources.js", import.meta.url), "utf8");
+  const { WEATHER_STATIONS } = await import("../platform/weather-stations.js");
+  assert.match(historySource, /from "\.\/weather-stations\.js"/);
+  assert.match(historySource, /parseWeatherBuoyRows/);
+  assert.match(historySource, /weatherBuoyQuery/);
+  assert.equal(WEATHER_STATIONS.length, 9);
+  assert.ok(WEATHER_STATIONS.every((station) => station.csvName));
+});
+
+test("Cloudflare and local living adapters share one payload builder", async () => {
+  const { buildLivingPayload } = await import("../platform/river-source.js");
+  const cloudflare = await readFile(new URL("../platform/cloudflare-entry.js", import.meta.url), "utf8");
+  const server = await readFile(new URL("../platform/server-entry.js", import.meta.url), "utf8");
+  assert.match(cloudflare, /buildLivingPayload\(/);
+  assert.match(server, /buildLivingPayload\(/);
+  const payload = buildLivingPayload({ trains: [], rivers: [], riverStatus: "unavailable" });
+  assert.equal(payload.sourceStatus.trains, "unavailable");
+  assert.equal(payload.sourceStatus.rivers, "unavailable");
+  assert.equal(payload.sourceProvenance.trains.provider, "Irish Rail");
+  assert.equal(payload.trains.length, 0);
 });
 
 test("radar no-data masking removes only the provider's grey sentinel pixels", async () => {
@@ -935,11 +952,7 @@ test("Met Éireann CSV fallback does not invent fetch-time freshness", async () 
   let output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
   }).outputText;
-  const weatherSource = await readFile(new URL("../lib/weather-stations.ts", import.meta.url), "utf8");
-  const weatherOutput = ts.transpileModule(weatherSource, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  const weatherUrl = `data:text/javascript,${encodeURIComponent(weatherOutput)}`;
+  const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
   output = output.replace('"./weather-stations"', JSON.stringify(weatherUrl));
   const observations = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   const [reading] = observations.parseLatestObservations(

@@ -14,6 +14,9 @@ import {
 } from "../platform/sky-source.js";
 import {
   addEstimatedSpeeds,
+  MEASURED_AIR_POLLUTANTS,
+  measuredAirStamp,
+  measuredAirUrl,
   numeric,
   parseMeasuredAirStations
 } from "../platform/live-normalize.js";
@@ -749,14 +752,10 @@ export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapsh
 async function fetchMeasuredAirFallback(parentSignal?: AbortSignal): Promise<LiveSnapshot["airQuality"]> {
   try {
     const signal = parentSignal ?? new AbortController().signal;
-    const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
-    const stamp = observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
-    const pollutants = [
-      ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
-    ] as const;
-    const results = await Promise.allSettled(pollutants.map(async ([pollutant, field]) => {
+    const stamp = measuredAirStamp();
+    const results = await Promise.allSettled(MEASURED_AIR_POLLUTANTS.map(async ([pollutant, field]) => {
       const response = await fetchWithTimeout(
-        `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
+        measuredAirUrl(pollutant, stamp),
         {},
         9_000,
         signal

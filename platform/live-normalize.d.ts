@@ -31,9 +31,61 @@ export function europeanAqiScore(reading: {
   nitrogenDioxide?: number | null;
   ozone?: number | null;
 }): number | null;
+export const MEASURED_AIR_POLLUTANTS: ReadonlyArray<readonly [string, string]>;
+export function measuredAirStamp(now?: number): string;
+export function measuredAirUrl(pollutant: string, stamp: string): string;
 export function parseMeasuredAirStations(
   responses: Array<readonly [string, string]>
 ): Array<AirQualityReading & { source: "measured" }>;
+export function weatherBuoyQuery(now?: number): { since: string; query: string; url: string };
+export function parseWeatherBuoyRows(
+  rows: unknown,
+  now?: number,
+  maxAgeMs?: number
+): Array<{
+  id: string;
+  name: string;
+  kind: "weather-buoy";
+  longitude: number;
+  latitude: number;
+  observedAt: string;
+  windSpeedKnots: number | null;
+  waveHeight: number | null;
+  wavePeriod: number | null;
+  seaTemperature: number | null;
+}>;
+export type CoastalMarineSource = {
+  dataset: string;
+  name: string;
+  variables: string[];
+  map: (row: unknown[]) => {
+    observedAt: string;
+    latitude: number;
+    longitude: number;
+    windSpeedKnots: number | null;
+    waveHeight: number | null;
+    wavePeriod: number | null;
+    seaTemperature: number | null;
+  };
+};
+export const COASTAL_MARINE_SOURCES: readonly CoastalMarineSource[];
+export function parseCoastalObservatoryRow(
+  source: CoastalMarineSource,
+  row: unknown[] | undefined,
+  now?: number,
+  maxAgeMs?: number
+): {
+  id: string;
+  name: string;
+  kind: "coastal-observatory";
+  observedAt: string;
+  latitude: number;
+  longitude: number;
+  windSpeedKnots: number | null;
+  waveHeight: number | null;
+  wavePeriod: number | null;
+  seaTemperature: number | null;
+} | null;
 export function irishGridToLonLat(east: number, north: number): { latitude: number; longitude: number };
 export function normalizeRadarFrames(rows: unknown): RadarFrame[];
 export function eirGridDublinHourWindow(now?: number): { dateFrom: string; dateTo: string };

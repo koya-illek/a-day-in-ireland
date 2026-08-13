@@ -1,5 +1,5 @@
 import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./server-entry.js";
-import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
+import { buildLivingPayload, makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
 import { captureHistory, handleHistoryRequest, maintainHistory } from "./history.js";
 import { summarizeTransit } from "./history-sources.js";
 import { addEstimatedSpeeds } from "./live-normalize.js";
@@ -208,24 +208,12 @@ const livingResponse = async (env) => {
   const allLive = trains.status === "fulfilled" && trains.value.length && riverResult.status === "live";
   const anyLive = (trains.status === "fulfilled" && trains.value.length) || riverResult.status === "live";
   const headers = allLive ? responseHeaders : anyLive ? partialHeaders : transitUnavailableHeaders;
-  return new Response(JSON.stringify({
-    generatedAt: new Date().toISOString(),
+  return new Response(JSON.stringify(buildLivingPayload({
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: riverResult.rivers,
-    sourceStatus: {
-      trains: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
-      rivers: riverResult.status
-    },
-    sourceProvenance: {
-      trains: makeSourceProvenance({
-        provider: "Irish Rail",
-        endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
-        status: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
-        readings: trains.status === "fulfilled" ? trains.value : []
-      }),
-      rivers: riverResult.provenance ?? makeRiverProvenance({ status: riverResult.status ?? "unavailable", readings: riverResult.rivers ?? [] })
-    }
-  }), { headers });
+    riverProvenance: riverResult.provenance ?? null,
+    riverStatus: riverResult.status ?? "unavailable"
+  })), { headers });
 };
 
 // Historical rail retention is disabled unless reuse permission is explicitly

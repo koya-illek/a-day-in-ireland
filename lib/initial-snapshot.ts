@@ -69,9 +69,9 @@ export function createInitialSnapshot(generatedAt = new Date().toISOString()): L
       warmest: null,
       wettest: null,
       windiest: null,
-      reporting: 0,
-      runningTrains: 0,
-      riverStations: 0
+      reporting: null,
+      runningTrains: null,
+      riverStations: null
     },
     timeline: []
   };

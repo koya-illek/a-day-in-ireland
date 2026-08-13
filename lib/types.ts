@@ -279,9 +279,9 @@ export type LiveSnapshot = {
     warmest: StationReading | null;
     wettest: StationReading | null;
     windiest: StationReading | null;
-    reporting: number;
-    runningTrains: number;
-    riverStations: number;
+    reporting: number | null;
+    runningTrains: number | null;
+    riverStations: number | null;
   };
   timeline: Array<{
     time: string;

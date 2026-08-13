@@ -72,3 +72,24 @@ export function makeRiverProvenance(options: {
   readings?: RiverReading[];
   fallback?: string | null;
 }): ProviderProvenance;
+export const IRISH_RAIL_PROVIDER: string;
+export const IRISH_RAIL_ENDPOINT: string;
+export function buildLivingPayload(options?: {
+  trains?: unknown[];
+  rivers?: RiverReading[];
+  riverProvenance?: ProviderProvenance | null;
+  riverStatus?: ProviderProvenance["status"] | null;
+  fetchedAt?: string;
+}): {
+  generatedAt: string;
+  trains: unknown[];
+  rivers: RiverReading[];
+  sourceStatus: {
+    trains: "live" | "unavailable";
+    rivers: ProviderProvenance["status"];
+  };
+  sourceProvenance: {
+    trains: ProviderProvenance;
+    rivers: ProviderProvenance;
+  };
+};

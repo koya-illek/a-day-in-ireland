@@ -1,6 +1,6 @@
 import {
   RIVER_ENDPOINT,
-  latestObservedAt,
+  buildLivingPayload,
   makeRiverProvenance,
   normalizeRiverReadings,
   normalizeBathingAlerts,
@@ -22,14 +22,21 @@ import {
 import {
   addEstimatedSpeeds,
   classifyTideTrend,
+  COASTAL_MARINE_SOURCES,
   eirGridDublinHourWindow,
   fetchGrid,
   fetchGridRows,
   irishGridToLonLat,
+  MEASURED_AIR_POLLUTANTS,
+  measuredAirStamp,
+  measuredAirUrl,
   numeric,
   normalizeRadarFrames,
+  parseCoastalObservatoryRow,
   parseMeasuredAirStations,
+  parseWeatherBuoyRows,
   tideQueryWindow,
+  weatherBuoyQuery,
   EIRGRID_BODY_LIMIT
 } from "./live-normalize.js";
 export {
@@ -226,60 +233,11 @@ const freshEnough = (value, hours = 6) => {
 };
 
 const fetchWeatherBuoys = async () => {
-  const since = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const query = `station_id,longitude,latitude,time,WindSpeed,WaveHeight,WavePeriod,SeaTemperature&time>=${since}T00:00:00Z&orderByMax("station_id,time")`;
-  const response = await fetch(
-    `https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json?${encodeURI(query)}`,
-    { cf: { cacheEverything: true, cacheTtl: 900 } }
-  );
+  const response = await fetch(weatherBuoyQuery().url, { cf: { cacheEverything: true, cacheTtl: 900 } });
   if (!response.ok) throw new Error(`Marine weather buoys returned ${response.status}`);
   const body = await response.json();
-  return (body.table?.rows ?? []).map((row) => ({
-    id: String(row[0]),
-    name: `Offshore buoy ${String(row[0])}`,
-    kind: "weather-buoy",
-    longitude: Number(row[1]),
-    latitude: Number(row[2]),
-    observedAt: String(row[3]),
-    windSpeedKnots: numeric(row[4]),
-    waveHeight: numeric(row[5]),
-    wavePeriod: numeric(row[6]),
-    seaTemperature: numeric(row[7])
-  })).filter((reading) => freshEnough(reading.observedAt));
+  return parseWeatherBuoyRows(body.table?.rows);
 };
-
-const coastalSources = [
-  {
-    dataset: "smartbay_metbuoy",
-    name: "SmartBay Met Buoy",
-    variables: ["time", "latitude", "longitude", "wind_speed"],
-    map: (row) => ({
-      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
-      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
-      waveHeight: null, wavePeriod: null, seaTemperature: null
-    })
-  },
-  {
-    dataset: "sentinel_lehanagh",
-    name: "Lehanagh Pool Observatory",
-    variables: ["time", "latitude", "longitude", "Wind_Speed", "SBE_Temp_Avg"],
-    map: (row) => ({
-      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
-      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
-      waveHeight: null, wavePeriod: null, seaTemperature: numeric(row[4])
-    })
-  },
-  {
-    dataset: "compass_mace_head",
-    name: "Mace Head Observatory",
-    variables: ["time", "latitude", "longitude", "wind_speed", "sbe_temp_avg", "SignificantWaveHeight", "MeanWavePeriod_Tm02"],
-    map: (row) => ({
-      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
-      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
-      waveHeight: numeric(row[5]), wavePeriod: numeric(row[6]), seaTemperature: numeric(row[4])
-    })
-  }
-];
 
 const fetchCoastalBuoy = async (source) => {
   const query = `${source.variables.join(",")}&orderByMax("time")`;
@@ -289,17 +247,13 @@ const fetchCoastalBuoy = async (source) => {
   );
   if (!response.ok) throw new Error(`${source.name} returned ${response.status}`);
   const body = await response.json();
-  const row = body.table?.rows?.[0];
-  if (!row) return null;
-  const reading = source.map(row);
-  if (!freshEnough(reading.observedAt)) return null;
-  return { id: source.dataset, name: source.name, kind: "coastal-observatory", ...reading };
+  return parseCoastalObservatoryRow(source, body.table?.rows?.[0]);
 };
 
 export const fetchMarine = async () => {
   const results = await Promise.allSettled([
     fetchWeatherBuoys(),
-    ...coastalSources.map(fetchCoastalBuoy)
+    ...COASTAL_MARINE_SOURCES.map(fetchCoastalBuoy)
   ]);
   const weather = results[0].status === "fulfilled" ? results[0].value : [];
   const coastal = results.slice(1).flatMap((result) =>
@@ -307,7 +261,7 @@ export const fetchMarine = async () => {
   );
   const readings = [...weather, ...coastal];
   const completeCoverage = results.every((result) => result.status === "fulfilled") &&
-    weather.length > 0 && coastal.length === coastalSources.length;
+    weather.length > 0 && coastal.length === COASTAL_MARINE_SOURCES.length;
   return {
     readings,
     status: readings.length ? completeCoverage ? "live" : "partial" : "unavailable"
@@ -365,16 +319,11 @@ export const fetchAirQuality = async () => {
 
 
 const fetchMeasuredAirQuality = async () => {
-  const observed = new Date(Date.now() - 3 * 60 * 60 * 1000);
-  const stamp = observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
-  const pollutants = [
-    ["PM25", "pm25"], ["PM10", "pm10"], ["NO2", "nitrogenDioxide"], ["O3", "ozone"]
-  ];
-  const results = await Promise.allSettled(pollutants.map(async ([pollutant, field]) => {
-    const response = await fetch(
-      `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`,
-      { cf: { cacheEverything: true, cacheTtl: 1800 } }
-    );
+  const stamp = measuredAirStamp();
+  const results = await Promise.allSettled(MEASURED_AIR_POLLUTANTS.map(async ([pollutant, field]) => {
+    const response = await fetch(measuredAirUrl(pollutant, stamp), {
+      cf: { cacheEverything: true, cacheTtl: 1800 }
+    });
     if (!response.ok) throw new Error(`EEA ${pollutant} returned ${response.status}`);
     return [field, await readBoundedTextResponse(response, `eea-${pollutant}`, 512_000)];
   }));
@@ -797,28 +746,12 @@ const livingLayers = async (env) => {
   ]);
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (rivers.status === "rejected") console.error("OPW river refresh failed", rivers.reason);
-  return json({
-    generatedAt: new Date().toISOString(),
+  return json(buildLivingPayload({
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: rivers.status === "fulfilled" ? rivers.value.rivers : [],
-    sourceStatus: {
-      trains: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
-      rivers: rivers.status === "fulfilled" ? rivers.value.provenance.status : "unavailable"
-    },
-    sourceProvenance: {
-      trains: {
-        provider: "Irish Rail",
-        endpoint: "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML",
-        status: trains.status === "fulfilled" && trains.value.length ? "live" : "unavailable",
-        fetchedAt: new Date().toISOString(),
-        latestObservedAt: trains.status === "fulfilled" ? latestObservedAt(trains.value) : null,
-        fallback: null
-      },
-      rivers: rivers.status === "fulfilled"
-        ? rivers.value.provenance
-        : makeRiverProvenance({ status: "unavailable" })
-    }
-  });
+    riverProvenance: rivers.status === "fulfilled" ? rivers.value.provenance : null,
+    riverStatus: "unavailable"
+  }));
 };
 
 const currentContexts = async (env) => {

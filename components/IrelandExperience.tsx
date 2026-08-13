@@ -26,7 +26,7 @@ import type {
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
 import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
-import { humaniseWarningRegions, transitPresentation } from "../lib/presentation.js";
+import { transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
 import { ForecastStrip, SkyLightStrip } from "./SkyBriefing";
 import {
@@ -73,6 +73,7 @@ import {
   formatDate,
   formatDistance,
   formatTime,
+  irelandEditorialMoment,
   movementItemIdentity,
   movementMarkerId,
   statusText
@@ -93,6 +94,9 @@ import {
 import { AuroraPanel, DetailCard, GridPanel, IssPanel } from "./MapPanels";
 import { HistoryControls, historyResolutionLabel } from "./HistoryControls";
 import { ExplorePanel } from "./ExplorePanel";
+import { OfficialNotices } from "./OfficialNotices";
+import { WeatherTimeline } from "./WeatherTimeline";
+import { MapCanvas } from "./MapCanvas";
 
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
@@ -287,31 +291,6 @@ const irelandDayPhase = (date: Date) => {
   return "dusk";
 };
 
-const irelandEditorialMoment = (date: Date) => {
-  const hour = irelandHour(date);
-  const weekday = new Intl.DateTimeFormat("en-IE", {
-    weekday: "long",
-    timeZone: "Europe/Dublin"
-  }).format(date);
-  const period = hour < 6
-    ? "before dawn"
-    : hour < 12
-      ? "morning"
-      : hour < 17
-        ? "afternoon"
-        : hour < 21
-          ? "evening"
-          : "night";
-  return `${weekday} ${period} across Ireland.`;
-};
-
-const joinClauses = (clauses: string[]) => {
-  if (clauses.length === 0) return "";
-  if (clauses.length === 1) return clauses[0]!;
-  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
-  return `${clauses.slice(0, -1).join(", ")}, and ${clauses.at(-1)}`;
-};
-
 function solarProgress(now: Date) {
   const hour = irelandHour(now) + now.getUTCMinutes() / 60;
   return Math.max(0, Math.min(1, (hour - 5) / 17));
@@ -371,8 +350,8 @@ function weatherNarrative(snapshot: LiveSnapshot) {
     : !warm && !rain
     ? "Current weather observations are unavailable."
     : rain && (rain.rainfall ?? 0) > 0
-    ? `Rain is being observed around ${rain.name}, while ${warm?.name ?? "the warmest station"} reports ${warm?.temperature ?? "—"}°.`
-    : `${warm?.name ?? "The warmest station"} is reporting ${warm?.temperature ?? "—"}°; no recent rain is represented among the reporting stations.`;
+    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°.`
+    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°, and none of the reporting stations have measured rain.`;
 }
 
 function distanceKm(first: Pick<Place, "lat" | "lon">, second: Pick<Place, "lat" | "lon">) {
@@ -438,26 +417,6 @@ const newestTimestamp = (first: string | null | undefined, second: string | null
   if (!Number.isFinite(firstTime) || secondTime > firstTime) return new Date(secondTime).toISOString();
   return first ?? null;
 };
-
-const warningScopeText = (warning: LiveSnapshot["warnings"][number]) =>
-  humaniseWarningRegions(warning.regions);
-
-const OFFICIAL_WARNING_URL = "https://www.met.ie/warnings-today.html";
-
-const formatWarningDate = (value: string) => {
-  const date = new Date(value);
-  return Number.isFinite(date.getTime())
-    ? date.toLocaleString("en-IE", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: "Europe/Dublin"
-    })
-    : "time unavailable";
-};
-
 
 const STALE_THRESHOLDS = {
   weather: WEATHER_OBSERVATION_MAX_AGE_MS,
@@ -783,6 +742,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   useEffect(() => {
     if (prefersReducedMotion) setRadarPlaying(false);
   }, [prefersReducedMotion]);
+
+  useLayoutEffect(() => {
+    setWallClockNow(new Date());
+  }, []);
 
   useEffect(() => {
     const clock = window.setInterval(() => setWallClockNow(new Date()), 1000);
@@ -1308,21 +1271,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     longitude: selectedPlace.lon
   };
   const activityGuidance = getActivityGuidance(snapshot, now, guidancePlace);
-  const selectedTimelinePoint = snapshot.timeline.find((point) => point.time === timelineSelection) ?? null;
-  const timelineTemperatures = snapshot.timeline
-    .map((point) => point.temperature)
-    .filter((value): value is number => value !== null && Number.isFinite(value));
-  const timelineTemperatureMin = timelineTemperatures.length
-    ? Math.floor(Math.min(...timelineTemperatures) - 1)
-    : 0;
-  const timelineTemperatureMax = timelineTemperatures.length
-    ? Math.ceil(Math.max(...timelineTemperatures) + 1)
-    : 20;
-  const timelineTemperatureRange = Math.max(1, timelineTemperatureMax - timelineTemperatureMin);
-  const timelineRainValues = snapshot.timeline
-    .map((point) => point.rainfall)
-    .filter((value): value is number => value !== null && Number.isFinite(value));
-  const timelineRainMax = Math.max(1, ...timelineRainValues);
   const visibleWarnings = warningsUnavailable ? [] : sortOfficialWeatherWarnings(snapshot.warnings, now.getTime());
   const currentWarnings = visibleWarnings.filter((warning) => warningTiming(warning, now.getTime()) === "active");
   const activeWarning = currentWarnings[0] ?? null;
@@ -1581,39 +1529,28 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     : "Radar frame unavailable";
   const activeNoticeCount = currentWarnings.length;
   const upcomingNoticeCount = Math.max(0, visibleWarnings.length - activeNoticeCount);
-  const liveSignals = [
-    activeNoticeCount > 0
-      ? `${formatCount(activeNoticeCount)} official ${pluralise(activeNoticeCount, "notice")} ${activeNoticeCount === 1 ? "is" : "are"} in effect`
-      : upcomingNoticeCount > 0
-        ? `${formatCount(upcomingNoticeCount)} official ${pluralise(upcomingNoticeCount, "notice")} ${upcomingNoticeCount === 1 ? "is" : "are"} due later`
-        : null,
-    railNotableCurrent && runningTrainCount !== null
-      ? runningTrainCount === 1
-        ? "1 train shares a live position"
-        : `${formatCount(runningTrainCount)} trains share live positions`
-      : null,
-    riversLive && !riverDataStale && riverStationCount !== null
-      ? `${formatCount(riverStationCount)} ${pluralise(riverStationCount, "river gauge")} ${riverStationCount === 1 ? "is" : "are"} reporting`
-      : riversPartial
-        ? `${formatCount(snapshot.rivers.length)} river readings are available with partial coverage`
-        : null,
-    online && snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0
-      ? `${formatCount(snapshot.marine.length)} ${pluralise(snapshot.marine.length, "marine site")} ${snapshot.marine.length === 1 ? "is" : "are"} reporting`
-      : null,
-    gridNotableCurrent && gridWindShare !== null
-      ? `wind supplies ${gridWindShare.toFixed(0)}% of all-island demand`
-      : null
-  ].filter((signal): signal is string => Boolean(signal));
+  const warmestStation = snapshot.summary.warmest;
+  const wettestStation = snapshot.summary.wettest;
+  const windiestStation = snapshot.summary.windiest;
+  const liveLeadFact = activeNoticeCount > 0
+    ? activeWarning?.headline
+      ? `${activeWarning.headline.replace(/\.$/, "")}.`
+      : `${formatCount(activeNoticeCount)} official ${pluralise(activeNoticeCount, "notice")} in effect.`
+    : weatherNotableCurrent
+      ? weatherNarrativeDetail
+      : gridNotableCurrent && gridWindShare !== null
+        ? `Wind is supplying ${gridWindShare.toFixed(0)}% of all-island demand.`
+        : "Live observations are settling across the island.";
   const heroSentence = timeMode === "past"
     ? historyState.status === "loading"
       ? "Loading stored observations for the selected time…"
       : historyState.status === "error"
         ? "Historical conditions could not be loaded. Live data is not substituted."
         : historyState.status === "gap"
-          ? "No stored record exists at or before the selected time. Missing history remains missing."
+          ? "No stored record exists at or before the selected time."
           : `${irelandEditorialMoment(now)} ${isDailyHistorySummary
-            ? `This stored ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} preserves summary values and explicit gaps rather than a reconstructed point map.`
-            : "Stored observations are separated from live feeds and keep provider timestamps and recorded gaps."}`
+            ? `This stored ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} keeps summary values and recorded gaps, not a reconstructed point map.`
+            : "This is the stored record for the selected time."}`
     : isConnectingWithoutSnapshot
       ? "Connecting to live observations across the island…"
       : servicesRefreshing
@@ -1624,11 +1561,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.`
             : serviceDisplayState === "unavailable"
               ? "Live services are unavailable, so national conditions cannot be assessed."
-              : `${irelandEditorialMoment(now)} ${liveSignals.length ? `${joinClauses(liveSignals.slice(0, 3))}.` : weatherNarrativeDetail}`;
+              : `${irelandEditorialMoment(now)} ${liveLeadFact}`;
   const heroSecondary = timeMode === "past"
-    ? `Stored observations from ${lastSuccessLabel}.`
-    : weatherNotableCurrent
-      ? weatherNarrativeDetail
+    ? `Stored observations from ${lastSuccessLabel}. They are separated from live feeds and keep provider timestamps and recorded gaps.`
+    : weatherNotableCurrent && windiestStation?.windSpeed != null
+      ? `Strongest observed wind ${windiestStation.windSpeed} km/h at ${windiestStation.name}.`
       : weatherDisplayStatus === "stale"
         ? "Weather observations are cached and kept separate from the live story."
         : "Weather observations are currently unavailable, so they are not used to frame the first impression.";
@@ -1651,62 +1588,43 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onClick: () => document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" })
         }
       : null,
-    railNotableCurrent && runningTrainCount !== null
+    weatherNotableCurrent && warmestStation?.temperature != null
       ? {
-          key: "trains",
-          family: "movement",
-          label: "rail positions",
-          value: formatCount(runningTrainCount),
-          detail: runningTrainCount === 1 ? "1 train sharing a live position" : `${formatCount(runningTrainCount)} trains sharing live positions`,
-          onClick: () => focusContext("trains")
-        }
-      : null,
-    riversAvailable && (riverStationCount ?? snapshot.rivers.length) > 0
-      ? {
-          key: "rivers",
-          family: "water",
-          label: "river gauges",
-          value: formatCount(riverStationCount ?? snapshot.rivers.length),
-          detail: riversLive && !riverDataStale
-            ? "Fresh river readings across the island"
-            : riversPartial
-              ? "Recent readings with partial coverage"
-              : riversFallback
-                ? "Labelled fallback coverage"
-                : "Saved river context",
-          onClick: () => focusContext("rivers")
-        }
-      : null,
-    gridWindShare !== null
-      ? {
-          key: "grid",
-          family: "energy",
-          label: "wind share",
-          value: `${gridWindShare.toFixed(0)}%`,
-          detail: gridNotableCurrent ? "All-island demand met by wind" : "Saved grid snapshot",
-          onClick: () => focusContext("grid")
-        }
-      : null,
-    online && snapshot.contextStatus.marine === "live" && snapshot.marine.length > 0
-      ? {
-          key: "marine",
-          family: "sea",
-          label: "marine sites",
-          value: formatCount(snapshot.marine.length),
-          detail: "Weather buoys and coastal observatories reporting",
-          onClick: () => focusContext("sea")
-        }
-      : null,
-    weatherNotableCurrent && reportingCount !== null
-      ? {
-          key: "weather",
+          key: "temperature",
           family: "weather",
-          label: "weather stations",
-          value: formatCount(reportingCount),
-          detail: snapshot.summary.warmest
-            ? `${snapshot.summary.warmest.temperature}° at ${snapshot.summary.warmest.name}`
-            : "Fresh observations across the island",
+          label: "temperature",
+          value: `${warmestStation.temperature}°`,
+          detail: `Warmest at ${warmestStation.name}`,
           onClick: () => focusContext("weather")
+        }
+      : null,
+    weatherNotableCurrent
+      ? wettestStation && (wettestStation.rainfall ?? 0) > 0
+        ? {
+            key: "rain",
+            family: "weather",
+            label: "rain",
+            value: `${wettestStation.rainfall?.toFixed(1)} mm`,
+            detail: `Observed around ${wettestStation.name}`,
+            onClick: () => focusContext("weather")
+          }
+        : {
+            key: "rain",
+            family: "weather",
+            label: "rain",
+            value: "None",
+            detail: "No rain measured at reporting stations",
+            onClick: () => focusContext("weather")
+          }
+      : null,
+    weatherNotableCurrent && windiestStation?.windSpeed != null
+      ? {
+          key: "wind",
+          family: "weather",
+          label: "wind",
+          value: `${windiestStation.windSpeed} km/h`,
+          detail: `Strongest at ${windiestStation.name}`,
+          onClick: () => focusContext("wind")
         }
       : null
   ].filter((fact): fact is {
@@ -1716,7 +1634,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     value: string;
     detail: string;
     onClick: () => void;
-  } => fact !== null).slice(0, 4);
+  } => fact !== null);
   const mapAnchorLayoutKey = [
     activePreset,
     [...layers].sort().join(","),
@@ -2507,8 +2425,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <div className="place-picker place-picker-compact">
                 <div className="place-compact-copy">
                   <p className="eyebrow">My Place</p>
-                  <h2 id="my-place-heading">Personalise this view</h2>
-                  <p className="place-context-summary">Choose a place or use your location to add nearby weather, river and air observations.</p>
+                  <h2 id="my-place-heading">What’s it like near you?</h2>
+                  <p className="place-context-summary">Choose a place or use your location for nearby weather, river and air observations.</p>
                 </div>
                 <div className="place-compact-controls">{placeControls}</div>
               </div>
@@ -2611,76 +2529,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             )}
           </div>
 
-          <section
-            id="official-notices"
-            className={`official-notices ${compactNotices ? "compact" : ""}`}
-            data-scope="across-ireland"
-            aria-labelledby="official-notices-heading"
-          >
-            {compactNotices ? (
-              <div className="official-notices-compact-row">
-                <span className="live-dot live" aria-hidden="true" />
-                <h2 id="official-notices-heading">Official notices</h2>
-                <p className="official-notices-empty">No current or upcoming Met Éireann notices.</p>
-              </div>
-            ) : (
-              <>
-            <div className="official-notices-heading">
-              <div>
-                <p className="eyebrow">{timeMode === "past" ? "Stored official notices" : "Official notices"}</p>
-                <h2 id="official-notices-heading">Official notices {timeMode === "past" ? "at the selected time" : "across Ireland"}</h2>
-              </div>
-              <p>{timeMode === "past" ? "Notices are evaluated against the selected capture time. Gaps remain explicit and the current warning page is not treated as an archive." : "Met Éireann notices are shown with their named scope and timing. Regional notices do not describe the whole island."}</p>
-            </div>
-            {layers.has("warnings") ? isConnectingWithoutSnapshot ? (
-              <p className="official-notices-empty">{timeMode === "past" ? "Loading stored Met Éireann notices…" : "Connecting to the Met Éireann notice feed…"}</p>
-            ) : visibleWarnings.length ? (
-              visibleWarnings.map((warning, warningIndex) => {
-                const timing = warningTiming(warning, now.getTime());
-                const isActive = timing === "active";
-                const warningIdentity = warning.id || warning.capId || `${warning.headline}-${warningIndex}`;
-                return (
-                  <aside
-                    id={isActive && warning === activeWarning ? "active-warning" : undefined}
-                    key={warningIdentity}
-                    className={`warning-strip official-notice ${(warning.level || "advisory").toLowerCase()} ${timing}`}
-                    aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice ${timeMode === "past" ? "at the selected time " : ""}for ${warningScopeText(warning)}`}
-                    role="status"
-                  >
-                    <span className="warning-badge">{timeMode === "past" ? isActive ? "Active at capture" : "Upcoming at capture" : isActive ? "Official notice" : "Upcoming notice"}</span>
-                    <div className="warning-copy">
-                      <h3>{warning.headline}</h3>
-                      <dl className="warning-key-facts">
-                        <div><dt>Scope</dt><dd>{warningScopeText(warning)}</dd></div>
-                        <div>
-                          <dt>{isActive ? "Expires" : "Starts"}</dt>
-                          <dd><time dateTime={isActive ? warning.expiry : warning.onset}>{formatWarningDate(isActive ? warning.expiry : warning.onset)}</time></dd>
-                        </div>
-                      </dl>
-                      <p>{warning.description || "Met Éireann has not supplied a description for this notice."}</p>
-                      <div className="warning-actions">
-                        <a href={OFFICIAL_WARNING_URL} target="_blank" rel="noreferrer">{timeMode === "past" ? "Open current Met Éireann warning page" : "Check official Met Éireann notice"} <span aria-hidden="true">↗</span></a>
-                        <details>
-                          <summary>Source and issue details</summary>
-                          <p>Met Éireann · {warning.level || "Unspecified"} level · severity {warning.severity || "not specified"} · issued {formatWarningDate(warning.issued)} · updated {formatWarningDate(warning.updated)}</p>
-                        </details>
-                      </div>
-                    </div>
-                  </aside>
-                );
-              })
-            ) : warningsUnavailable ? (
-              <p className="official-notices-empty">{timeMode === "past"
-                ? historyGapForFocus(historyGaps, "warnings")?.detail ?? "Official notices were not retained in this historical record; no zero or all-clear state is inferred."
-                : !online ? `Offline. The notice feed cannot be refreshed; last success ${lastSuccessLabel}, so current warnings cannot be confirmed.` : snapshot.contextStatus.warnings === "stale" ? `The last notice check is cached from ${lastSuccessLabel}; current warnings cannot be confirmed.` : "The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed."}</p>
-            ) : (
-              <p className="official-notices-empty">{timeMode === "past" ? "No active or upcoming Met Éireann notices are represented in this stored record." : "No current or upcoming Met Éireann notices are represented in the current horizon."}</p>
-            ) : (
-              <p className="official-notices-empty">Met Éireann notices are hidden in this map view. Enable them in Explore to review {timeMode === "past" ? "the stored notices" : "official notices across Ireland"}.</p>
-            )}
-              </>
-            )}
-          </section>
+          <OfficialNotices
+            timeMode={timeMode}
+            compact={compactNotices}
+            layers={layers}
+            visibleWarnings={visibleWarnings}
+            activeWarning={activeWarning}
+            warningsUnavailable={warningsUnavailable}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            snapshot={snapshot}
+            now={now}
+            lastSuccessLabel={lastSuccessLabel}
+            historyGaps={historyGaps}
+            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
+          />
 
               </>
             );
@@ -2762,16 +2625,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
         <p id="map-marker-announcement" className="sr-only" aria-live="polite" aria-atomic="true">{markerAnnouncement}</p>
         <p className="map-feedback sr-only" role="status" aria-live="polite">{mapFeedback}</p>
-        <div className="map-canvas">
-        <svg
-          ref={mapRef}
-          className={`ireland-map ${mapView.scale > 1 ? "is-zoomed" : ""} ${isDenseView ? "is-dense-map" : ""}`}
-          data-visible-markers={markerIds.length}
-          data-point-observations={rawPointMarkerCount}
-          viewBox="0 0 1000 900"
-          role="group"
-          aria-labelledby="map-title map-description"
-          aria-describedby="map-keyboard-instructions map-marker-announcement"
+        <MapCanvas
+          mapRef={mapRef}
+          timeMode={timeMode}
+          mapView={mapView}
+          isDenseView={isDenseView}
+          markerCount={markerIds.length}
+          pointObservationCount={rawPointMarkerCount}
           onClickCapture={suppressClickAfterPan}
           onClick={activateNearestMapMarker}
           onPointerDown={handleMapPointerDown}
@@ -2779,50 +2639,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onPointerUp={handleMapPointerEnd}
           onPointerCancel={handleMapPointerEnd}
           onWheel={handleMapWheel}
+          onZoomIn={() => zoomMapAround(1.4)}
+          onZoomOut={() => zoomMapAround(1 / 1.4)}
+          onReset={() => setMapView({ scale: 1, x: 0, y: 0 })}
         >
-          <title id="map-title">{timeMode === "past" ? "Stored conditions across Ireland at the selected time" : "Near-real-time conditions across Ireland"}</title>
-          <desc id="map-description">{timeMode === "past" ? "A map of retained historical observations across Ireland. Provider gaps and unavailable positions or imagery remain missing; daily summaries do not reconstruct point markers." : "A close map of Ireland showing weather, radar rain, observed wind, rail and public transport, river and tide gauges, sea conditions, measured and modelled air quality, bathing alerts, satellite imagery, seismic detections, ISS passes, aurora guidance and the live power grid."}</desc>
-	          <defs>
-	            <radialGradient id="sunGlow">
-	              <stop offset="0" stopColor="#f4d8a2" stopOpacity=".88" />
-	              <stop offset="1" stopColor="#c78f58" stopOpacity="0" />
-	            </radialGradient>
-	            <radialGradient id="rainMist">
-	              <stop offset="0" stopColor="#6d97b2" stopOpacity=".42" />
-	              <stop offset=".55" stopColor="#6d97b2" stopOpacity=".18" />
-	              <stop offset="1" stopColor="#6d97b2" stopOpacity="0" />
-	            </radialGradient>
-            <radialGradient id="satelliteFade">
-              <stop offset=".68" stopColor="white" stopOpacity="1" />
-              <stop offset="1" stopColor="white" stopOpacity="0" />
-            </radialGradient>
-	            <linearGradient id="ocean" x1="0" y1="0" x2="0" y2="1">
-	              <stop offset="0" stopColor="#1e3d42" />
-	              <stop offset="1" stopColor="#102326" />
-	            </linearGradient>
-	            <linearGradient id="land" x1="0" y1="0" x2="1" y2="1">
-	              <stop offset="0" stopColor="#889a6b" />
-	              <stop offset=".45" stopColor="#5f7354" />
-	              <stop offset="1" stopColor="#31453f" />
-	            </linearGradient>
-	            <linearGradient id="auroraGlow" x1="0" y1="0" x2="0" y2="1">
-	              <stop offset="0" stopColor="#8fc9a0" stopOpacity=".62" />
-	              <stop offset=".5" stopColor="#6b86a2" stopOpacity=".22" />
-	              <stop offset="1" stopColor="#8fc9a0" stopOpacity="0" />
-	            </linearGradient>
-	            <filter id="landShadow" x="-30%" y="-30%" width="160%" height="160%">
-	              <feDropShadow dx="0" dy="10" stdDeviation="18" floodColor="#081413" floodOpacity=".38" />
-	            </filter>
-            <clipPath id="viewportClip"><rect width="1000" height="900" rx="42" /></clipPath>
-            <mask id="satelliteContextMask"><ellipse cx="520" cy="470" rx="315" ry="445" fill="url(#satelliteFade)" /></mask>
-          </defs>
-          <g clipPath="url(#viewportClip)">
-            <rect width="1000" height="900" fill="url(#ocean)" />
-            <g
-              className="map-viewport"
-              data-scale={mapView.scale.toFixed(2)}
-              transform={`translate(${mapView.x} ${mapView.y}) scale(${mapView.scale})`}
-            >
             <path className="day-arc" d="M120 145 Q500 -65 880 145" />
             <circle cx={sunX} cy={sunY} r="82" fill="url(#sunGlow)" className="sun-glow" />
             <circle cx={sunX} cy={sunY} r="7" className="sun-core" />
@@ -3111,23 +2931,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 </MapMarker>
               ) : null;
             })}
-            </g>
-          </g>
-        </svg>
-
-        <nav className="map-navigation" aria-label="Map navigation">
-          <button onClick={() => zoomMapAround(1.4)} disabled={mapView.scale >= 4} aria-label="Zoom in">+</button>
-          <button onClick={() => zoomMapAround(1 / 1.4)} disabled={mapView.scale <= 1} aria-label="Zoom out">−</button>
-          <button
-            className="map-reset"
-            onClick={() => setMapView({ scale: 1, x: 0, y: 0 })}
-            disabled={mapView.scale === 1 && mapView.x === 0 && mapView.y === 0}
-          >
-            Reset
-          </button>
-          <output aria-live="polite" aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
-        </nav>
-        </div>
+        </MapCanvas>
 
         {layers.has("radar") && (
           <div
@@ -3370,109 +3174,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </details>
       </section>
 
-      <section id="day-so-far" className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
-        <div className="dayline-heading">
-          <div><p className="eyebrow">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
-          <p>{snapshot.timeline.length
-            ? "Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below."
-            : "Hourly weather appears here only when recent Met Éireann observations can support it."}</p>
-        </div>
-        {snapshot.timeline.length ? (
-          <>
-            <div className="timeline-legend" role="img" aria-label="Chart legend">
-              <span><i className="temperature" />Average temperature (°C)</span>
-              <span><i className="rain" />Average observed rain per station (mm)</span>
-            </div>
-            {timeMode !== "past" && (snapshot.sourceStatus === "stale" || serviceDisplayState === "offline") && (
-              <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
-            )}
-            <div
-              className="timeline-plot-scroll"
-              role="region"
-              aria-label="Scrollable hourly chart"
-              tabIndex={0}
-            >
-              <div className="timeline-plot">
-                <div className="timeline-axis temperature-axis" aria-hidden="true">
-                  <span>{timelineTemperatureMax}°C</span>
-                  <strong>Temperature</strong>
-                  <span>{timelineTemperatureMin}°C</span>
-                </div>
-                <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : snapshot.sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
-              {snapshot.timeline.map((point) => {
-                const temperatureHeight = point.temperature === null
-                  ? 4
-                  : 12 + ((point.temperature - timelineTemperatureMin) / timelineTemperatureRange) * 76;
-                const rainHeight = point.rainfall === null || point.rainfall <= 0
-                  ? 0
-                  : Math.max(5, (point.rainfall / timelineRainMax) * 88);
-                return (
-                  <button
-                    type="button"
-                    className={`timeline-point ${timelineSelection === point.time ? "selected" : ""}`}
-                    key={point.time}
-                    aria-pressed={timelineSelection === point.time}
-                    aria-label={`${point.time}: average temperature ${point.temperature?.toFixed(1) ?? "unavailable"} degrees Celsius, average observed rainfall ${point.rainfall?.toFixed(1) ?? "unavailable"} millimetres per reporting station, average wind ${point.windSpeed?.toFixed(0) ?? "unavailable"} kilometres per hour`}
-                    onClick={() => setTimelineSelection(point.time)}
-                  >
-                    <span className="timeline-bars" aria-hidden="true">
-                      <span className="bar temperature" style={{ height: `${temperatureHeight}%` }} />
-                      <span className="bar rain" style={{ height: `${rainHeight}%` }} />
-                    </span>
-                    <small>{point.time}</small>
-                  </button>
-                );
-              })}
-                </div>
-                <div className="timeline-axis rain-axis" aria-hidden="true">
-                  <span>{timelineRainMax.toFixed(1)} mm</span>
-                  <strong>Average rain</strong>
-                  <span>0 mm</span>
-                </div>
-                <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
-              </div>
-            </div>
-            <details className="timeline-data-list">
-              <summary>View hourly values as a list</summary>
-              <div className="timeline-table-scroll" role="region" aria-label="Hourly weather data table" tabIndex={0}>
-                <table>
-                  <caption>Hourly averages across reporting Met Éireann stations; rain is the mean of available station observations, not an island-wide total</caption>
-                  <thead><tr><th scope="col">Time</th><th scope="col">Average temperature</th><th scope="col">Average rain</th><th scope="col">Average wind</th></tr></thead>
-                  <tbody>
-                    {snapshot.timeline.map((point) => (
-                      <tr key={`list-${point.time}`}>
-                        <th scope="row">{point.time}</th>
-                        <td>{point.temperature === null ? "Unavailable" : `${point.temperature.toFixed(1)} °C`}</td>
-                        <td>{point.rainfall === null ? "Unavailable" : `${point.rainfall.toFixed(1)} mm`}</td>
-                        <td>{point.windSpeed === null ? "Unavailable" : `${point.windSpeed.toFixed(0)} km/h`}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          </>
-        ) : (
-          <div className="timeline-empty-state" role="status">
-            <span aria-hidden="true">◌</span>
-            <div>
-              <h3>Hourly weather is not available yet</h3>
-              <p>{isConnectingWithoutSnapshot
-                ? "Connecting to recent Met Éireann observations…"
-                : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"
-                  ? timeMode === "past" ? "This historical record contains no retained hourly observations." : "The current provider response contains no hourly observations yet."
-                  : snapshot.sourceStatus === "stale"
-                    ? "No saved hourly observations remain within the retention window."
-                    : "Hourly weather observations are unavailable. The chart will return when recent station data can support it."}</p>
-            </div>
-          </div>
-        )}
-        {selectedTimelinePoint && (
-          <p className="timeline-selection" role="status">
-            <b>{selectedTimelinePoint.time}</b> · {selectedTimelinePoint.temperature?.toFixed(1) ?? "—"}° average temperature · {selectedTimelinePoint.rainfall?.toFixed(1) ?? "—"} mm average observed rain per reporting station · {selectedTimelinePoint.windSpeed?.toFixed(0) ?? "—"} km/h average wind.
-          </p>
-        )}
-      </section>
+      <WeatherTimeline
+        timeMode={timeMode}
+        timeline={snapshot.timeline}
+        sourceStatus={snapshot.sourceStatus}
+        serviceDisplayState={serviceDisplayState}
+        isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+        selection={timelineSelection}
+        onSelect={setTimelineSelection}
+      />
 
       <ExplorePanel
         open={panelOpen}

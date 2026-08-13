@@ -482,3 +482,42 @@ export const makeRiverProvenance = (options) => makeSourceProvenance({
   endpoint: RIVER_ENDPOINT,
   ...options
 });
+
+export const IRISH_RAIL_PROVIDER = "Irish Rail";
+export const IRISH_RAIL_ENDPOINT = "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML";
+
+export const buildLivingPayload = ({
+  trains = [],
+  rivers = [],
+  riverProvenance = null,
+  riverStatus = null,
+  fetchedAt = new Date().toISOString()
+} = {}) => {
+  const trainReadings = Array.isArray(trains) ? trains : [];
+  const riverReadings = Array.isArray(rivers) ? rivers : [];
+  const trainsLive = trainReadings.length > 0;
+  const riversStatus = riverProvenance?.status ?? riverStatus ?? "unavailable";
+  return {
+    generatedAt: fetchedAt,
+    trains: trainReadings,
+    rivers: riverReadings,
+    sourceStatus: {
+      trains: trainsLive ? "live" : "unavailable",
+      rivers: riversStatus
+    },
+    sourceProvenance: {
+      trains: makeSourceProvenance({
+        provider: IRISH_RAIL_PROVIDER,
+        endpoint: IRISH_RAIL_ENDPOINT,
+        status: trainsLive ? "live" : "unavailable",
+        fetchedAt,
+        readings: trainReadings
+      }),
+      rivers: riverProvenance ?? makeRiverProvenance({
+        status: riversStatus,
+        fetchedAt,
+        readings: riverReadings
+      })
+    }
+  };
+};

@@ -333,9 +333,11 @@ test("a newer historical navigation wins over an older slow request and remains 
   await page.context().setOffline(true);
   await expect(page.locator(".live-state")).toContainText("Stored historical snapshot");
   await expect(page.locator(".workspace-heading .hero-sentence"))
-    .toContainText("Stored observations are separated from live feeds and keep provider timestamps and recorded gaps.");
+    .toContainText("Tuesday 4 August, 19:00 Irish time. Evening across Ireland. This is the stored record for the selected time.");
   await expect(page.locator(".workspace-heading .moment-summary"))
     .toContainText("Stored observations from Tue 4 Aug 2026, 19:00 IST.");
+  await expect(page.locator(".workspace-heading .moment-summary"))
+    .toContainText("They are separated from live feeds and keep provider timestamps and recorded gaps.");
   await expect(page.locator(".workspace-heading")).not.toContainText("Live observations");
   await expect(page.locator(".place-observations")).not.toContainText(/Offline|current|live/i);
 

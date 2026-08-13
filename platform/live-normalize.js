@@ -72,6 +72,21 @@ export const europeanAqiScore = ({ pm25, pm10, nitrogenDioxide, ozone }) => {
 
 const IRELAND_PLACE_PREFIX = /^(Ireland|Dublin|Cork|Kerry|Galway|Limerick|Clare|Mayo|Donegal|Wicklow|Kildare|Louth|Sligo|Offaly|Carlow|Cavan|Roscommon|Waterford)\s+/i;
 
+export const MEASURED_AIR_POLLUTANTS = Object.freeze([
+  ["PM25", "pm25"],
+  ["PM10", "pm10"],
+  ["NO2", "nitrogenDioxide"],
+  ["O3", "ozone"]
+]);
+
+export const measuredAirStamp = (now = Date.now()) => {
+  const observed = new Date(now - 3 * 60 * 60 * 1000);
+  return observed.toISOString().replace(/[-:T]/g, "").slice(0, 10) + "0000";
+};
+
+export const measuredAirUrl = (pollutant, stamp) =>
+  `https://discomap.eea.europa.eu/Map/UTDViewerPRE/dataService/Hourly?polu=${pollutant}&dt=${stamp}`;
+
 export const parseMeasuredAirStations = (responses) => {
   const stations = new Map();
   for (const [field, csv] of responses) {
@@ -262,6 +277,78 @@ export const tideQueryWindow = (now = Date.now()) => {
 
 const TIDE_TREND_WINDOW_MS = 30 * 60 * 1000;
 const TIDE_TREND_CHANGE_THRESHOLD_METRES = .01;
+
+export const weatherBuoyQuery = (now = Date.now()) => {
+  const since = new Date(now - 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const query = `station_id,longitude,latitude,time,WindSpeed,WaveHeight,WavePeriod,SeaTemperature&time>=${since}T00:00:00Z&orderByMax("station_id,time")`;
+  return {
+    since,
+    query,
+    url: `https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json?${encodeURI(query)}`
+  };
+};
+
+export const parseWeatherBuoyRows = (rows, now = Date.now(), maxAgeMs = 6 * 60 * 60 * 1000) =>
+  (Array.isArray(rows) ? rows : []).flatMap((row) => {
+    const observedAt = String(row[3] ?? "");
+    const timestamp = Date.parse(observedAt);
+    const age = now - timestamp;
+    if (!Number.isFinite(timestamp) || age < 0 || age >= maxAgeMs) return [];
+    return [{
+      id: String(row[0]),
+      name: `Offshore buoy ${String(row[0])}`,
+      kind: "weather-buoy",
+      longitude: Number(row[1]),
+      latitude: Number(row[2]),
+      observedAt,
+      windSpeedKnots: numeric(row[4]),
+      waveHeight: numeric(row[5]),
+      wavePeriod: numeric(row[6]),
+      seaTemperature: numeric(row[7])
+    }];
+  });
+
+export const COASTAL_MARINE_SOURCES = Object.freeze([
+  {
+    dataset: "smartbay_metbuoy",
+    name: "SmartBay Met Buoy",
+    variables: ["time", "latitude", "longitude", "wind_speed"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: null, wavePeriod: null, seaTemperature: null
+    })
+  },
+  {
+    dataset: "sentinel_lehanagh",
+    name: "Lehanagh Pool Observatory",
+    variables: ["time", "latitude", "longitude", "Wind_Speed", "SBE_Temp_Avg"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: null, wavePeriod: null, seaTemperature: numeric(row[4])
+    })
+  },
+  {
+    dataset: "compass_mace_head",
+    name: "Mace Head Observatory",
+    variables: ["time", "latitude", "longitude", "wind_speed", "sbe_temp_avg", "SignificantWaveHeight", "MeanWavePeriod_Tm02"],
+    map: (row) => ({
+      observedAt: String(row[0]), latitude: Number(row[1]), longitude: Number(row[2]),
+      windSpeedKnots: numeric(row[3]) === null ? null : numeric(row[3]) * 1.94384,
+      waveHeight: numeric(row[5]), wavePeriod: numeric(row[6]), seaTemperature: numeric(row[4])
+    })
+  }
+]);
+
+export const parseCoastalObservatoryRow = (source, row, now = Date.now(), maxAgeMs = 6 * 60 * 60 * 1000) => {
+  if (!row) return null;
+  const reading = source.map(row);
+  const timestamp = Date.parse(reading.observedAt);
+  const age = now - timestamp;
+  if (!Number.isFinite(timestamp) || age < 0 || age >= maxAgeMs) return null;
+  return { id: source.dataset, name: source.name, kind: "coastal-observatory", ...reading };
+};
 
 export const classifyTideTrend = (samples) => {
   const valid = samples.flatMap((sample) => {

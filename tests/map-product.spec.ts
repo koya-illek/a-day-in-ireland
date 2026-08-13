@@ -448,9 +448,9 @@ test("initial live hydration keeps visitors at the top of the page", async ({ pa
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.locator(".workspace-facts")).toContainText("12");
-  await expect(page.locator(".hero-sentence")).toContainText("12 trains");
-  await expect(page.locator(".workspace-facts")).toBeHidden();
+  await expect(page.locator(".pulse-card.trains")).toContainText("12");
+  await expect(page.locator(".hero-sentence")).toBeVisible();
+  await expect(page.locator(".hero-sentence")).not.toContainText("12 trains");
   await expect.poll(() => page.locator("#live-map").evaluate((element) => element.getBoundingClientRect().top)).toBeLessThanOrEqual(460);
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
   await expect(page.getByRole("heading", { name: "Ireland now." })).toBeVisible();

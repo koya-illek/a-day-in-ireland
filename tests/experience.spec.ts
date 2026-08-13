@@ -438,6 +438,37 @@ test("renders the living map and live observations", async ({ page }) => {
   await expect(
     page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ })
   ).toBeVisible();
+  const irishDateParts = (date: Date) => {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-IE", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: "Europe/Dublin"
+      }).formatToParts(date).flatMap((part) => part.type === "literal" ? [] : [[part.type, part.value]])
+    );
+    const hour = String(Number.parseInt(String(parts.hour ?? "0"), 10) % 24).padStart(2, "0");
+    return {
+      weekday: String(parts.weekday ?? ""),
+      day: String(parts.day ?? ""),
+      month: String(parts.month ?? ""),
+      clock: `${hour}:${String(parts.minute ?? "00").padStart(2, "0")}`
+    };
+  };
+  await expect.poll(async () => {
+    const { weekday, day, month, clock } = irishDateParts(new Date());
+    const text = await page.locator(".workspace-heading .hero-sentence").textContent() ?? "";
+    return text.includes(`${weekday} ${day} ${month}, ${clock} Irish time.`);
+  }).toBe(true);
+  await expect.poll(async () => {
+    const { clock } = irishDateParts(new Date());
+    const text = await page.locator(".workspace-heading .moment-time").textContent() ?? "";
+    return text.includes(`${clock} Irish time`);
+  }).toBe(true);
+  await expect(page.locator(".workspace-heading .moment-time")).toBeVisible();
   await expect(page.locator("body")).not.toHaveCSS("overflow-x", "scroll");
 });
 
@@ -479,7 +510,7 @@ test("default island context stays compact until a place is selected", async ({ 
 
   const place = page.locator(".place-context");
   await expect(place).toHaveClass(/place-context-compact/);
-  await expect(place.getByRole("heading", { name: "Personalise this view" })).toBeVisible();
+  await expect(place.getByRole("heading", { name: "What’s it like near you?" })).toBeVisible();
   await expect(place.locator(".place-observations")).toHaveCount(0);
   await expect(place.locator("#place-message")).toContainText("GPS coordinates are never stored or shared");
 
@@ -1929,15 +1960,8 @@ test("sea context distinguishes weather buoys from coastal observatories", async
     })
   }));
   await page.goto("/");
-  if (test.info().project.name === "desktop") {
-    const marineContext = page.locator(".hero-fact.sea");
-    await expect(marineContext).toContainText("marine sites");
-    await expect(marineContext).toContainText("2");
-    await marineContext.click();
-    await expect(page.locator(".map-notice > strong")).toHaveText("Marine conditions");
-  } else {
-    await enableExploreLayer(page, /Sea conditions/);
-  }
+  await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
+  await expect(page.locator(".map-feedback")).toContainText("Water view shown");
   await expect(page.locator(".buoy")).toHaveCount(2);
   await expect(page.getByRole("button", { name: /Test weather buoy, weather buoy/ })).toBeVisible();
   await page.getByRole("button", { name: /Test coastal observatory, coastal observatory/ }).click();

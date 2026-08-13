@@ -14,26 +14,17 @@ import {
   eirGridChartUrl,
   irishGridToLonLat,
   numeric,
+  parseWeatherBuoyRows,
   tideQueryWindow,
+  weatherBuoyQuery,
   EIRGRID_HISTORY_BODY_LIMIT
 } from "./live-normalize.js";
+import { WEATHER_STATIONS, matchesWeatherStationIdentity } from "./weather-stations.js";
 
 export const HISTORY_SOURCE_KEYS = [
   "weather", "warnings", "marine", "rivers", "tides", "grid",
   "air_measured", "air_modelled", "bathing", "earthquakes",
   "rail", "transit", "radar", "satellite", "iss", "aurora"
-];
-
-const WEATHER_STATIONS = [
-  { id: "malin-head", endpoint: "malin-head", providerName: "Malin Head", name: "Malin Head", latitude: 55.371, longitude: -7.339 },
-  { id: "finner", endpoint: "finner", providerName: "Finner", name: "Finner", latitude: 54.494, longitude: -8.243 },
-  { id: "belmullet", endpoint: "belmullet", providerName: "Belmullet", name: "Belmullet", latitude: 54.228, longitude: -10.007 },
-  { id: "athenry", endpoint: "athenry", providerName: "Athenry", name: "Athenry", latitude: 53.289, longitude: -8.786 },
-  { id: "dublin-airport", endpoint: "dublin", providerName: "Dublin Airport", name: "Dublin", latitude: 53.428, longitude: -6.241 },
-  { id: "gurteen", endpoint: "gurteen", providerName: "Gurteen", name: "Gurteen", latitude: 53.034, longitude: -8.005 },
-  { id: "valentia", endpoint: "valentia", providerName: "Valentia", name: "Valentia", latitude: 51.938, longitude: -10.241 },
-  { id: "cork-airport", endpoint: "cork", providerName: "Cork", name: "Cork", latitude: 51.847, longitude: -8.486 },
-  { id: "johnstown-castle", endpoint: "johnstown-castle", providerName: "Johnstown Castle", name: "Wexford", latitude: 52.298, longitude: -6.497 }
 ];
 
 const validTimestamp = (value) => {
@@ -113,7 +104,7 @@ export async function collectWeather(fetcher, now) {
     try {
       const rows = await fetchJson(fetcher, `https://prodapi.metweb.ie/observations/${definition.endpoint}/today`, 300);
       const stationRows = (Array.isArray(rows) ? rows : []).filter((row) =>
-        String(row?.name ?? "").trim().toLocaleLowerCase("en-IE") === definition.providerName.toLocaleLowerCase("en-IE")
+        matchesWeatherStationIdentity(definition, row?.name)
       ).map((row) => ({
         row,
         observedAt: parseIrelandLocalTimestamp(String(row.date ?? ""), String(row.reportTime ?? ""), now)
@@ -208,18 +199,8 @@ export async function collectWarnings(fetcher, now) {
 export async function collectMarine(fetcher, now) {
   const fetchedAt = new Date(now).toISOString();
   return collect("marine", async () => {
-    const since = new Date(now - 48 * 60 * 60_000).toISOString().slice(0, 10);
-    const query = `station_id,longitude,latitude,time,WindSpeed,WaveHeight,WavePeriod,SeaTemperature&time>=${since}T00:00:00Z&orderByMax("station_id,time")`;
-    const body = await fetchJson(fetcher, `https://erddap.marine.ie/erddap/tabledap/IWBNetwork.json?${encodeURI(query)}`, 900);
-    const readings = (body.table?.rows ?? []).flatMap((row) => {
-      const observedAt = String(row[3] ?? "");
-      return fresh(observedAt, 6 * 60 * 60_000, now) ? [{
-        id: String(row[0]), name: `Offshore buoy ${String(row[0])}`, kind: "weather-buoy",
-        longitude: Number(row[1]), latitude: Number(row[2]), observedAt,
-        windSpeedKnots: numeric(row[4]), waveHeight: numeric(row[5]),
-        wavePeriod: numeric(row[6]), seaTemperature: numeric(row[7])
-      }] : [];
-    }).sort((a, b) => a.id.localeCompare(b.id));
+    const body = await fetchJson(fetcher, weatherBuoyQuery(now).url, 900);
+    const readings = parseWeatherBuoyRows(body.table?.rows, now).sort((a, b) => a.id.localeCompare(b.id));
     if (!readings.length) throw new Error("no-fresh-observations");
     return {
       envelope: source({ status: "partial", data: readings, fetchedAt, latestObservedAt: latestObservedAt(readings) }),

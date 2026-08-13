@@ -118,13 +118,48 @@ export type NearbyReading<T> = {
   distanceKm: number;
 };
 
-export const formatTime = (date: Date) => Number.isFinite(date.getTime())
-  ? new Intl.DateTimeFormat("en-IE", {
+const IRELAND_TIME_ZONE = "Europe/Dublin";
+
+export const irelandClockParts = (date: Date) => {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-IE", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-      timeZone: "Europe/Dublin"
-    }).format(date)
+      timeZone: IRELAND_TIME_ZONE
+    }).formatToParts(date).flatMap((part) => part.type === "literal" ? [] : [[part.type, part.value]])
+  );
+  const hour = Number.parseInt(String(parts.hour ?? "0"), 10) % 24;
+  return {
+    weekday: String(parts.weekday ?? ""),
+    day: String(parts.day ?? ""),
+    month: String(parts.month ?? ""),
+    hour,
+    minute: String(parts.minute ?? "00").padStart(2, "0"),
+    clock: `${String(hour).padStart(2, "0")}:${String(parts.minute ?? "00").padStart(2, "0")}`
+  };
+};
+
+export const irelandEditorialMoment = (date: Date) => {
+  if (!Number.isFinite(date.getTime())) return "Irish time is unavailable.";
+  const { weekday, day, month, hour, clock } = irelandClockParts(date);
+  const period = hour < 6
+    ? "Before dawn"
+    : hour < 12
+      ? "Morning"
+      : hour < 17
+        ? "Afternoon"
+        : hour < 21
+          ? "Evening"
+          : "Night";
+  return `${weekday} ${day} ${month}, ${clock} Irish time. ${period} across Ireland.`;
+};
+
+export const formatTime = (date: Date) => Number.isFinite(date.getTime())
+  ? irelandClockParts(date).clock
   : "Unavailable";
 
 export const orderedTideEvents = (tide: TideReading) => [
