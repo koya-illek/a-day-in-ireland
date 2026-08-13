@@ -573,6 +573,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [mapDimensions, setMapDimensions] = useState({ width: 1000, height: 900 });
   const [mapFeedback, setMapFeedback] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState(() => new Date(initialSnapshot.generatedAt));
+  const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
   const liveSnapshotRef = useRef(initialSnapshot);
   const refreshAllRef = useRef<() => Promise<void>>(async () => undefined);
   const historyRequestRef = useRef<AbortController | null>(null);
@@ -1208,13 +1209,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     const focusedMarker = focusedMarkerRef.current;
     if (!focusedMarker || !markerIds.includes(focusedMarker.id)) return;
 
-    const activeElement = document.activeElement;
-    if (activeElement instanceof Element && activeElement.isConnected && activeElement.closest("[data-map-marker]")) return;
-    if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) return;
+    // A station keeps the same logical marker ID when its rendered element
+    // changes between the combined weather marker and the wind-only marker.
+    // Focus elsewhere clears focusedMarkerRef through the document focusin
+    // listener, so only restore focus when React has actually removed the
+    // element that held it.
+    if (focusedMarker.element.isConnected) return;
 
     const replacement = [...(mapRef.current?.querySelectorAll<SVGGElement>("[data-map-marker]") ?? [])]
       .find((candidate) => candidate.getAttribute("data-marker-id") === focusedMarker.id);
-    if (!replacement || replacement === focusedMarker.element || !replacement.isConnected) return;
+    if (!replacement || !replacement.isConnected) return;
     replacement.focus({ preventScroll: true });
   }, [markerIds]);
 
@@ -1921,12 +1925,28 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       previousViewportTop < window.innerHeight &&
       previousViewportTop + bounds.height > 0;
     const userHasLeftPageTop = window.scrollY > 1;
-    const delta = requestedViewportTop !== null
-      ? bounds.top - requestedViewportTop
-      : wasVisible && userHasLeftPageTop && previousDocumentTop !== null
-        ? documentTop - previousDocumentTop
-        : 0;
-    if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+    const targetViewportTop = requestedViewportTop !== null
+      ? requestedViewportTop
+      : wasVisible && userHasLeftPageTop
+        ? previousViewportTop
+        : null;
+    if (targetViewportTop === null) return;
+
+    const restoreAnchor = () => {
+      if (!map.isConnected) return;
+      const delta = map.getBoundingClientRect().top - targetViewportTop;
+      if (Math.abs(delta) > .5) window.scrollBy({ top: delta, left: 0, behavior: "auto" });
+    };
+    restoreAnchor();
+    let frame = 0;
+    let remainingFrames = 4;
+    const settleAnchor = () => {
+      restoreAnchor();
+      remainingFrames -= 1;
+      if (remainingFrames > 0) frame = window.requestAnimationFrame(settleAnchor);
+    };
+    frame = window.requestAnimationFrame(settleAnchor);
+    return () => window.cancelAnimationFrame(frame);
   }, [mapAnchorLayoutKey]);
 
   const activateNearestMapMarker = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
@@ -3456,7 +3476,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       <ExplorePanel
         open={panelOpen}
-        onOpenChange={(open) => setPanelOpen(open)}
+        onOpenChange={setExplorePanelOpen}
         openerRef={panelOpenerRef}
         timeMode={timeMode}
         activePreset={activePreset}
