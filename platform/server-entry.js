@@ -183,6 +183,8 @@ export const acquireRiverRaw = async (env, fetcher = fetch) => {
     detail = String(error?.message ?? "OPW error response was unreadable");
   }
   if (env?.EDGE_RUNTIME === "cloudflare") {
+    // Temporary fetch path: waterlevel.ie currently rejects ordinary Worker HTTPS.
+    // Browser Run is not a second dataset; provenance stays labelled fallback.
     try {
       const body = await fetchRiversThroughBrowser(env);
       const features = Array.isArray(body?.features) ? body.features : [];

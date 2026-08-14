@@ -23,17 +23,18 @@ const latestTimestamp = (items: Array<{ observedAt: string | null }>) => items
   .sort((first, second) => Date.parse(first) - Date.parse(second))
   .at(-1) ?? null;
 
-const contextStatuses = (snapshot: LiveSnapshot): ContextSourceStatus[] =>
-  Object.entries(snapshot.contextStatus).map(([name, status]) =>
-    name === "satellite" && status === "fallback" ? "live" : status
-  );
+const healthyServiceStatus = (status: ObservationSourceStatus | ContextSourceStatus) =>
+  status === "live" || status === "partial" || status === "fallback";
+
+const ignoredAggregateStatus = (status: ObservationSourceStatus | ContextSourceStatus) =>
+  status === "unavailable" || status === "credential-required";
 
 const providerStatuses = (snapshot: LiveSnapshot) => [
   snapshot.sourceStatus,
   snapshot.sourceProvenance?.trains.status ?? "unavailable",
   snapshot.sourceProvenance?.rivers.status ?? "unavailable",
   ...(snapshot.transitStatus === "credential-required" ? [] : [snapshot.transitStatus]),
-  ...contextStatuses(snapshot)
+  ...Object.values(snapshot.contextStatus)
 ] as Array<ObservationSourceStatus | ContextSourceStatus>;
 
 export function getServiceDisplayState(
@@ -74,7 +75,9 @@ export function getServiceDisplayState(
       now
     ));
   if (staleObservation) return "stale";
-  if (statuses.some((status) => status !== "live")) return "degraded";
+  if (statuses.some((status) => !healthyServiceStatus(status) && !ignoredAggregateStatus(status))) {
+    return "degraded";
+  }
   return "live";
 }
 

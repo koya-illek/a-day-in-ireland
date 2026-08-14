@@ -2,10 +2,8 @@
 
 import {
   type MouseEvent as ReactMouseEvent,
-  type PointerEvent as ReactPointerEvent,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type WheelEvent as ReactWheelEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -68,15 +66,18 @@ import {
   type Selection,
   type TimeMode,
   MOVEMENT_DRILL_THRESHOLD,
+  NEARBY_RADIUS_KM,
   aqiLabel,
+  buildHeroFacts,
+  buildHeroSentences,
   formatAge,
+  formatCount,
   formatDate,
-  formatDistance,
   formatTime,
-  irelandEditorialMoment,
   movementItemIdentity,
   movementMarkerId,
-  statusText
+  pluralise,
+  weatherNarrative
 } from "./experience-model";
 import {
   MapMarker,
@@ -97,6 +98,10 @@ import { ExplorePanel } from "./ExplorePanel";
 import { OfficialNotices } from "./OfficialNotices";
 import { WeatherTimeline } from "./WeatherTimeline";
 import { MapCanvas } from "./MapCanvas";
+import { WorkspaceHeading } from "./WorkspaceHeading";
+import { PlaceContext } from "./PlaceContext";
+import { FreshnessStrip } from "./FreshnessStrip";
+import { constrainMapView, useMapGestures } from "./use-map-gestures";
 
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
@@ -198,12 +203,6 @@ const PRESET_LAYERS: Record<Exclude<Preset, "custom">, Layer[]> = {
   ]
 };
 
-const NEARBY_RADIUS_KM = {
-  weather: 50,
-  river: 30,
-  air: 60
-} as const;
-
 const LAYER_GROUPS: LayerGroup[] = [
   {
     id: "weather",
@@ -267,11 +266,6 @@ const LAYER_GROUPS: LayerGroup[] = [
   }
 ];
 
-
-const formatCount = (value: number) => new Intl.NumberFormat("en-IE").format(value);
-
-const pluralise = (value: number, singular: string, plural = `${singular}s`) =>
-  value === 1 ? singular : plural;
 
 const irelandHour = (date: Date) =>
   Number.parseInt(
@@ -337,21 +331,6 @@ function authoritativeDayPhase(solar: NonNullable<LiveSnapshot["solar"]> | null,
   }
   if (Number.isFinite(dusk) && timestamp >= dusk) return "dusk";
   return "day";
-}
-
-function weatherNarrative(snapshot: LiveSnapshot) {
-  const currentWeather = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
-  const warm = snapshot.summary.warmest;
-  const rain = snapshot.summary.wettest;
-  return !currentWeather
-    ? snapshot.sourceStatus === "stale"
-      ? "The most recent weather snapshot is cached, so current national conditions are not stated."
-      : "Current weather observations are unavailable."
-    : !warm && !rain
-    ? "Current weather observations are unavailable."
-    : rain && (rain.rainfall ?? 0) > 0
-    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°.`
-    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°, and none of the reporting stations have measured rain.`;
 }
 
 function distanceKm(first: Pick<Place, "lat" | "lon">, second: Pick<Place, "lat" | "lon">) {
@@ -434,23 +413,6 @@ function isDataStale(observedAt: string | null | undefined, maxAgeMs: number, no
   return age < 0 || age > maxAgeMs;
 }
 
-function formatLocalObservation(
-  provider: string,
-  item: { name: string; observedAt: string | null },
-  distanceKm: number,
-  now: Date,
-  historical = false
-) {
-  const timing = historical
-    ? item.observedAt
-      ? `observed ${formatIrelandHistoryTime(item.observedAt)}`
-      : "observation time unavailable"
-    : formatAge(item.observedAt, now);
-  return `${provider} · ${item.name} · ${formatDistance(distanceKm)} · ${timing}`;
-}
-
-
-
 const availableCount = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0
   ? value
   : null;
@@ -520,7 +482,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
-  const [mapView, setMapView] = useState({ scale: 1, x: 0, y: 0 });
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
   const [selectedPlaceId, setSelectedPlaceId] = useState(DEFAULT_PLACE_ID);
   const [ephemeralPlace, setEphemeralPlace] = useState<Place | null>(null);
@@ -543,15 +504,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     : canonicalHistoryAt(new URLSearchParams(window.location.search).get("at")));
   const activeRadarFrameKeyRef = useRef<string | null>(null);
   const mapRef = useRef<SVGSVGElement | null>(null);
+  const {
+    mapView,
+    setMapView,
+    zoomMapAround,
+    handleMapPointerDown,
+    handleMapPointerMove,
+    handleMapPointerEnd,
+    handleMapWheel,
+    suppressClickAfterPan
+  } = useMapGestures(mapRef);
   const mapSectionRef = useRef<HTMLElement | null>(null);
   const pendingMapAnchorRef = useRef<number | null>(null);
   const mapDocumentTopRef = useRef<number | null>(null);
   const markerOpenerRef = useRef<SVGElement | null>(null);
   const focusedMarkerRef = useRef<{ id: string; element: SVGGElement } | null>(null);
-  const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
-  const mapGestureRef = useRef<{ center: { x: number; y: number }; distance: number } | null>(null);
-  const mapPointerOriginRef = useRef<{ x: number; y: number } | null>(null);
-  const mapDidPanRef = useRef(false);
   const panelOpenerRef = useRef<HTMLButtonElement | null>(null);
   const experienceRef = useRef<HTMLElement | null>(null);
   const snapshot = timeMode === "past"
@@ -1541,100 +1508,30 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       : gridNotableCurrent && gridWindShare !== null
         ? `Wind is supplying ${gridWindShare.toFixed(0)}% of all-island demand.`
         : "Live observations are settling across the island.";
-  const heroSentence = timeMode === "past"
-    ? historyState.status === "loading"
-      ? "Loading stored observations for the selected time…"
-      : historyState.status === "error"
-        ? "Historical conditions could not be loaded. Live data is not substituted."
-        : historyState.status === "gap"
-          ? "No stored record exists at or before the selected time."
-          : `${irelandEditorialMoment(now)} ${isDailyHistorySummary
-            ? `This stored ${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440)} keeps summary values and recorded gaps, not a reconstructed point map.`
-            : "This is the stored record for the selected time."}`
-    : isConnectingWithoutSnapshot
-      ? "Connecting to live observations across the island…"
-      : servicesRefreshing
-        ? "Loading fresh observations across the island…"
-        : serviceDisplayState === "offline"
-          ? `Offline. Showing the last saved observations where available; last success ${lastSuccessLabel}.`
-          : serviceDisplayState === "cached"
-            ? `A refresh failed. Cached observations are labelled and last succeeded ${lastSuccessLabel}.`
-            : serviceDisplayState === "unavailable"
-              ? "Live services are unavailable, so national conditions cannot be assessed."
-              : `${irelandEditorialMoment(now)} ${liveLeadFact}`;
-  const heroSecondary = timeMode === "past"
-    ? `Stored observations from ${lastSuccessLabel}. They are separated from live feeds and keep provider timestamps and recorded gaps.`
-    : weatherNotableCurrent && windiestStation?.windSpeed != null
-      ? `Strongest observed wind ${windiestStation.windSpeed} km/h at ${windiestStation.name}.`
-      : weatherDisplayStatus === "stale"
-        ? "Weather observations are cached and kept separate from the live story."
-        : "Weather observations are currently unavailable, so they are not used to frame the first impression.";
-  const heroFacts = [
-    !warningsUnavailable
-      ? {
-          key: "warnings",
-          family: "notices",
-          label: activeNoticeCount > 0 ? "official notices" : upcomingNoticeCount > 0 ? "notice outlook" : "official notices",
-          value: activeNoticeCount > 0
-            ? formatCount(activeNoticeCount)
-            : upcomingNoticeCount > 0
-              ? formatCount(upcomingNoticeCount)
-              : "Clear",
-          detail: activeNoticeCount > 0
-            ? `${activeNoticeCount === 1 ? "Notice" : "Notices"} now in effect`
-            : upcomingNoticeCount > 0
-              ? `${upcomingNoticeCount === 1 ? "Notice" : "Notices"} due later`
-              : "No current or upcoming notices",
-          onClick: () => document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" })
-        }
-      : null,
-    weatherNotableCurrent && warmestStation?.temperature != null
-      ? {
-          key: "temperature",
-          family: "weather",
-          label: "temperature",
-          value: `${warmestStation.temperature}°`,
-          detail: `Warmest at ${warmestStation.name}`,
-          onClick: () => focusContext("weather")
-        }
-      : null,
-    weatherNotableCurrent
-      ? wettestStation && (wettestStation.rainfall ?? 0) > 0
-        ? {
-            key: "rain",
-            family: "weather",
-            label: "rain",
-            value: `${wettestStation.rainfall?.toFixed(1)} mm`,
-            detail: `Observed around ${wettestStation.name}`,
-            onClick: () => focusContext("weather")
-          }
-        : {
-            key: "rain",
-            family: "weather",
-            label: "rain",
-            value: "None",
-            detail: "No rain measured at reporting stations",
-            onClick: () => focusContext("weather")
-          }
-      : null,
-    weatherNotableCurrent && windiestStation?.windSpeed != null
-      ? {
-          key: "wind",
-          family: "weather",
-          label: "wind",
-          value: `${windiestStation.windSpeed} km/h`,
-          detail: `Strongest at ${windiestStation.name}`,
-          onClick: () => focusContext("wind")
-        }
-      : null
-  ].filter((fact): fact is {
-    key: string;
-    family: string;
-    label: string;
-    value: string;
-    detail: string;
-    onClick: () => void;
-  } => fact !== null);
+  const { heroSentence, heroSecondary } = buildHeroSentences({
+    timeMode,
+    historyStatus: historyState.status,
+    isDailyHistorySummary,
+    historyResolutionLabel: historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 1440),
+    now,
+    isConnectingWithoutSnapshot,
+    servicesRefreshing,
+    serviceDisplayState,
+    lastSuccessLabel,
+    liveLeadFact,
+    weatherNotableCurrent,
+    windiestStation,
+    weatherDisplayStatus
+  });
+  const heroFacts = buildHeroFacts({
+    warningsUnavailable,
+    activeNoticeCount,
+    upcomingNoticeCount,
+    weatherNotableCurrent,
+    warmestStation,
+    wettestStation,
+    windiestStation
+  });
   const mapAnchorLayoutKey = [
     activePreset,
     [...layers].sort().join(","),
@@ -1642,25 +1539,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     heroSecondary,
     heroFacts.map((fact) => `${fact.key}:${fact.value}:${fact.detail}`).join("|")
   ].join("::");
-  const constrainMapView = useCallback((scale: number, x: number, y: number) => {
-    const nextScale = Math.min(4, Math.max(1, scale));
-    return {
-      scale: nextScale,
-      x: Math.min(0, Math.max(1000 * (1 - nextScale), x)),
-      y: Math.min(0, Math.max(900 * (1 - nextScale), y))
-    };
-  }, []);
-  const zoomMapAround = useCallback((factor: number, point = { x: 500, y: 450 }) => {
-    setMapView((current) => {
-      const scale = Math.min(4, Math.max(1, current.scale * factor));
-      const ratio = scale / current.scale;
-      return constrainMapView(
-        scale,
-        point.x - (point.x - current.x) * ratio,
-        point.y - (point.y - current.y) * ratio
-      );
-    });
-  }, [constrainMapView]);
   const activateMovementStack = useCallback((stack: MovementStack) => {
     setActiveMarkerId(stack.key);
     if (stack.items.length > MOVEMENT_DRILL_THRESHOLD && mapView.scale < 4) {
@@ -1676,15 +1554,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     markerOpenerRef.current = [...(mapRef.current?.querySelectorAll<SVGElement>("[data-map-marker]") ?? [])]
       .find((candidate) => candidate.getAttribute("data-marker-id") === stack.key) ?? markerOpenerRef.current;
     setSelected({ type: "movement-stack", items: stack.items, index: 0 });
-  }, [constrainMapView, mapView.scale]);
-  const mapPointFromClient = useCallback((clientX: number, clientY: number) => {
-    const bounds = mapRef.current?.getBoundingClientRect();
-    if (!bounds) return { x: 500, y: 450 };
-    return {
-      x: (clientX - bounds.left) * 1000 / bounds.width,
-      y: (clientY - bounds.top) * 900 / bounds.height
-    };
-  }, []);
+  }, [mapView.scale, setMapView]);
   const handleMarkerFocus = useCallback((markerId: string, label: string, event: ReactFocusEvent<SVGGElement>) => {
     const index = markerIds.indexOf(markerId);
     if (index < 0) return;
@@ -1743,80 +1613,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     },
     onPointerActivate: (element) => { markerOpenerRef.current = element; }
   }), [handleMarkerFocus, handleMarkerKeyDown, rovingMarkerId]);
-  const mapGesture = useCallback(() => {
-    const points = [...mapPointersRef.current.values()];
-    if (!points.length) return null;
-    const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
-    center.x /= points.length;
-    center.y /= points.length;
-    return {
-      center,
-      distance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0
-    };
-  }, []);
-  const handleMapPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    mapDidPanRef.current = false;
-    const startedOnMarker = Boolean((event.target as Element).closest('[data-marker-pointer-target]'));
-    const point = mapPointFromClient(event.clientX, event.clientY);
-    mapPointersRef.current.set(event.pointerId, point);
-    if (!startedOnMarker) {
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // Synthetic accessibility tests do not create an active browser pointer.
-      }
-    }
-    mapGestureRef.current = mapGesture();
-    mapPointerOriginRef.current = point;
-  }, [mapGesture, mapPointFromClient]);
-  const handleMapPointerMove = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!mapPointersRef.current.has(event.pointerId)) return;
-    const point = mapPointFromClient(event.clientX, event.clientY);
-    mapPointersRef.current.set(event.pointerId, point);
-    const previous = mapGestureRef.current;
-    const next = mapGesture();
-    if (!previous || !next) return;
-    if (mapPointerOriginRef.current &&
-      Math.hypot(point.x - mapPointerOriginRef.current.x, point.y - mapPointerOriginRef.current.y) > 3) {
-      mapDidPanRef.current = true;
-    }
-    setMapView((current) => {
-      if (mapPointersRef.current.size > 1 && previous.distance > 0 && next.distance > 0) {
-        const scale = Math.min(4, Math.max(1, current.scale * next.distance / previous.distance));
-        return constrainMapView(
-          scale,
-          next.center.x - (previous.center.x - current.x) * scale / current.scale,
-          next.center.y - (previous.center.y - current.y) * scale / current.scale
-        );
-      }
-      return constrainMapView(
-        current.scale,
-        current.x + next.center.x - previous.center.x,
-        current.y + next.center.y - previous.center.y
-      );
-    });
-    mapGestureRef.current = next;
-  }, [constrainMapView, mapGesture, mapPointFromClient]);
-  const handleMapPointerEnd = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    mapPointersRef.current.delete(event.pointerId);
-    try {
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // The pointer may already have been released by the browser.
-    }
-    mapGestureRef.current = mapGesture();
-    if (!mapPointersRef.current.size) mapPointerOriginRef.current = null;
-  }, [mapGesture]);
-  const handleMapWheel = useCallback((event: ReactWheelEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    zoomMapAround(event.deltaY < 0 ? 1.22 : 1 / 1.22, mapPointFromClient(event.clientX, event.clientY));
-  }, [mapPointFromClient, zoomMapAround]);
-  const suppressClickAfterPan = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
-    if (!mapDidPanRef.current) return;
-    event.preventDefault();
-    event.stopPropagation();
-    mapDidPanRef.current = false;
-  }, []);
   const rememberVisibleMapAnchor = useCallback(() => {
     const map = mapSectionRef.current;
     if (!map) return;
@@ -1949,7 +1745,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       void fetchHistoryRange().then(setHistoryRange).catch(() => undefined);
     }
     setViewHydrated(true);
-  }, [constrainMapView, loadHistoryAt, projection]);
+  }, [constrainMapView, loadHistoryAt, projection, setMapView]);
 
   useEffect(() => {
     if (!viewHydrated) return;
@@ -2034,7 +1830,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       trains: {
         title: railNotableCurrent ? "Live rail positions" : trainsCached ? "Cached rail positions" : "Rail positions unavailable",
         detail: railNotableCurrent
-          ? runningTrainCount === null ? "Rail summary coverage is unavailable; no service count is inferred." : `${runningTrainCount} running trains and ${Math.max(0, snapshot.trains.length - runningTrainCount)} due to start. Select a train for its direction and status.`
+          ? runningTrainCount === null ? "Rail summary coverage is unavailable; no service count is inferred." : `${runningTrainCount} running trains and ${Math.max(0, snapshot.trains.length - runningTrainCount)} due to start. Times are last seen at refresh; Irish Rail XML has no per-train observation clock.`
           : trainsCached
             ? `${snapshot.trains.length} positions are retained from the last successful refresh; current rail movement cannot be assessed.`
             : "Iarnród Éireann positions are unavailable, so this view cannot determine how many trains are currently moving."
@@ -2048,7 +1844,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           : riversCached
             ? riverStationCount === null ? "Saved gauge coverage is unavailable." : `${riverStationCount} gauge readings are retained from the last successful refresh; they are not current levels.`
             : riversFallback
-              ? riverStationCount === null ? "Fallback gauge coverage is unavailable." : `${riverStationCount} readings come from the labelled fallback source; they are local levels, not flood warnings.`
+              ? riverStationCount === null ? "Fallback gauge coverage is unavailable." : `${riverStationCount} readings come from a temporary OPW fetch path (${snapshot.sourceProvenance?.rivers.fallback}); they are still OPW levels, not flood warnings.`
               : "OPW river readings are unavailable, so current levels cannot be assessed."
       },
       sea: {
@@ -2367,189 +2163,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </aside>
 
         <div className="map-workspace">
-          <div className="workspace-heading" id="ireland-now">
-            <div className="workspace-copy">
-              <p className="eyebrow">{formatDate(now)}<span className="moment-time"> · {formatTime(now)} Irish time</span></p>
-              <h1 id="moment-heading">Ireland {timeMode === "past" ? "then" : "now"}.</h1>
-              <p className="hero-sentence">{heroSentence}</p>
-              <p className="moment-summary">{heroSecondary}</p>
-            </div>
-            <div className="workspace-facts" role="group" aria-label={`${timeMode === "past" ? "Historical" : "Current"} national highlights across Ireland`}>
-              {heroFacts.length ? heroFacts.map((fact) => (
-                <button
-                  type="button"
-                  key={fact.key}
-                  className={`hero-fact ${fact.family}`}
-                  onClick={fact.onClick}
-                >
-                  <span>{fact.label}</span>
-                  <b>{fact.value}</b>
-                  <small>{fact.detail}</small>
-                </button>
-              )) : (
-                <p className="workspace-facts-empty">Awaiting fresh island-wide signals.</p>
-              )}
-            </div>
-          </div>
-
-          {(() => {
-            const placeControls = (
-              <>
-                <label htmlFor="place-select">Nearby context</label>
-                <div className="place-controls">
-                  <select id="place-select" value={selectedPlace.id} onChange={(event) => choosePlace(event.target.value)}>
-                    {selectedPlaceIsEphemeral && <option value="nearby">Your area · this session</option>}
-                    {PLACE_OPTIONS.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
-                  </select>
-                  <button type="button" className="locate-button" onClick={useMyLocation} aria-label="Use my location"><span aria-hidden="true">⌖</span> Locate</button>
-                </div>
-                <small id="place-message" aria-live="polite">{placeMessage || "Saved as a place ID; GPS coordinates are never stored or shared."}</small>
-                <small className="place-limits">{selectedPlaceIsEphemeral
-                  ? "Session-only location: nearest available readings are shown with distance; the share link remains an Ireland view."
-                  : `Nearby limits: weather ${NEARBY_RADIUS_KM.weather} km · rivers ${NEARBY_RADIUS_KM.river} km · air ${NEARBY_RADIUS_KM.air} km.`}</small>
-              </>
-            );
-            const compactNotices = timeMode !== "past" &&
-              layers.has("warnings") &&
-              !isConnectingWithoutSnapshot &&
-              !warningsUnavailable &&
-              visibleWarnings.length === 0;
-            const briefing = (
-              <>
-          <section
-            className={`place-context ${selectedPlace.id === "island" ? "island-context place-context-compact" : "local-context"}`}
-            data-place-id={selectedPlace.id}
-            aria-labelledby="my-place-heading"
-          >
-            {selectedPlace.id === "island" ? (
-              <div className="place-picker place-picker-compact">
-                <div className="place-compact-copy">
-                  <p className="eyebrow">My Place</p>
-                  <h2 id="my-place-heading">What’s it like near you?</h2>
-                  <p className="place-context-summary">Choose a place or use your location for nearby weather, river and air observations.</p>
-                </div>
-                <div className="place-compact-controls">{placeControls}</div>
-              </div>
-            ) : (
-              <>
-                <div className="place-picker">
-                  <p className="eyebrow">My Place</p>
-                  <h2 id="my-place-heading">{selectedPlace.name}</h2>
-                  <p className="place-context-summary">{selectedPlaceIsEphemeral
-                    ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."
-                    : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}</p>
-                  {placeControls}
-                </div>
-                <div
-                  className="place-observations"
-                  aria-label={timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}
-                >
-                  <p className="eyebrow">{timeMode === "past" ? `Historical local observations near ${selectedPlace.name}` : `Local observations near ${selectedPlace.name}`}</p>
-                  <dl>
-                    <div>
-                      <dt>Temperature</dt>
-                      <dd>{localStation?.item.temperature ?? "—"}°</dd>
-                      <small>{localStation
-                        ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
-                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point weather observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved weather is not used as a current nearby condition." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
-                    </div>
-                    <div>
-                      <dt>Rain</dt>
-                      <dd>{localStation?.item.rainfall == null ? "—" : `${localStation.item.rainfall} mm`}</dd>
-                      <small>{localStation
-                        ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
-                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} rain observations…` : timeMode === "past" ? historyGapForFocus(historyGaps, "weather")?.detail ?? `No point rain observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved rain observations are not used as current nearby rainfall." : snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial" ? selectedPlaceIsEphemeral ? "No current rain observation is available." : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.` : "Rain observations are unavailable; nearby rainfall cannot be assessed."}</small>
-                    </div>
-                    <div>
-                      <dt>River</dt>
-                      <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "—"}</dd>
-                      <small>{localRiver
-                        ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now, timeMode === "past")
-                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges…` : timeMode === "past" ? historyGapForFocus(historyGaps, "rivers")?.detail ?? `No point river observation was retained within ${NEARBY_RADIUS_KM.river} km for this historical record.` : riversLive || riversPartial || riversFallback ? selectedPlaceIsEphemeral ? "No current river observation is available." : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.` : riversCached ? "The river feed is unavailable; cached readings are not used as current local conditions." : "River readings are unavailable; nearby levels cannot be assessed."}</small>
-                    </div>
-                    <div>
-                      <dt>Air</dt>
-                      <dd>{localAir?.item.europeanAqi == null ? "—" : `AQI ${localAir.item.europeanAqi}`}</dd>
-                      <small>{localAir
-                        ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now, timeMode === "past")
-                        : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} air-quality sources…` : timeMode === "past" ? historyGapForFocus(historyGaps, "air")?.detail ?? `No point air-quality observation was retained within ${NEARBY_RADIUS_KM.air} km for this historical record.` : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback" ? selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>
-                    </div>
-                  </dl>
-                </div>
-              </>
-            )}
-          </section>
-
-          <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
-          <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
-
-          <div className="freshness-strip" role="status" aria-label="Data freshness and provider status">
-            {timeMode === "past" ? (
-              <>
-                <button type="button" className="refresh-data-button" disabled aria-describedby="connection-summary">Live refresh paused</button>
-                <span id="connection-summary" className={`freshness-chip connection-chip ${historyState.status}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState}>
-                  <i aria-hidden="true" /><b>Historical record</b><small>{historyState.status === "loading" ? "Loading stored conditions" : historyState.status === "ready" ? `${historyResolutionLabel(historyState.envelope?.resolutionMinutes ?? 15)} · captured ${lastSuccessLabel} · ${historyGaps.length} recorded gap${historyGaps.length === 1 ? "" : "s"}` : "No stored record is available for the selected time"}{connectionStatus === "offline" ? " · readable offline once loaded" : ""}</small>
-                </span>
-                <details className="freshness-details">
-                  <summary>Data details</summary>
-                  <div className="freshness-detail-grid">
-                    <span className="freshness-chip cached"><i aria-hidden="true" /><b>Live separation</b><small>Live feeds remain paused and are never substituted into this historical view.</small></span>
-                  </div>
-                </details>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="retry-live-data refresh-data-button"
-                  onClick={() => void refreshAllRef.current()}
-                  disabled={connectionStatus === "offline" || servicesRefreshing}
-                  aria-describedby="connection-summary"
-                >
-                  {servicesRefreshing ? "Refreshing…" : "Refresh live data"}
-                </button>
-                <span id="connection-summary" className={`freshness-chip connection-chip ${serviceDisplayState}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState}>
-                  <i aria-hidden="true" /><b>Connection</b><small>{connectionStatus === "offline" ? `Offline · live refresh unavailable${snapshot.lastSuccessAt ? " · saved snapshot" : ""}` : serviceDisplayState === "connecting" ? "Checking for newer data" : `Connected · ${connectionLabel}`} · checked {formatTime(lastCheckedAt)} · last success {lastSuccessLabel}</small>
-                </span>
-                <details className="freshness-details">
-                  <summary>Data details</summary>
-                  <div className="freshness-detail-grid">
-                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : weatherDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Weather provider connecting" : `Weather provider ${statusText(weatherDisplayStatus)}; latest national observation ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${!online ? "; offline saved snapshot" : weatherStale && snapshot.stations.length > 0 ? "; observation data is stale" : ""}`}>
-                      <i aria-hidden="true" /><b>Weather provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(weatherDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null, now)}${online && weatherStale && snapshot.stations.length > 0 ? " · stale" : ""}`}</small>
-                    </span>
-                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : trainDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "Rail provider connecting" : `Rail provider ${statusText(trainDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${!online ? "; offline saved snapshot" : transitStale && snapshot.trains.length > 0 ? "; positions are stale" : ""}`}>
-                      <i aria-hidden="true" /><b>Rail provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(trainDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.trains.latestObservedAt, now)}${online && transitStale && snapshot.trains.length > 0 ? " · stale" : ""}`}</small>
-                    </span>
-                    <span className={`freshness-chip ${isConnectingWithoutSnapshot ? "connecting" : riverDisplayStatus}`} aria-label={isConnectingWithoutSnapshot ? "River provider connecting" : `River provider ${statusText(riverDisplayStatus)}; latest observation ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${!online ? "; offline saved snapshot" : riverDataStale && snapshot.rivers.length > 0 ? "; readings are stale" : ""}`}>
-                      <i aria-hidden="true" /><b>River provider</b><small>{isConnectingWithoutSnapshot ? "Connecting…" : `Provider: ${statusText(riverDisplayStatus)}${!online ? " (offline)" : ""} · observed ${formatAge(snapshot.sourceProvenance?.rivers.latestObservedAt, now)}${online && riverDataStale && snapshot.rivers.length > 0 ? " · stale" : ""}`}</small>
-                    </span>
-                  </div>
-                </details>
-              </>
-            )}
-          </div>
-
-          <OfficialNotices
-            timeMode={timeMode}
-            compact={compactNotices}
-            layers={layers}
-            visibleWarnings={visibleWarnings}
-            activeWarning={activeWarning}
-            warningsUnavailable={warningsUnavailable}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            online={online}
-            snapshot={snapshot}
-            now={now}
-            lastSuccessLabel={lastSuccessLabel}
-            historyGaps={historyGaps}
-            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
-          />
-
-              </>
-            );
-            return (
-              <>
-
       <section
         id="live-map"
         className="map-stage"
@@ -3000,10 +2613,83 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
 
       </section>
-                {briefing}
-              </>
-            );
-          })()}
+
+          <WorkspaceHeading
+            now={now}
+            timeMode={timeMode}
+            heroSentence={heroSentence}
+            heroSecondary={heroSecondary}
+            facts={heroFacts}
+            onFact={(action) => {
+              if (action === "notices") {
+                document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+                return;
+              }
+              focusContext(action);
+            }}
+          />
+          <PlaceContext
+            selectedPlace={selectedPlace}
+            selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
+            placeOptions={PLACE_OPTIONS}
+            placeMessage={placeMessage}
+            onChoosePlace={choosePlace}
+            onLocate={useMyLocation}
+            localStation={localStation}
+            localRiver={localRiver}
+            localAir={localAir}
+            timeMode={timeMode}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            weatherAvailable={snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"}
+            riversAvailable={riversLive || riversPartial || riversFallback}
+            riversCached={riversCached}
+            airAvailable={snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback"}
+            weatherGap={historyGapForFocus(historyGaps, "weather")?.detail ?? null}
+            riverGap={historyGapForFocus(historyGaps, "rivers")?.detail ?? null}
+            airGap={historyGapForFocus(historyGaps, "air")?.detail ?? null}
+            now={now}
+          />
+          <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
+          <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
+          <FreshnessStrip
+            timeMode={timeMode}
+            historyState={historyState}
+            historyGaps={historyGaps}
+            connectionStatus={connectionStatus}
+            serviceDisplayState={serviceDisplayState}
+            lastSuccessLabel={lastSuccessLabel}
+            connectionLabel={connectionLabel}
+            lastCheckedAt={lastCheckedAt}
+            now={now}
+            online={online}
+            servicesRefreshing={servicesRefreshing}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            snapshot={snapshot}
+            weatherDisplayStatus={weatherDisplayStatus}
+            trainDisplayStatus={trainDisplayStatus}
+            riverDisplayStatus={riverDisplayStatus}
+            latestWeatherObs={latestWeatherObs}
+            weatherStale={weatherStale}
+            transitStale={transitStale}
+            riverDataStale={riverDataStale}
+            onRefresh={() => void refreshAllRef.current()}
+          />
+          <OfficialNotices
+            timeMode={timeMode}
+            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && !warningsUnavailable && visibleWarnings.length === 0}
+            layers={layers}
+            visibleWarnings={visibleWarnings}
+            activeWarning={activeWarning}
+            warningsUnavailable={warningsUnavailable}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            snapshot={snapshot}
+            now={now}
+            lastSuccessLabel={lastSuccessLabel}
+            historyGaps={historyGaps}
+            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
+          />
         </div>
       </section>
 
@@ -3096,14 +2782,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "—" : railNotableCurrent || trainsCached ? runningTrainCount ?? "—" : "—"}</strong>
-          <small>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored rail aggregate" : "Connecting to Iarnród Éireann positions"}` : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "rail services represented in the retained aggregate; individual positions were not retained" : historyGapForFocus(historyGaps, "trains")?.detail ?? "rail history unavailable; no zero is inferred" : railNotableCurrent ? runningTrainCount === null ? "rail positions are present, but the service count is unavailable" : "trains currently reporting a position across Ireland" : trainsCached ? runningTrainCount === null ? "cached positions are present, but the service count is unavailable" : "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
+          <small>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored rail aggregate" : "Connecting to Iarnród Éireann positions"}` : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "rail services represented in the retained aggregate; individual positions were not retained" : historyGapForFocus(historyGaps, "trains")?.detail ?? "rail history unavailable; no zero is inferred" : railNotableCurrent ? runningTrainCount === null ? "rail positions are present, but the service count is unavailable" : "trains currently reporting a position across Ireland · last seen at refresh, not a provider observation clock" : trainsCached ? runningTrainCount === null ? "cached positions are present, but the service count is unavailable" : "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
           <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
         <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "—" : "—"}</strong>
-          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "fallback readings are present, but the gauge count is unavailable" : "gauges supplied by the labelled fallback source" : "river readings unavailable; current levels cannot be assessed"}</small>
+          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "temporary OPW fetch-path readings are present, but the gauge count is unavailable" : `temporary ${snapshot.sourceProvenance?.rivers.fallback} path · still OPW gauge levels` : "river readings unavailable; current levels cannot be assessed"}</small>
           <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
         </button>

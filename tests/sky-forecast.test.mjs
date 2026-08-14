@@ -11,7 +11,7 @@ import {
   SUNRISE_SUNSET_ENDPOINT,
   assessMetForecast,
   fetchMetForecast,
-  fetchSolarYear,
+  fetchSolarWindow,
   findSolarDay,
   normalizeMetForecast,
   normalizeSolarYear,
@@ -102,7 +102,7 @@ test("Sunrise-Sunset normalizer keeps Dublin/DST events, nullable moon fields, b
   assert.equal(providerPercent[0].moonIllumination, 0.0012);
 });
 
-test("Sunrise-Sunset rejects malformed/provider-error/future rows without zero-filling events and reuses one yearly fetch", async () => {
+test("Sunrise-Sunset rejects malformed/provider-error/future rows without zero-filling events and reuses one solar-window fetch", async () => {
   resetSolarCache();
   const malformed = normalizeSolarYear({ status: "ERROR", results: [solarRow()] }, { year: 2026, now: NOW });
   const invalid = normalizeSolarYear({ results: [{ ...solarRow(), date: "2027-01-01", moon_phase: 2, moon_illumination: -1 }] }, { year: 2026, now: NOW });
@@ -124,18 +124,18 @@ test("Sunrise-Sunset rejects malformed/provider-error/future rows without zero-f
     assert.equal(url.searchParams.get("lng"), "-8.2439");
     return responseJson({ status: "OK", results: [solarRow()] });
   };
-  await fetchSolarYear({ year: 2026, now: NOW, fetcher });
-  await fetchSolarYear({ year: 2026, now: NOW + 60_000, fetcher });
+  await fetchSolarWindow({ year: 2026, now: NOW, fetcher });
+  await fetchSolarWindow({ year: 2026, now: NOW + 60_000, fetcher });
   assert.equal(calls, 1);
 
   resetSolarCache();
   await assert.rejects(
-    fetchSolarYear({ year: 2027, now: NOW, fetcher: async () => new Response("upstream", { status: 503 }) }),
+    fetchSolarWindow({ year: 2027, now: NOW, fetcher: async () => new Response("upstream", { status: 503 }) }),
     /returned 503/
   );
   const oversized = "{" + "\"x\":" + "\"" + "x".repeat(768_000) + "\"}";
   await assert.rejects(
-    fetchSolarYear({ year: 2028, now: NOW, fetcher: async () => new Response(oversized) }),
+    fetchSolarWindow({ year: 2028, now: NOW, fetcher: async () => new Response(oversized) }),
     /body-too-large/
   );
 });

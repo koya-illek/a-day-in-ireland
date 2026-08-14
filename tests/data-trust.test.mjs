@@ -180,6 +180,19 @@ test("service display states keep connecting, refreshing, offline, cached, stale
     )
   };
   assert.equal(getServiceDisplayState(liveCore, { initialRefreshComplete: true, refreshing: false, online: true, now }), "live");
+
+  const mixedHealthy = {
+    ...liveCore,
+    sourceStatus: "partial",
+    sourceProvenance: {
+      trains: { ...liveCore.sourceProvenance.trains, status: "unavailable" },
+      rivers: { ...liveCore.sourceProvenance.rivers, status: "fallback", fallback: "Cloudflare Browser Run" }
+    },
+    contextStatus: Object.fromEntries(
+      Object.keys(empty.contextStatus).map((name) => [name, name === "warnings" ? "live" : "unavailable"])
+    )
+  };
+  assert.equal(getServiceDisplayState(mixedHealthy, { initialRefreshComplete: true, refreshing: false, online: true, now }), "live");
 });
 
 test("selected-source assessment never reassures when a chosen provider is unavailable or cached", async () => {

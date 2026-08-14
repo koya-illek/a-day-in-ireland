@@ -6,7 +6,7 @@ export const SUNRISE_SUNSET_ATTRIBUTION = "Sunrise-Sunset.org";
 export const IRELAND_CENTRE = { latitude: 53.4129, longitude: -8.2439 };
 export const IRELAND_TIME_ZONE = "Europe/Dublin";
 export const SOLAR_BODY_LIMIT = 768_000;
-export const SOLAR_YEAR_CACHE_MS = 6 * 60 * 60 * 1000;
+export const SOLAR_WINDOW_CACHE_MS = 6 * 60 * 60 * 1000;
 
 const number = (value) => {
   if (value === null || value === undefined || (typeof value === "string" && !value.trim())) return null;
@@ -239,14 +239,14 @@ const solarWindowUrl = (startDate, endDate) => {
   return url;
 };
 
-export const fetchSolarYear = async ({ year, now = Date.now(), fetcher = fetch, date } = {}) => {
+export const fetchSolarWindow = async ({ year, now = Date.now(), fetcher = fetch, date } = {}) => {
   const requestedDate = dateKey(date) ?? dublinDateKey(now);
   const requestedYear = finiteInteger(year) ?? Number(requestedDate.slice(0, 4));
   const startDate = addDublinDays(requestedDate, -1);
   const endDate = addDublinDays(requestedDate, 1);
   const cacheKey = `${startDate}:${endDate}:${SUNRISE_SUNSET_ENDPOINT}`;
   const cached = solarDayCache.get(cacheKey);
-  if (cached && now - cached.fetchedAt >= 0 && now - cached.fetchedAt < SOLAR_YEAR_CACHE_MS) {
+  if (cached && now - cached.fetchedAt >= 0 && now - cached.fetchedAt < SOLAR_WINDOW_CACHE_MS) {
     return { ...cached, cached: true };
   }
   const response = await fetcher(solarWindowUrl(startDate, endDate), {
@@ -269,7 +269,7 @@ export const fetchSolarYear = async ({ year, now = Date.now(), fetcher = fetch, 
 };
 
 export const fetchSolarDay = async ({ now = Date.now(), fetcher = fetch } = {}) => {
-  const result = await fetchSolarYear({ now, fetcher });
+  const result = await fetchSolarWindow({ now, fetcher });
   const day = findSolarDay(result.days, now);
   if (!day) throw new Error("Sunrise-Sunset returned no current Dublin solar day");
   return { reading: day, status: "live", fetchedAt: result.fetchedAt, days: result.days };

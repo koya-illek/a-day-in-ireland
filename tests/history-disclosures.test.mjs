@@ -27,6 +27,8 @@ test("transport history attribution and permission boundary stay explicit", () =
   assert.match(dataPage, /aggregated and normalized by A Day in Ireland; changes were made/);
   assert.match(dataPage, /GTFS data is provided “as is”/);
   assert.match(dataPage, /is not endorsed by NTA/);
+  assert.match(dataPage, /Irish Rail positions are stamped at refresh/);
+  assert.match(dataPage, /temporary fetch path/);
   assert.match(dataPage, /Historical Iarnród Éireann \/ Irish Rail data is not retained/);
   assert.match(privacyPage, /Historical Irish Rail data is not retained pending permission/);
 });

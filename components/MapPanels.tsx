@@ -187,7 +187,7 @@ export function DetailCard({
                       onClick={() => onStackChange(index)}
                     >
                       <b>{label}</b>
-                      <small>{movement.type === "train" ? "Iarnród Éireann" : "Transport for Ireland"} · updated {formatTime(new Date(movement.item.observedAt))}</small>
+          <small>{movement.type === "train" ? "Iarnród Éireann · last seen at refresh" : "Transport for Ireland"} · updated {formatTime(new Date(movement.item.observedAt))}</small>
                     </button>
                   </li>
                 );
@@ -229,12 +229,12 @@ export function DetailCard({
               <dd>{item.speedKmh == null ? "Awaiting next position" : `≈ ${item.speedKmh.toFixed(0)} km/h`}</dd>
             </div>
             <div><dt>Direction</dt><dd>{item.direction}</dd></div>
-            <div><dt>Checked</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
+            <div><dt>Last seen at refresh</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
           <small className="detail-method-note">
             {item.speedSource === "calculated"
-              ? "Estimated from the distance and time between successive Irish Rail positions."
-              : "Irish Rail does not publish train speed; an estimate appears after a second usable position."}
+              ? "Estimated from the distance and time between successive Irish Rail positions. Irish Rail XML has no per-train observation clock."
+              : "Irish Rail does not publish train speed or a per-train observation clock; this time is last seen at refresh."}
           </small>
         </>
       )}

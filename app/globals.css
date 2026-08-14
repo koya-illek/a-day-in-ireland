@@ -3583,16 +3583,6 @@ body {
   padding: 0;
 }
 
-.map-stage { order: 0; }
-.workspace-heading { order: 1; }
-.place-context { order: 2; }
-.forecast-strip,
-.sky-light-strip { order: 3; }
-.dayline { order: 4; }
-.freshness-strip { order: 5; }
-.official-notices { order: 6; }
-.what-matters-now { order: 7; }
-
 .workspace-heading,
 .place-context,
 .freshness-strip,

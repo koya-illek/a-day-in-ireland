@@ -502,6 +502,18 @@ test("the live map leads into selected-place and across-Ireland evidence", async
     );
   });
   expect(hierarchy).toBe(true);
+
+  const readingOrder = await page.evaluate(() => {
+    const map = document.querySelector("#live-map");
+    const heading = document.querySelector(".workspace-heading");
+    const place = document.querySelector(".place-context");
+    return Boolean(
+      map && heading && place &&
+      (map.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+      (heading.compareDocumentPosition(place) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
+  });
+  expect(readingOrder).toBe(true);
 });
 
 test("default island context stays compact until a place is selected", async ({ page }) => {

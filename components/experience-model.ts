@@ -158,6 +158,157 @@ export const irelandEditorialMoment = (date: Date) => {
   return `${weekday} ${day} ${month}, ${clock} Irish time. ${period} across Ireland.`;
 };
 
+export const NEARBY_RADIUS_KM = {
+  weather: 50,
+  river: 30,
+  air: 60
+} as const;
+
+export const formatCount = (value: number) => new Intl.NumberFormat("en-IE").format(value);
+
+export const pluralise = (value: number, singular: string, plural = `${singular}s`) =>
+  value === 1 ? singular : plural;
+
+export function weatherNarrative(snapshot: LiveSnapshot) {
+  const currentWeather = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
+  const warm = snapshot.summary.warmest;
+  const rain = snapshot.summary.wettest;
+  return !currentWeather
+    ? snapshot.sourceStatus === "stale"
+      ? "The most recent weather snapshot is cached, so current national conditions are not stated."
+      : "Current weather observations are unavailable."
+    : !warm && !rain
+    ? "Current weather observations are unavailable."
+    : rain && (rain.rainfall ?? 0) > 0
+    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°.`
+    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°, and none of the reporting stations have measured rain.`;
+}
+
+export function buildHeroSentences(options: {
+  timeMode: TimeMode;
+  historyStatus: HistoryLoadState["status"];
+  isDailyHistorySummary: boolean;
+  historyResolutionLabel: string;
+  now: Date;
+  isConnectingWithoutSnapshot: boolean;
+  servicesRefreshing: boolean;
+  serviceDisplayState: "connecting" | "refreshing" | "offline" | "cached" | "stale" | "unavailable" | "degraded" | "live";
+  lastSuccessLabel: string;
+  liveLeadFact: string;
+  weatherNotableCurrent: boolean;
+  windiestStation: { name: string; windSpeed: number | null } | null;
+  weatherDisplayStatus: "live" | "partial" | "stale" | "fallback" | "unavailable";
+}) {
+  const heroSentence = options.timeMode === "past"
+    ? options.historyStatus === "loading"
+      ? "Loading stored observations for the selected time…"
+      : options.historyStatus === "error"
+        ? "Historical conditions could not be loaded. Live data is not substituted."
+        : options.historyStatus === "gap"
+          ? "No stored record exists at or before the selected time."
+          : `${irelandEditorialMoment(options.now)} ${options.isDailyHistorySummary
+            ? `This stored ${options.historyResolutionLabel} keeps summary values and recorded gaps, not a reconstructed point map.`
+            : "This is the stored record for the selected time."}`
+    : options.isConnectingWithoutSnapshot
+      ? "Connecting to live observations across the island…"
+      : options.servicesRefreshing
+        ? "Loading fresh observations across the island…"
+        : options.serviceDisplayState === "offline"
+          ? `Offline. Showing the last saved observations where available; last success ${options.lastSuccessLabel}.`
+          : options.serviceDisplayState === "cached"
+            ? `A refresh failed. Cached observations are labelled and last succeeded ${options.lastSuccessLabel}.`
+            : options.serviceDisplayState === "unavailable"
+              ? "Live services are unavailable, so national conditions cannot be assessed."
+              : `${irelandEditorialMoment(options.now)} ${options.liveLeadFact}`;
+  const heroSecondary = options.timeMode === "past"
+    ? `Stored observations from ${options.lastSuccessLabel}. They are separated from live feeds and keep provider timestamps and recorded gaps.`
+    : options.weatherNotableCurrent && options.windiestStation?.windSpeed != null
+      ? `Strongest observed wind ${options.windiestStation.windSpeed} km/h at ${options.windiestStation.name}.`
+      : options.weatherDisplayStatus === "stale"
+        ? "Weather observations are cached and kept separate from the live story."
+        : "Weather observations are currently unavailable, so they are not used to frame the first impression.";
+  return { heroSentence, heroSecondary };
+}
+
+export type HeroFactDraft = {
+  key: string;
+  family: string;
+  label: string;
+  value: string;
+  detail: string;
+  action: "notices" | "weather" | "wind";
+};
+
+export function buildHeroFacts(options: {
+  warningsUnavailable: boolean;
+  activeNoticeCount: number;
+  upcomingNoticeCount: number;
+  weatherNotableCurrent: boolean;
+  warmestStation: { name: string; temperature: number | null } | null;
+  wettestStation: { name: string; rainfall: number | null } | null;
+  windiestStation: { name: string; windSpeed: number | null } | null;
+}): HeroFactDraft[] {
+  return [
+    !options.warningsUnavailable
+      ? {
+          key: "warnings",
+          family: "notices",
+          label: options.activeNoticeCount > 0 ? "official notices" : options.upcomingNoticeCount > 0 ? "notice outlook" : "official notices",
+          value: options.activeNoticeCount > 0
+            ? formatCount(options.activeNoticeCount)
+            : options.upcomingNoticeCount > 0
+              ? formatCount(options.upcomingNoticeCount)
+              : "Clear",
+          detail: options.activeNoticeCount > 0
+            ? `${options.activeNoticeCount === 1 ? "Notice" : "Notices"} now in effect`
+            : options.upcomingNoticeCount > 0
+              ? `${options.upcomingNoticeCount === 1 ? "Notice" : "Notices"} due later`
+              : "No current or upcoming notices",
+          action: "notices" as const
+        }
+      : null,
+    options.weatherNotableCurrent && options.warmestStation?.temperature != null
+      ? {
+          key: "temperature",
+          family: "weather",
+          label: "temperature",
+          value: `${options.warmestStation.temperature}°`,
+          detail: `Warmest at ${options.warmestStation.name}`,
+          action: "weather" as const
+        }
+      : null,
+    options.weatherNotableCurrent
+      ? options.wettestStation && (options.wettestStation.rainfall ?? 0) > 0
+        ? {
+            key: "rain",
+            family: "weather",
+            label: "rain",
+            value: `${options.wettestStation.rainfall?.toFixed(1)} mm`,
+            detail: `Observed around ${options.wettestStation.name}`,
+            action: "weather" as const
+          }
+        : {
+            key: "rain",
+            family: "weather",
+            label: "rain",
+            value: "None",
+            detail: "No rain measured at reporting stations",
+            action: "weather" as const
+          }
+      : null,
+    options.weatherNotableCurrent && options.windiestStation?.windSpeed != null
+      ? {
+          key: "wind",
+          family: "weather",
+          label: "wind",
+          value: `${options.windiestStation.windSpeed} km/h`,
+          detail: `Strongest at ${options.windiestStation.name}`,
+          action: "wind" as const
+        }
+      : null
+  ].filter((fact): fact is HeroFactDraft => fact !== null);
+}
+
 export const formatTime = (date: Date) => Number.isFinite(date.getTime())
   ? irelandClockParts(date).clock
   : "Unavailable";
