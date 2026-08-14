@@ -1745,7 +1745,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       void fetchHistoryRange().then(setHistoryRange).catch(() => undefined);
     }
     setViewHydrated(true);
-  }, [constrainMapView, loadHistoryAt, projection, setMapView]);
+  }, [loadHistoryAt, projection, setMapView]);
 
   useEffect(() => {
     if (!viewHydrated) return;
