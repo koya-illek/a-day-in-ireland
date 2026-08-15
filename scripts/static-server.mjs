@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 
@@ -53,7 +53,8 @@ createServer(async (request, response) => {
   for (const [name, value] of staticHeaders) response.setHeader(name, value);
   const requested = normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, requested === "/" ? "index.html" : requested);
-  if (!existsSync(file) && !extname(file) && existsSync(`${file}.html`)) file = `${file}.html`;
+  if (!extname(file) && existsSync(`${file}.html`) && statSync(`${file}.html`).isFile()) file = `${file}.html`;
+  if (existsSync(file) && statSync(file).isDirectory() && existsSync(join(file, "index.html"))) file = join(file, "index.html");
   if (!existsSync(file) && !extname(file)) file = join(root, "index.html");
   if (!existsSync(file)) {
     response.writeHead(404);

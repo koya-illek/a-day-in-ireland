@@ -16,7 +16,7 @@ const newsreader = Newsreader({
 
 export const metadata: Metadata = {
   title: {
-    default: "A Day in Ireland — See Ireland happening",
+    default: "A Day in Ireland: See Ireland happening",
     template: "%s · A Day in Ireland"
   },
   description:
@@ -44,7 +44,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "A Day in Ireland",
-    description: "Weather, movement, water and energy across Ireland—happening now.",
+    description: "Weather, movement, water and energy across Ireland, happening now.",
     type: "website",
     locale: "en_IE",
     siteName: "A Day in Ireland",
@@ -59,22 +59,42 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "A Day in Ireland",
-    description: "Weather, movement, water and energy across Ireland—happening now.",
+    description: "Weather, movement, water and energy across Ireland, happening now.",
     images: ["/social/day-in-ireland.jpg"]
   },
   manifest: "/manifest.webmanifest"
 };
 
 export const viewport: Viewport = {
-  colorScheme: "dark",
-  themeColor: "#071815",
+  colorScheme: "dark light",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#edf2ea" },
+    { media: "(prefers-color-scheme: dark)", color: "#071815" }
+  ],
   width: "device-width",
   initialScale: 1
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": ["WebSite", "Dataset"],
+    name: "A Day in Ireland",
+    url: "https://day.illek.ie/",
+    description: "A living, near-real-time portrait of weather, transport, rivers, daylight, energy and the sea across Ireland.",
+    inLanguage: "en-IE",
+    spatialCoverage: {
+      "@type": "Place",
+      name: "Ireland"
+    },
+    isAccessibleForFree: true
+  };
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('ireland-interface-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme='dark'}})()` }} />
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
+      </head>
       <body className={`${dmSans.variable} ${newsreader.variable}`}>{children}</body>
     </html>
   );

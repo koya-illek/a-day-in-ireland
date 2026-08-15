@@ -1360,7 +1360,7 @@ test("partial context responses are uncacheable", async () => {
   }
 });
 
-test("public contexts preserve partial marine, tide, modelled-air, and bathing coverage", async () => {
+test("public contexts preserve partial marine, tide, modelled-air, and bathing coverage while caching the snapshot", async () => {
   const api = await import("../platform/server-entry.js");
   const originalFetch = globalThis.fetch;
   const now = Date.now();
@@ -1399,7 +1399,7 @@ test("public contexts preserve partial marine, tide, modelled-air, and bathing c
       { EDGE_RUNTIME: "cloudflare" }
     );
     const body = await response.json();
-    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.match(response.headers.get("cache-control") ?? "", /s-maxage=30/);
     assert.equal(body.contextStatus.marine, "partial");
     assert.equal(body.marine.length, 1);
     assert.equal(body.contextStatus.tides, "partial");
@@ -1518,7 +1518,7 @@ test("shared view state round-trips only explicit RFC3339 history instants", asy
   })).searchParams.has("at"), false);
 });
 
-test("Pages CSP permits the browser-side live providers without broad connect access", async () => {
+test("production CSP permits the browser-side live providers without broad connect access", async () => {
   const headers = await readFile(new URL("../public/_headers", import.meta.url), "utf8");
   const csp = headers.match(/^\s*Content-Security-Policy:\s*(.+)$/m)?.[1] ?? "";
   const connectDirective = csp.split(";")
@@ -1528,7 +1528,6 @@ test("Pages CSP permits the browser-side live providers without broad connect ac
 
   assert.deepEqual(sources, [
     "'self'",
-    "https://a-day-in-ireland-api.koya-illek.workers.dev",
     "https://prodapi.metweb.ie",
     "https://www.met.ie",
     "https://gdal.met.ie",

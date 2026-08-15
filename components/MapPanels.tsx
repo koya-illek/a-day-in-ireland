@@ -205,20 +205,20 @@ export function DetailCard({
       )}
       {type === "station" && (
         <>
-          <p className="eyebrow">Met Éireann station</p>
+          <p className="utility-label">Met Éireann station</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.temperature ?? "—"}°</div>
+          <div className="station-temperature">{item.temperature ?? "Unavailable"}°</div>
           <p>{item.description}</p>
           <dl>
-            <div><dt>Rain</dt><dd>{item.rainfall ?? "—"} mm</dd></div>
-            <div><dt>Wind</dt><dd>{item.windSpeed ?? "—"} km/h {item.windDirection}</dd></div>
+            <div><dt>Rain</dt><dd>{item.rainfall ?? "Unavailable"} mm</dd></div>
+            <div><dt>Wind</dt><dd>{item.windSpeed ?? "Unavailable"} km/h {item.windDirection}</dd></div>
             <div><dt>Observed</dt><dd>{item.observedAt ? formatTime(new Date(item.observedAt)) : "Unavailable"}</dd></div>
           </dl>
         </>
       )}
       {type === "train" && (
         <>
-          <p className="eyebrow">Iarnród Éireann · {historical ? "stored position" : "live position"}</p>
+          <p className="utility-label">Iarnród Éireann · {historical ? "stored position" : "live position"}</p>
           <h2 id="map-detail-title">Train {item.id}</h2>
           <div className="detail-emblem">↗</div>
           <p>{item.message || item.direction}</p>
@@ -240,10 +240,10 @@ export function DetailCard({
       )}
       {type === "river" && (
         <>
-          <p className="eyebrow">OPW river gauge · {historical ? "stored observation" : "near real time"}</p>
+          <p className="utility-label">OPW river gauge · {historical ? "stored observation" : "near real time"}</p>
           <h2 id="map-detail-title">{item.name}</h2>
           <div className="station-temperature">{item.level.toFixed(2)}<small> m</small></div>
-          <p>A gauge measurement—not a flood warning. Levels are local to each station and should not be compared between gauges.</p>
+          <p>A gauge measurement, not a flood warning. Levels are local to each station and should not be compared between gauges.</p>
           <dl>
             <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
             <div><dt>Freshness</dt><dd>{item.fresh ? historical ? "Fresh at capture" : "Current" : "Stale"}</dd></div>
@@ -252,45 +252,45 @@ export function DetailCard({
       )}
       {type === "buoy" && (
         <>
-          <p className="eyebrow">Marine Institute · {historical ? "stored observation" : "near real time"}</p>
+          <p className="utility-label">Marine Institute · {historical ? "stored observation" : "near real time"}</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.waveHeight?.toFixed(1) ?? "—"}<small> m waves</small></div>
+          <div className="station-temperature">{item.waveHeight?.toFixed(1) ?? "Unavailable"}<small> m waves</small></div>
           <p>{item.kind === "weather-buoy" ? "Observed conditions at an offshore weather buoy." : "Observed conditions at a coastal marine observatory."} Measurements can be delayed or temporarily unavailable.</p>
           <dl>
-            <div><dt>Wind</dt><dd>{item.windSpeedKnots?.toFixed(1) ?? "—"} knots</dd></div>
-            <div><dt>Wave period</dt><dd>{item.wavePeriod?.toFixed(1) ?? "—"} seconds</dd></div>
-            <div><dt>Sea temperature</dt><dd>{item.seaTemperature?.toFixed(1) ?? "—"}°C</dd></div>
+            <div><dt>Wind</dt><dd>{item.windSpeedKnots?.toFixed(1) ?? "Unavailable"} knots</dd></div>
+            <div><dt>Wave period</dt><dd>{item.wavePeriod?.toFixed(1) ?? "Unavailable"} seconds</dd></div>
+            <div><dt>Sea temperature</dt><dd>{item.seaTemperature?.toFixed(1) ?? "Unavailable"}°C</dd></div>
             <div><dt>Observed</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
         </>
       )}
       {type === "air" && (
         <>
-          <p className="eyebrow">{item.source === "measured" ? "EEA · monitoring station" : "Open-Meteo CAMS · modelled"}</p>
+          <p className="utility-label">{item.source === "measured" ? "EEA · monitoring station" : "Open-Meteo CAMS · modelled"}</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.europeanAqi ?? "—"}<small> European AQI</small></div>
+          <div className="station-temperature">{item.europeanAqi ?? "Unavailable"}<small> European AQI</small></div>
           <p>
             {aqiLabel(item.europeanAqi)} air quality. {item.source === "measured"
               ? `This is a reported monitoring-station reading${item.stationClassification ? ` at a ${item.stationClassification} site` : ""}; EEA data normally arrives a few hours after measurement.`
               : "This is regional model output, not a reading from a sensor at this marker."}
           </p>
           <dl>
-            <div><dt>PM2.5</dt><dd>{item.pm25?.toFixed(1) ?? "—"} μg/m³</dd></div>
-            <div><dt>PM10</dt><dd>{item.pm10?.toFixed(1) ?? "—"} μg/m³</dd></div>
-            <div><dt>Ozone</dt><dd>{item.ozone?.toFixed(0) ?? "—"} μg/m³</dd></div>
-            <div><dt>UV index</dt><dd>{item.uvIndex?.toFixed(1) ?? "—"}</dd></div>
-            <div><dt>Grass pollen</dt><dd>{item.grassPollen?.toFixed(1) ?? "—"} grains/m³</dd></div>
+            <div><dt>PM2.5</dt><dd>{item.pm25?.toFixed(1) ?? "Unavailable"} μg/m³</dd></div>
+            <div><dt>PM10</dt><dd>{item.pm10?.toFixed(1) ?? "Unavailable"} μg/m³</dd></div>
+            <div><dt>Ozone</dt><dd>{item.ozone?.toFixed(0) ?? "Unavailable"} μg/m³</dd></div>
+            <div><dt>UV index</dt><dd>{item.uvIndex?.toFixed(1) ?? "Unavailable"}</dd></div>
+            <div><dt>Grass pollen</dt><dd>{item.grassPollen?.toFixed(1) ?? "Unavailable"} grains/m³</dd></div>
             <div><dt>{item.source === "measured" ? "Observed" : "Model time"}</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
         </>
       )}
       {type === "tide" && (
         <>
-          <p className="eyebrow">Marine Institute · tide gauge</p>
+          <p className="utility-label">Marine Institute · tide gauge</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "—"}<small> m relative to OD Malin</small></div>
+          <div className="station-temperature">{item.waterLevel?.toFixed(2) ?? "Unavailable"}<small> m relative to OD Malin</small></div>
           <p>
-            Ordnance Datum Malin is Ireland&apos;s national height reference. A negative height means the sea is below that reference level—not that the water has negative depth.
+            Ordnance Datum Malin is Ireland&apos;s national height reference. A negative height means the sea is below that reference level, not that the water has negative depth.
           </p>
           <p>
             {item.surge === null
@@ -303,7 +303,7 @@ export function DetailCard({
             {orderedTideEvents(item).map((event) => (
               <div key={event.label}>
                 <dt>{event.label}</dt>
-                <dd>{event.at ? `${formatTime(new Date(event.at))} · ${event.level?.toFixed(2) ?? "—"} m` : "—"}</dd>
+                <dd>{event.at ? `${formatTime(new Date(event.at))} · ${event.level?.toFixed(2) ?? "Unavailable"} m` : "Unavailable"}</dd>
               </div>
             ))}
           </dl>
@@ -311,7 +311,7 @@ export function DetailCard({
       )}
       {type === "bathing" && (
         <>
-          <p className="eyebrow">EPA · {historical ? "stored bathing-water alert" : "active bathing-water alert"}</p>
+          <p className="utility-label">EPA · {historical ? "stored bathing-water alert" : "active bathing-water alert"}</p>
           <h2 id="map-detail-title">{item.name}</h2>
           <div className="detail-emblem warning">!</div>
           <p><strong>{item.restriction}</strong></p>
@@ -325,7 +325,7 @@ export function DetailCard({
       )}
       {type === "earthquake" && (
         <>
-          <p className="eyebrow">USGS · detected event</p>
+          <p className="utility-label">USGS · detected event</p>
           <h2 id="map-detail-title">{item.place}</h2>
           <div className="station-temperature">{item.magnitude.toFixed(1)}<small> magnitude</small></div>
           <p>A detected seismic event, not an impact or safety assessment.</p>
@@ -338,14 +338,14 @@ export function DetailCard({
       )}
       {type === "transit" && (
         <>
-          <p className="eyebrow">Transport for Ireland · {historical ? "stored position" : "live position"}</p>
+          <p className="utility-label">Transport for Ireland · {historical ? "stored position" : "live position"}</p>
           <h2 id="map-detail-title">{transitDetail?.title}</h2>
           <div className="detail-emblem">↗</div>
           <p className="transit-direction">{transitDetail?.direction}</p>
           {transitDetail?.label && <p className="transit-service-label">{transitDetail.label}</p>}
           <dl>
             <div><dt>Route</dt><dd>{transitDetail?.route || `Route unavailable from this TFI ${historical ? "stored record" : "live vehicle feed"}`}</dd></div>
-            <div><dt>Destination</dt><dd>{transitDetail?.destination}</dd></div>
+            <div><dt>Scheduled destination</dt><dd>{transitDetail?.destination}</dd></div>
             <div><dt>Direction</dt><dd>{transitDetail?.direction}</dd></div>
             <div>
               <dt>Speed</dt>
@@ -358,6 +358,7 @@ export function DetailCard({
             <div><dt>Updated</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
           <small className="detail-method-note">
+            Destinations come from static GTFS timetable metadata and are separate from the live vehicle position. {" "}
             {item.speedSource === "reported"
               ? "Speed reported by the NTA vehicle feed."
               : item.speedSource === "calculated"
@@ -373,26 +374,26 @@ export function DetailCard({
 export function GridPanel({ grid, className = "", historical = false }: { grid: LiveSnapshot["grid"]; className?: string; historical?: boolean }) {
   return (
     <aside className={`map-data-panel grid-panel ${className}`} aria-label={`All-island electricity grid ${historical ? "at the selected time" : "now"}`}>
-      <p className="eyebrow">EirGrid · operational data</p>
+      <p className="utility-label">EirGrid · operational data</p>
       <h2>{historical ? "The grid then" : "The grid now"}</h2>
       {grid ? (
         <>
           <div className="grid-hero">
-            <strong>{grid.windSharePercent === null ? "—" : `${grid.windSharePercent.toFixed(0)}%`}</strong>
+            <strong>{grid.windSharePercent === null ? "Unavailable" : `${grid.windSharePercent.toFixed(0)}%`}</strong>
             <span>{grid.windSharePercent === null ? "wind share is unavailable in this grid response" : `of ${historical ? "captured" : "current"} demand supplied by wind`}</span>
           </div>
           <dl>
-            <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Generation</dt><dd>{grid.generationMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Wind</dt><dd>{grid.windMW?.toLocaleString("en-IE") ?? "—"} MW</dd></div>
-            <div><dt>Carbon intensity</dt><dd>{grid.carbonIntensity?.toFixed(0) ?? "—"} gCO₂/kWh</dd></div>
-            <div><dt>CO₂ emissions</dt><dd>{grid.carbonEmissions?.toFixed(0) ?? "—"} tCO₂/hr</dd></div>
-            <div><dt>Frequency</dt><dd>{grid.frequencyHz?.toFixed(2) ?? "—"} Hz</dd></div>
+            <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "Unavailable"} MW</dd></div>
+            <div><dt>Generation</dt><dd>{grid.generationMW?.toLocaleString("en-IE") ?? "Unavailable"} MW</dd></div>
+            <div><dt>Wind</dt><dd>{grid.windMW?.toLocaleString("en-IE") ?? "Unavailable"} MW</dd></div>
+            <div><dt>Carbon intensity</dt><dd>{grid.carbonIntensity?.toFixed(0) ?? "Unavailable"} gCO₂/kWh</dd></div>
+            <div><dt>CO₂ emissions</dt><dd>{grid.carbonEmissions?.toFixed(0) ?? "Unavailable"} tCO₂/hr</dd></div>
+            <div><dt>Frequency</dt><dd>{grid.frequencyHz?.toFixed(2) ?? "Unavailable"} Hz</dd></div>
             <div>
               <dt>Interconnection</dt>
               <dd>
                 {grid.interconnectorMW === null
-                  ? "—"
+                  ? "Unavailable"
                   : grid.interconnectorMW > 0
                     ? `Import ${grid.interconnectorMW.toLocaleString("en-IE")} MW`
                     : grid.interconnectorMW < 0
@@ -400,17 +401,17 @@ export function GridPanel({ grid, className = "", historical = false }: { grid: 
                       : "Balanced 0 MW"}
               </dd>
             </div>
-            <div><dt>Data through</dt><dd>{grid.observedAt ? formatTime(new Date(grid.observedAt)) : "—"}</dd></div>
+            <div><dt>Data through</dt><dd>{grid.observedAt ? formatTime(new Date(grid.observedAt)) : "Unavailable"}</dd></div>
           </dl>
         </>
       ) : (
         <>
           <p>Operational grid data is temporarily unavailable.</p>
           <dl>
-            <div><dt>Demand</dt><dd>— MW</dd></div>
-            <div><dt>Generation</dt><dd>— MW</dd></div>
-            <div><dt>Wind</dt><dd>— MW</dd></div>
-            <div><dt>Frequency</dt><dd>— Hz</dd></div>
+            <div><dt>Demand</dt><dd>Unavailable MW</dd></div>
+            <div><dt>Generation</dt><dd>Unavailable MW</dd></div>
+            <div><dt>Wind</dt><dd>Unavailable MW</dd></div>
+            <div><dt>Frequency</dt><dd>Unavailable Hz</dd></div>
           </dl>
         </>
       )}
@@ -421,7 +422,7 @@ export function GridPanel({ grid, className = "", historical = false }: { grid: 
 export function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["aurora"]; className?: string }) {
   return (
     <aside className={`map-data-panel aurora-panel ${className}`} aria-label="Aurora probability over Ireland">
-      <p className="eyebrow">NOAA OVATION · forecast</p>
+      <p className="utility-label">NOAA OVATION · forecast</p>
       <h2>Aurora over Ireland</h2>
       {aurora ? (
         <>
@@ -429,8 +430,8 @@ export function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["
             <strong>{aurora.probability}%</strong>
             <span>maximum overhead probability</span>
           </div>
-          <p>Kp {aurora.kpIndex?.toFixed(1) ?? "—"} · forecast for {formatTime(new Date(aurora.forecastAt))}</p>
-          <small>This is probability directly overhead—not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
+          <p>Kp {aurora.kpIndex?.toFixed(1) ?? "Unavailable"} · forecast for {formatTime(new Date(aurora.forecastAt))}</p>
+          <small>This is probability directly overhead, not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
         </>
       ) : (
         <>
@@ -447,7 +448,7 @@ export function IssPanel({ iss, className = "", historical = false }: { iss: Liv
   const visible = iss?.passes.find((pass) => pass.visible) ?? null;
   return (
     <aside className={`map-data-panel iss-panel ${className}`} aria-label="International Space Station over Ireland">
-      <p className="eyebrow">CelesTrak · calculated locally</p>
+      <p className="utility-label">CelesTrak · calculated locally</p>
       <h2>ISS over Ireland{historical ? " at capture" : ""}</h2>
       {iss ? (
         <>
@@ -456,8 +457,8 @@ export function IssPanel({ iss, className = "", historical = false }: { iss: Liv
           </div>
           <dl>
             <div><dt>Next pass</dt><dd>{next ? `${formatDate(new Date(next.startsAt))}, ${formatTime(new Date(next.startsAt))}` : "No pass in 48 hours"}</dd></div>
-            <div><dt>Peak elevation</dt><dd>{next ? `${next.maxElevation.toFixed(0)}°` : "—"}</dd></div>
-            <div><dt>Approaches from</dt><dd>{next?.direction ?? "—"}</dd></div>
+            <div><dt>Peak elevation</dt><dd>{next ? `${next.maxElevation.toFixed(0)}°` : "Unavailable"}</dd></div>
+            <div><dt>Approaches from</dt><dd>{next?.direction ?? "Unavailable"}</dd></div>
             <div><dt>Next dark-sky pass</dt><dd>{visible ? `${formatDate(new Date(visible.startsAt))}, ${formatTime(new Date(visible.startsAt))}` : "None calculated in 48 hours"}</dd></div>
           </dl>
           <small>Passes are calculated for central Ireland. “Dark-sky” means the pass occurs at night; actual visibility also depends on sunlight on the station, cloud, your location and the horizon.</small>

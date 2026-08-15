@@ -1,6 +1,8 @@
 name = "a-day-in-ireland-history-local"
 main = "platform/cloudflare-entry.js"
 compatibility_date = "2026-07-25"
+workers_dev = false
+preview_urls = false
 
 [limits]
 cpu_ms = 1000
@@ -8,7 +10,6 @@ subrequests = 100
 
 [vars]
 EDGE_RUNTIME = "cloudflare"
-PAGES_ORIGIN = "https://a-day-in-ireland.pages.dev"
 
 [triggers]
 crons = ["*/15 * * * *"]

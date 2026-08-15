@@ -34,6 +34,32 @@ import {
 } from "satellite.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+let transitDestinationsPromise: Promise<Record<string, string>> | null = null;
+
+const loadTransitDestinations = () => {
+  if (!transitDestinationsPromise) {
+    transitDestinationsPromise = fetch("/data/transit-destinations.manifest.json", { cache: "force-cache" })
+      .then(async (manifestResponse) => {
+        const manifest = manifestResponse.ok ? await manifestResponse.json() as { assetPath?: string } : {};
+        const assetPath = typeof manifest.assetPath === "string" && manifest.assetPath.startsWith("/data/")
+          ? manifest.assetPath
+          : "/data/transit-destinations.json";
+        const response = await fetch(assetPath, { cache: "force-cache" });
+        return response.ok ? response.json() as Promise<Record<string, string>> : {};
+      })
+      .catch(() => ({}));
+  }
+  return transitDestinationsPromise;
+};
+
+export async function enrichTransitDestinations<T extends { tripId?: string; destination?: string }>(vehicles: T[]): Promise<T[]> {
+  if (!vehicles.some((vehicle) => vehicle.tripId && !vehicle.destination)) return vehicles;
+  const destinations = await loadTransitDestinations();
+  return vehicles.map((vehicle) => ({
+    ...vehicle,
+    destination: vehicle.tripId ? destinations[vehicle.tripId] ?? vehicle.destination : vehicle.destination
+  }));
+}
 
 export function addCalculatedSpeeds<
   T extends {
@@ -587,7 +613,7 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       LiveSnapshot,
       "generatedAt" | "marine" | "radar" | "grid" | "airQuality" | "aurora" | "tides" |
       "bathingAlerts" | "issTle" | "satellite" | "earthquakes" | "contextStatus" |
-      "solar" | "forecast"
+      "contextProvenance" | "solar" | "forecast"
     >> & {
       warnings?: unknown;
       warningsStatus?: LiveSnapshot["contextStatus"]["warnings"];
@@ -702,7 +728,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       earthquakes: useIncoming(earthquakeStatus) ? next.earthquakes! : retained.earthquakes,
       solar: useIncoming(solarStatus) ? incomingSolar : retained.solar,
       forecast: useIncoming(forecastStatus) ? incomingForecast : retained.forecast,
-      contextStatus
+      contextStatus,
+      contextProvenance: next.contextProvenance
     };
   }, () => retainLastGoodContexts(previous));
 }
@@ -730,11 +757,17 @@ export async function refreshTransit(previous: LiveSnapshot): Promise<LiveSnapsh
             transitStatus: next.transitStatus === "credential-required" ? "credential-required" : "unavailable"
           };
     }
+    const previousDestinations = new Map(previous.transit
+      .filter((vehicle) => vehicle.tripId && vehicle.destination)
+      .map((vehicle) => [vehicle.tripId!, vehicle.destination!]));
     const transit = next.transit.filter((vehicle) => {
       const observedAt = Date.parse(vehicle.observedAt);
       const age = Date.now() - observedAt;
       return Number.isFinite(observedAt) && age >= 0 && age < 30 * 60_000;
-    });
+    }).map((vehicle) => ({
+      ...vehicle,
+      destination: vehicle.tripId ? previousDestinations.get(vehicle.tripId) : undefined
+    }));
     if (!transit.length) return retainLastGoodTransit(previous);
     const refreshedAt = next.generatedAt ?? new Date().toISOString();
     return {

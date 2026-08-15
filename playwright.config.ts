@@ -6,12 +6,17 @@ if (!Number.isInteger(port) || port < 1 || port > 65_535) {
 }
 const baseURL = `http://127.0.0.1:${port}`;
 const performanceMode = process.env.PLAYWRIGHT_PERFORMANCE === "1";
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE;
 
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
   workers: performanceMode ? 1 : undefined,
-  use: { baseURL, trace: "retain-on-failure" },
+  use: {
+    baseURL,
+    trace: "retain-on-failure",
+    launchOptions: executablePath ? { executablePath } : undefined,
+  },
   webServer: {
     command: "node scripts/static-server.mjs",
     url: baseURL,

@@ -694,6 +694,7 @@ export const normalizeTransitEntities = (entities, now = Date.now()) => (Array.i
     return [{
       id: String(vehicle.vehicle?.id ?? vehicle.vehicle?.label ?? entity.id ?? stableFallbackId()),
       latitude, longitude,
+      tripId: String(vehicle.trip?.tripId ?? vehicle.trip?.trip_id ?? ""),
       route: String(vehicle.trip?.routeId ?? vehicle.trip?.route_id ?? ""),
       label: String(vehicle.vehicle?.label ?? vehicle.vehicle?.id ?? "Public transport"),
       bearing: numeric(position?.bearing ?? position?.Bearing),
@@ -756,73 +757,236 @@ const livingLayers = async (env) => {
   }));
 };
 
-const currentContexts = async (env) => {
-  const measuredAirAtEdge = env.EDGE_RUNTIME !== "cloudflare";
-  const warningsPromise = fetchWarnings();
-  const [
-    marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, warnings, solar, forecast
-  ] = await Promise.allSettled([
-    fetchMarine(),
-    fetchRadar(),
-    fetchGrid(),
-    fetchAirQuality(),
-    measuredAirAtEdge ? fetchMeasuredAirQuality() : Promise.resolve([]),
-    fetchAurora(),
-    fetchTides(),
-    fetchBathingAlerts(),
-    fetchSatellite(),
-    fetchEarthquakes(),
-    fetchIssTle(),
-    warningsPromise,
-    fetchSolarDay({ now: Date.now() }),
-    warningsPromise.then(() => fetchMetForecast({ now: Date.now() }))
-  ]);
-  for (const [name, result] of Object.entries({
-    marine, radar, grid, modelledAir, measuredAir, aurora, tides,
-    bathingAlerts, satellite, earthquakes, issTle, warnings, solar, forecast
-  })) {
-    if (result.status === "rejected") console.error(`${name} context refresh failed`, result.reason);
+export const CONTEXT_SOURCE_POLICIES = Object.freeze({
+  marine: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
+  radar: { ttlMs: 5 * 60_000, jitterMs: 20_000, staleIfErrorMs: 30 * 60_000, circuitBaseMs: 30_000 },
+  grid: { ttlMs: 5 * 60_000, jitterMs: 30_000, staleIfErrorMs: 45 * 60_000, circuitBaseMs: 60_000 },
+  measuredAir: { ttlMs: 30 * 60_000, jitterMs: 90_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
+  modelledAir: { ttlMs: 30 * 60_000, jitterMs: 90_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
+  aurora: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
+  tides: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
+  bathingAlerts: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
+  satellite: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000, shareInFlight: false },
+  earthquakes: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
+  issTle: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
+  warnings: { ttlMs: 5 * 60_000, jitterMs: 30_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
+  solar: { ttlMs: 60 * 60_000, jitterMs: 5 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
+  forecast: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 6 * 60 * 60_000, circuitBaseMs: 60_000 }
+});
+
+const contextSourceCache = new Map();
+let contextFetcherIdentity = null;
+
+export const resetContextRefreshState = () => {
+  contextSourceCache.clear();
+  contextFetcherIdentity = globalThis.fetch;
+};
+
+const ensureContextFetcherIdentity = () => {
+  if (contextFetcherIdentity !== globalThis.fetch) {
+    contextSourceCache.clear();
+    contextFetcherIdentity = globalThis.fetch;
   }
-  const modelled = modelledAir.status === "fulfilled" ? modelledAir.value.readings : [];
-  const measured = measuredAir.status === "fulfilled" ? measuredAir.value : [];
-  const warningsHealthy = warnings.status === "fulfilled";
-  const solarReading = solar.status === "fulfilled" ? solar.value.reading : null;
-  const forecastValue = warningsHealthy && forecast.status === "fulfilled" ? forecast.value.forecast : null;
-  const contextStatus = {
-    marine: marine.status === "fulfilled" ? marine.value.status : "unavailable",
-    radar: radar.status === "fulfilled" && radar.value.length ? "live" : "unavailable",
-    grid: grid.status === "fulfilled" ? grid.value.status : "unavailable",
-    measuredAir: measuredAirAtEdge && measuredAir.status === "fulfilled" ? "live" : "unavailable",
-    modelledAir: modelledAir.status === "fulfilled" ? modelledAir.value.status : "unavailable",
-    aurora: aurora.status === "fulfilled" && aurora.value ? "live" : "unavailable",
-    tides: tides.status === "fulfilled" ? tides.value.status : "unavailable",
-    bathing: bathingAlerts.status === "fulfilled" ? bathingAlerts.value.status : "unavailable",
-    satellite: satellite.status === "fulfilled" ? "fallback" : "unavailable",
-    earthquakes: earthquakes.status === "fulfilled" ? "live" : "unavailable",
-    iss: issTle.status === "fulfilled" ? "live" : "unavailable",
-    warnings: warnings.status === "fulfilled" ? "live" : "unavailable",
-    solar: solar.status === "fulfilled" ? "live" : "unavailable",
-    forecast: warningsHealthy && forecast.status === "fulfilled" ? "live" : "unavailable"
+};
+
+const sourceJitter = (name, refreshCount, maximum) => maximum > 0
+  ? ((name.length * 997 + refreshCount * 379) % maximum)
+  : 0;
+
+const sourceMetadata = (state, status, now, errorCode = null) => ({
+  status,
+  fetchedAt: state.fetchedAt ? new Date(state.fetchedAt).toISOString() : null,
+  lastSuccessAt: state.lastSuccessAt ? new Date(state.lastSuccessAt).toISOString() : null,
+  ageSeconds: state.lastSuccessAt ? Math.max(0, Math.floor((now - state.lastSuccessAt) / 1000)) : null,
+  staleSince: state.staleSince ? new Date(state.staleSince).toISOString() : null,
+  errorCode
+});
+
+const staleSource = (state, definition, now, errorCode) => {
+  const age = state.lastSuccessAt ? now - state.lastSuccessAt : Number.POSITIVE_INFINITY;
+  if (state.value !== undefined && age >= 0 && age <= definition.policy.staleIfErrorMs) {
+    state.staleSince ??= now;
+    return { value: state.value, status: "stale", metadata: sourceMetadata(state, "stale", now, errorCode) };
+  }
+  return {
+    value: definition.empty(),
+    status: "unavailable",
+    metadata: sourceMetadata(state, "unavailable", now, errorCode)
   };
+};
+
+const refreshContextSource = async (name, definition, now = Date.now()) => {
+  const state = contextSourceCache.get(name) ?? {
+    value: undefined,
+    status: "unavailable",
+    fetchedAt: 0,
+    lastSuccessAt: 0,
+    staleSince: 0,
+    expiresAt: 0,
+    circuitOpenUntil: 0,
+    failures: 0,
+    refreshCount: 0,
+    latestGeneration: 0,
+    inFlight: null
+  };
+  contextSourceCache.set(name, state);
+  if (state.value !== undefined && now >= state.lastSuccessAt && now < state.expiresAt) {
+    return { value: state.value, status: state.status, metadata: sourceMetadata(state, state.status, now) };
+  }
+  if (state.circuitOpenUntil > now) return staleSource(state, definition, now, "source-circuit-open");
+  if (state.inFlight && definition.policy.shareInFlight !== false) return state.inFlight;
+
+  const generation = state.latestGeneration + 1;
+  state.latestGeneration = generation;
+  const refresh = (async () => {
+    try {
+      const value = await definition.load();
+      const status = definition.status(value);
+      if (generation === state.latestGeneration) {
+        state.value = value;
+        state.status = status;
+        state.fetchedAt = now;
+        state.lastSuccessAt = now;
+        state.staleSince = 0;
+        state.failures = 0;
+        state.circuitOpenUntil = 0;
+        state.refreshCount += 1;
+        state.expiresAt = now + definition.policy.ttlMs + sourceJitter(name, state.refreshCount, definition.policy.jitterMs);
+      }
+      return { value, status, metadata: sourceMetadata({ ...state, value, status, fetchedAt: now, lastSuccessAt: now }, status, now) };
+    } catch (error) {
+      if (generation === state.latestGeneration) {
+        state.failures = Math.min(8, state.failures + 1);
+        state.circuitOpenUntil = now + Math.min(
+          10 * 60_000,
+          definition.policy.circuitBaseMs * (2 ** (state.failures - 1))
+        );
+      }
+      const errorCode = `${name}-refresh-failed`;
+      console.error(`${name} context refresh failed`, error);
+      return staleSource(state, definition, now, errorCode);
+    }
+  })();
+  if (definition.policy.shareInFlight !== false) state.inFlight = refresh;
+  try {
+    return await refresh;
+  } finally {
+    if (state.inFlight === refresh) state.inFlight = null;
+  }
+};
+
+const contextDefinitions = (env, now) => ({
+  marine: {
+    load: fetchMarine,
+    empty: () => ({ readings: [], status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  radar: {
+    load: fetchRadar,
+    empty: () => [],
+    status: (value) => Array.isArray(value) && value.length ? "live" : "unavailable"
+  },
+  grid: {
+    load: fetchGrid,
+    empty: () => ({ reading: null, status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  measuredAir: {
+    load: env.EDGE_RUNTIME === "cloudflare" ? async () => [] : fetchMeasuredAirQuality,
+    empty: () => [],
+    status: (value) => value?.length ? "live" : "unavailable"
+  },
+  modelledAir: {
+    load: fetchAirQuality,
+    empty: () => ({ readings: [], status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  aurora: {
+    load: fetchAurora,
+    empty: () => null,
+    status: (value) => value ? "live" : "unavailable"
+  },
+  tides: {
+    load: fetchTides,
+    empty: () => ({ readings: [], status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  bathingAlerts: {
+    load: fetchBathingAlerts,
+    empty: () => ({ alerts: [], status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  satellite: {
+    load: fetchSatellite,
+    empty: () => null,
+    status: (value) => value ? "fallback" : "unavailable"
+  },
+  earthquakes: {
+    load: fetchEarthquakes,
+    empty: () => [],
+    status: () => "live"
+  },
+  issTle: {
+    load: fetchIssTle,
+    empty: () => null,
+    status: (value) => value ? "live" : "unavailable"
+  },
+  warnings: {
+    load: fetchWarnings,
+    empty: () => [],
+    status: () => "live"
+  },
+  solar: {
+    load: () => fetchSolarDay({ now }),
+    empty: () => ({ reading: null, status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  },
+  forecast: {
+    load: () => fetchMetForecast({ now }),
+    empty: () => ({ forecast: null, status: "unavailable" }),
+    status: (value) => value?.status ?? "unavailable"
+  }
+});
+
+const currentContexts = async (env) => {
+  ensureContextFetcherIdentity();
+  const now = Date.now();
+  const definitions = contextDefinitions(env, now);
+  const sourceEntries = await Promise.all(Object.entries(definitions).map(async ([name, definition]) => [
+    name,
+    await refreshContextSource(name, { ...definition, policy: CONTEXT_SOURCE_POLICIES[name] }, now)
+  ]));
+  const sources = Object.fromEntries(sourceEntries);
+  const modelled = sources.modelledAir.value?.readings ?? [];
+  const measured = sources.measuredAir.value ?? [];
+  const contextStatus = Object.fromEntries(Object.entries(sources).map(([name, source]) => [
+    name === "bathingAlerts" ? "bathing" : name === "issTle" ? "iss" : name === "forecast" ? "forecast" : name,
+    source.status
+  ]));
+  const contextProvenance = Object.fromEntries(Object.entries(sources).map(([name, source]) => [
+    name === "bathingAlerts" ? "bathing" : name === "issTle" ? "iss" : name === "forecast" ? "forecast" : name,
+    source.metadata
+  ]));
+  const cacheable = Object.values(contextStatus).some((status) => status !== "unavailable");
   return json({
-    generatedAt: new Date().toISOString(),
-    marine: marine.status === "fulfilled" ? marine.value.readings : [],
-    radar: radar.status === "fulfilled" ? radar.value : [],
-    grid: grid.status === "fulfilled" ? grid.value.reading : null,
+    generatedAt: new Date(now).toISOString(),
+    marine: sources.marine.value?.readings ?? [],
+    radar: sources.radar.value ?? [],
+    grid: sources.grid.value?.reading ?? null,
     airQuality: [...measured, ...modelled],
-    aurora: aurora.status === "fulfilled" ? aurora.value : null,
-    tides: tides.status === "fulfilled" ? tides.value.readings : [],
-    bathingAlerts: bathingAlerts.status === "fulfilled" ? bathingAlerts.value.alerts : [],
-    warnings: warningsHealthy ? warnings.value : [],
-    warningsStatus: warnings.status === "fulfilled" ? "live" : "unavailable",
-    solar: solarReading,
-    forecast: forecastValue,
-    satellite: satellite.status === "fulfilled" ? satellite.value : null,
-    earthquakes: earthquakes.status === "fulfilled" ? earthquakes.value : [],
-    issTle: issTle.status === "fulfilled" ? issTle.value : null,
-    contextStatus
-  }, 200, Object.values(contextStatus).some((status) => status !== "live" && status !== "fallback") ? 0 : 60, 0);
+    aurora: sources.aurora.value ?? null,
+    tides: sources.tides.value?.readings ?? [],
+    bathingAlerts: sources.bathingAlerts.value?.alerts ?? [],
+    warnings: sources.warnings.value ?? [],
+    warningsStatus: sources.warnings.status,
+    solar: sources.solar.value?.reading ?? null,
+    forecast: sources.forecast.value?.forecast ?? null,
+    satellite: sources.satellite.value ?? null,
+    earthquakes: sources.earthquakes.value ?? [],
+    issTle: sources.issTle.value ?? null,
+    contextStatus,
+    contextProvenance
+  }, 200, cacheable ? 30 : 0, cacheable ? 120 : 0);
 };
 
 const transitContext = async (env) => {
@@ -843,9 +1007,47 @@ const transitContext = async (env) => {
   }
 };
 
+const API_PATHS = new Set(["/api/health", "/api/living", "/api/contexts", "/api/transit"]);
+
+const methodResponse = (request) => {
+  const headers = {
+    allow: "GET, HEAD, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, HEAD, OPTIONS",
+    "access-control-allow-headers": "content-type"
+  };
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+  return new Response(JSON.stringify({ error: "Method not allowed" }), {
+    status: 405,
+    headers: { ...headers, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
+  });
+};
+
+const healthResponse = (env) => json({
+  status: "ok",
+  service: "a-day-in-ireland",
+  runtime: env.EDGE_RUNTIME ?? "local-worker",
+  build: {
+    commitSha: env.BUILD_COMMIT_SHA ?? "unknown",
+    builtAt: env.BUILD_TIMESTAMP ?? "unknown",
+    configSha256: env.BUILD_CONFIG_SHA256 ?? "unknown",
+    transitDataSha256: env.BUILD_DATA_SHA256 ?? "unknown",
+    deploymentId: env.DEPLOYMENT_ID ?? "unknown"
+  },
+  storage: {
+    historyDb: Boolean(env.HISTORY_DB),
+    ntaCoordinator: Boolean(env.NTA_FEED),
+    riverCoordinator: Boolean(env.RIVER_FEED)
+  }
+}, 200, 0);
+
 const worker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (API_PATHS.has(url.pathname) && request.method !== "GET" && request.method !== "HEAD") {
+      return methodResponse(request);
+    }
+    if (url.pathname === "/api/health") return healthResponse(env);
     if (url.pathname === "/api/living") {
       try {
         return await livingLayers(env);
@@ -863,6 +1065,7 @@ const worker = {
       }
     }
     if (url.pathname === "/api/transit") return transitContext(env);
+    if (request.method !== "GET" && request.method !== "HEAD") return methodResponse(request);
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404) return response;
     if (url.pathname.includes(".")) return response;

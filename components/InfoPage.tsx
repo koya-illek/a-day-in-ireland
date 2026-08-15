@@ -11,13 +11,13 @@ const INFO_LINKS = [
 
 export default function InfoPage({
   current,
-  eyebrow,
+  sectionLabel,
   title,
   introduction,
   children
 }: {
   current: "about" | "data" | "privacy" | "contact";
-  eyebrow: string;
+  sectionLabel: string;
   title: string;
   introduction: string;
   children: ReactNode;
@@ -42,7 +42,7 @@ export default function InfoPage({
         </nav>
       </header>
       <article>
-        <p className="eyebrow">{eyebrow}</p>
+        <p className="utility-label">{sectionLabel}</p>
         <h1>{title}</h1>
         <p className="info-introduction">{introduction}</p>
         <div className="info-content">{children}</div>

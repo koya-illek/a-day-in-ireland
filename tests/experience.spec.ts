@@ -2366,11 +2366,11 @@ test("unavailable providers and old observations never appear live or as zero ac
   await expect(page.locator(".workspace-facts .hero-fact.movement")).toHaveCount(0);
   await expect(page.locator(".workspace-facts .hero-fact.sea")).toHaveCount(0);
   await expect(page.locator(".workspace-facts .hero-fact.energy")).toHaveCount(0);
-  await expect(page.locator(".pulse-card.grid strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.grid strong")).toHaveText("Unavailable");
   await expect(page.locator(".pulse-card.grid")).toContainText("EirGrid data unavailable");
-  await expect(page.locator(".pulse-card.trains strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.trains strong")).toHaveText("Unavailable");
   await expect(page.locator(".pulse-card.trains")).toContainText("rail positions unavailable");
-  await expect(page.locator(".pulse-card.rivers strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.rivers strong")).toHaveText("Unavailable");
   await expect(page.locator(".pulse-card.rivers")).toContainText("river readings unavailable");
   await expect(page.locator(".timeline-empty-state")).toContainText("Hourly weather observations are unavailable");
   await expect(page.locator(".timeline-plot-scroll")).toHaveCount(0);
@@ -2464,8 +2464,8 @@ test("connection state settles truthfully, retries, and retains last-good data o
   await expect(page.locator(".official-notices-empty")).toContainText("Connecting");
 
   await expect(page.locator(".live-state")).toHaveAttribute("data-service-state", "unavailable");
-  await expect(page.locator(".pulse-card.trains strong")).toHaveText("—");
-  await expect(page.locator(".pulse-card.rivers strong")).toHaveText("—");
+  await expect(page.locator(".pulse-card.trains strong")).toHaveText("Unavailable");
+  await expect(page.locator(".pulse-card.rivers strong")).toHaveText("Unavailable");
   await expect(page.locator(".pulse-card.trains")).toContainText("cannot be assessed");
   await expect(page.locator(".signal-assessment")).toContainText("Unable to assess every selected signal source");
   await expect(page.locator(".official-notices-empty")).toContainText("cannot be confirmed");
@@ -2479,7 +2479,7 @@ test("connection state settles truthfully, retries, and retains last-good data o
   await expect(page.locator(".pulse-card.rivers strong")).toHaveText("1");
   await expect(page.locator(".live-state")).not.toHaveAttribute("data-service-state", "unavailable");
   const successfulRefreshTime = await page.locator(".live-state time").textContent();
-  expect(successfulRefreshTime).not.toBe("—");
+  expect(successfulRefreshTime).not.toBe("Unavailable");
 
   await page.context().setOffline(true);
   await expect(page.locator(".live-state")).toHaveAttribute("data-service-state", "offline");
@@ -2823,7 +2823,7 @@ test("320px at 200 percent text keeps actions, preset overflow, map, and list us
   await page.evaluate(() => { document.documentElement.style.fontSize = "200%"; });
 
   const actions = page.locator(".header-actions button");
-  await expect(actions).toHaveCount(2);
+  await expect(actions).toHaveCount(3);
   for (const action of await actions.all()) await expect(action).toBeVisible();
   const actionBounds = await actions.evaluateAll((buttons) => buttons.map((button) => {
     const bounds = button.getBoundingClientRect();

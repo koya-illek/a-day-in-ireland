@@ -118,7 +118,7 @@ export function ExplorePanel({
         inert={!open}
       >
         <div className="panel-heading">
-          <div><p className="eyebrow">Explore the moment</p><h2>Live layers</h2></div>
+          <div><p className="utility-label">Explore the moment</p><h2>Live layers</h2></div>
           <button ref={closeRef} onClick={() => onOpenChange(false)} aria-label="Close explore panel">×</button>
         </div>
         <div className="panel-layer-state" role="status">
@@ -179,7 +179,7 @@ export function ExplorePanel({
           ))}
         </div>
         <div className="source-note">
-          <p className="eyebrow">About the data</p>
+          <p className="utility-label">About the data</p>
           <p>{timeMode === "past" ? "This view uses retained observations, representative rollups and explicit collector gaps. Raw rail or TFI positions and radar or satellite pixels are not archived. Missing history is never replaced with newer data or shown as zero." : "Weather, radar, rail, marine, grid and public signals refresh automatically. Air markers explicitly distinguish delayed station measurements from model output. Solar events and official forecast copy retain their provider meaning. Missing data is never shown as zero."}</p>
           <p>{timeMode === "past" ? `Stored record: ${historyEnvelope?.resolutionMinutes ? historyResolutionLabel(historyEnvelope.resolutionMinutes) : "resolution unavailable"}; ${historyGaps.length} recorded gap${historyGaps.length === 1 ? "" : "s"}.` : <>Provider status: rail {provenanceLabel(snapshot.sourceProvenance?.trains.status ?? "unavailable")}; rivers {provenanceLabel(snapshot.sourceProvenance?.rivers.status ?? "unavailable")}{snapshot.sourceProvenance?.rivers.fallback ? ` via temporary ${snapshot.sourceProvenance.rivers.fallback} path` : ""}.</>}</p>
           <a href="https://www.met.ie/about-us/specialised-services/open-data" target="_blank" rel="noreferrer">Met Éireann open data ↗</a>

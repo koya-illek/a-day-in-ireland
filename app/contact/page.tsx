@@ -4,14 +4,15 @@ import InfoPage from "../../components/InfoPage";
 export const metadata: Metadata = {
   title: "Contact",
   description: "Contact A Day in Ireland about feedback, data or collaboration.",
-  alternates: { canonical: "/contact" }
+  alternates: { canonical: "/contact" },
+  openGraph: { url: "/contact", title: "Contact · A Day in Ireland", description: "Contact A Day in Ireland about feedback, data or collaboration." }
 };
 
 export default function ContactPage() {
   return (
     <InfoPage
       current="contact"
-      eyebrow="Contact"
+      sectionLabel="Contact"
       title="Feedback makes the map better."
       introduction="Report a misleading signal, inaccessible interaction, broken source or an idea that would make the island more understandable."
     >

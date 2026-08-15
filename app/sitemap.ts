@@ -6,7 +6,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const routes = ["", "/about", "/data", "/privacy", "/contact"];
   return routes.map((route) => ({
     url: `https://day.illek.ie${route}`,
-    lastModified: new Date(),
     changeFrequency: route === "" ? "daily" : "monthly",
     priority: route === "" ? 1 : .6
   }));

@@ -44,6 +44,17 @@ test("TFI presentation turns a captured provider route ID into public route and 
   });
 });
 
+test("TFI presentation uses a timetable destination when the realtime trip is matched", () => {
+  const presentation = transitPresentation({
+    id: "vehicle-100",
+    route: "10000 GREEN g a",
+    label: "100",
+    bearing: 180,
+    destination: "Brides Glen"
+  });
+  assert.equal(presentation.destination, "Brides Glen");
+});
+
 test("TFI presentation strips internal control characters instead of inventing a destination", () => {
   const presentation = transitPresentation({
     id: "vehicle-15",

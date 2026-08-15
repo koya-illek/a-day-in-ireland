@@ -22,7 +22,7 @@ import type {
   TrainPosition
 } from "../lib/types";
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
-import { refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
+import { enrichTransitDestinations, refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
@@ -446,6 +446,7 @@ const historyGapForFocus = (gaps: HistoryGap[], focus: ContextFocus) => {
 
 
 export default function IrelandExperience({ initialSnapshot }: { initialSnapshot: LiveSnapshot }) {
+  const [interfaceTheme, setInterfaceTheme] = useState<"dark" | "light">("dark");
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
   const [wallClockNow, setWallClockNow] = useState(() => new Date(initialSnapshot.generatedAt));
   const [timeMode, setTimeMode] = useState<TimeMode>("now");
@@ -488,6 +489,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [placeMessage, setPlaceMessage] = useState("");
   const [activeSection, setActiveSection] = useState<ExperienceSection>("map");
   const [viewHydrated, setViewHydrated] = useState(false);
+  const viewHydrationStartedRef = useRef(false);
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
   const [mapDimensions, setMapDimensions] = useState({ width: 1000, height: 900 });
@@ -786,6 +788,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         solar: next.solar,
         forecast: next.forecast,
         contextStatus: next.contextStatus,
+        contextProvenance: next.contextProvenance,
         warnings: next.warnings
       }));
       if (active) setRadarFrameIndex(Math.max(0, next.radar.length - 1));
@@ -850,6 +853,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [layers]);
 
   useEffect(() => {
+    if (timeMode === "past" || !layers.has("transit")) return;
+    const vehicles = liveSnapshotRef.current.transit;
+    if (!vehicles.some((vehicle) => vehicle.tripId && !vehicle.destination)) return;
+    let active = true;
+    void enrichTransitDestinations(vehicles).then((enriched) => {
+      if (!active) return;
+      setLiveSnapshot((current) => {
+        const next = { ...current, transit: enriched };
+        liveSnapshotRef.current = next;
+        return next;
+      });
+    });
+    return () => { active = false; };
+  }, [layers, snapshot.transit, timeMode]);
+
+  useEffect(() => {
     const experience = experienceRef.current;
     if (!experience || !selected) return;
     experience.setAttribute("inert", "");
@@ -879,8 +898,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [snapshot.contextStatus, snapshot.sourceProvenance, snapshot.sourceStatus, snapshot.transitStatus, snapshotReadable]);
 
   const projection = useMemo(
-    () => geoMercator().center([-8.05, 53.45]).scale(5350).translate([500, 462]),
-    []
+    () => geoMercator()
+      .center([-8.05, 53.45])
+      .scale(mapDimensions.width <= 430 ? 5750 : mapDimensions.width <= 600 ? 5550 : 5350)
+      .translate([500, 462]),
+    [mapDimensions.width]
   );
   const islandPaths = useMemo(() => {
     const path = geoPath(projection);
@@ -1699,6 +1721,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [rememberVisibleMapAnchor]);
 
   useEffect(() => {
+    if (viewHydrationStartedRef.current) return;
+    viewHydrationStartedRef.current = true;
     const params = new URLSearchParams(window.location.search);
     const storedPlace = readStoredPlace();
     const parsedView = parseViewState(window.location.search, PLACE_OPTIONS.map((place) => place.id));
@@ -2053,7 +2077,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       text: timeMode === "past" && (historyState.envelope?.resolvedAt ?? historyState.requestedAt)
         ? `See stored conditions around ${selectedPlace.name} at ${formatIrelandHistoryTime(historyState.envelope?.resolvedAt ?? historyState.requestedAt!)}.`
         : selectedPlace.id === "island" || selectedPlaceIsEphemeral
-          ? "See weather, movement, water and energy across Ireland—happening now."
+          ? "See weather, movement, water and energy across Ireland, happening now."
           : `See what is happening around ${selectedPlace.name} right now.`,
       url
     };
@@ -2076,6 +2100,32 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }
     }
   }, [activePreset, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
+
+  useLayoutEffect(() => {
+    let storedTheme: string | null = null;
+    try {
+      storedTheme = window.localStorage.getItem("ireland-interface-theme");
+    } catch {
+      // The system preference remains available when browser storage is blocked.
+    }
+    const preferredTheme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    const nextTheme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : preferredTheme;
+    setInterfaceTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+  }, []);
+
+  const toggleInterfaceTheme = useCallback(() => {
+    setInterfaceTheme((currentTheme) => {
+      const nextTheme = currentTheme === "dark" ? "light" : "dark";
+      document.documentElement.dataset.theme = nextTheme;
+      try {
+        window.localStorage.setItem("ireland-interface-theme", nextTheme);
+      } catch {
+        // The selected theme remains active for this page when storage is blocked.
+      }
+      return nextTheme;
+    });
+  }, []);
 
   return (
     <main
@@ -2117,6 +2167,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <nav className="header-actions" aria-label="Experience controls">
           <button
             type="button"
+            className="theme-button"
+            aria-label={`Use ${interfaceTheme === "dark" ? "light" : "dark"} mode`}
+            aria-pressed={interfaceTheme === "light"}
+            onClick={toggleInterfaceTheme}
+          >
+            <span aria-hidden="true">{interfaceTheme === "dark" ? "☼" : "☾"}</span>
+            {interfaceTheme === "dark" ? "Light" : "Dark"}
+          </button>
+          <button
+            type="button"
             className="share-button"
             data-share-place-id={selectedPlace.id}
             aria-label={shareStatus === "copied" ? "Share link copied" : `Share this view for ${selectedPlace.name}`}
@@ -2144,7 +2204,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       <section className="dashboard-shell">
         <aside className="section-rail" aria-label="Section shortcuts">
-          <p className="section-rail-kicker">{timeMode === "past" ? "Historical atlas" : "Living atlas"}</p>
           <nav className="section-nav" aria-label="Section shortcuts">
             {EXPERIENCE_SECTIONS.map((section) => (
               <a
@@ -2172,7 +2231,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       >
         <div className="map-explorer-heading">
           <div>
-            <p className="eyebrow">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
+            <p className="utility-label">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
             <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
             <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
           </div>
@@ -2355,7 +2414,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 >
                   <circle className="buoy-wave" r={10 + (marineSite.waveHeight ?? 0) * 5} />
                   <circle className="buoy-core" r="3" />
-                  <text x="8" y="4">{marineSite.waveHeight?.toFixed(1) ?? "—"} m</text>
+                  <text x="8" y="4">{marineSite.waveHeight?.toFixed(1) ?? "Unavailable"} m</text>
                 </MapMarker>
               ) : null;
             })}
@@ -2376,7 +2435,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 >
                   <circle r="11" />
                   <path d="M-7 1Q-3-4 1 1T9 1" />
-                  <text x="13" y="4">{tide.waterLevel?.toFixed(2) ?? "—"} m</text>
+                  <text x="13" y="4">{tide.waterLevel?.toFixed(2) ?? "Unavailable"} m</text>
                 </MapMarker>
               ) : null;
             })}
@@ -2473,7 +2532,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   onActivate={() => setSelected({ type: "air", item: reading })}
                 >
                   <circle r="15" />
-                  <text textAnchor="middle" y="4">{reading.europeanAqi ?? "—"}</text>
+                  <text textAnchor="middle" y="4">{reading.europeanAqi ?? "Unavailable"}</text>
                 </MapMarker>
               ) : null;
             })}
@@ -2716,7 +2775,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
           <div>
-            <p className="eyebrow">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
+            <p className="utility-label">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
             <h2 id="what-matters-heading">What {timeMode === "past" ? "mattered then" : "matters now"}.</h2>
           </div>
 
@@ -2725,7 +2784,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`} role="region" aria-label={`${timeMode === "past" ? "Historical" : "Current"} highlighted signals`}>
           {showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
             <button className="signal-item" onClick={() => focusContext("radar")}>
-              <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall?.toFixed(1) ?? "—"} mm recently observed</small>
+              <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall?.toFixed(1) ?? "Unavailable"} mm recently observed</small>
             </button>
           )}
           {showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.map((alert) => (
@@ -2762,7 +2821,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="what-matters-grid">
         <button className="pulse-card grid" onClick={() => focusContext("grid")}>
           <span><i>ϟ</i> All-island electricity</span>
-          <strong>{isConnectingWithoutSnapshot ? "…" : gridWindShare === null ? "—" : `${gridWindShare.toFixed(0)}%`}</strong>
+          <strong>{isConnectingWithoutSnapshot ? "…" : gridWindShare === null ? "Unavailable" : `${gridWindShare.toFixed(0)}%`}</strong>
           <small>{isConnectingWithoutSnapshot
             ? timeMode === "past" ? "Loading stored EirGrid coverage" : "Connecting to EirGrid operational data"
             : gridNotableCurrent && gridWindShare !== null
@@ -2781,14 +2840,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </button>
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
-          <strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "—" : railNotableCurrent || trainsCached ? runningTrainCount ?? "—" : "—"}</strong>
+          <strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "Unavailable" : railNotableCurrent || trainsCached ? runningTrainCount ?? "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored rail aggregate" : "Connecting to Iarnród Éireann positions"}` : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "rail services represented in the retained aggregate; individual positions were not retained" : historyGapForFocus(historyGaps, "trains")?.detail ?? "rail history unavailable; no zero is inferred" : railNotableCurrent ? runningTrainCount === null ? "rail positions are present, but the service count is unavailable" : "trains currently reporting a position across Ireland · last seen at refresh, not a provider observation clock" : trainsCached ? runningTrainCount === null ? "cached positions are present, but the service count is unavailable" : "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
           <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
         <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
-          <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "—" : "—"}</strong>
+          <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "temporary OPW fetch-path readings are present, but the gauge count is unavailable" : `temporary ${snapshot.sourceProvenance?.rivers.fallback} path · still OPW gauge levels` : "river readings unavailable; current levels cannot be assessed"}</small>
           <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
@@ -2800,7 +2859,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           {timeMode === "past" ? (
             <div className="now-guidance history-guidance" aria-labelledby="guidance-heading">
               <div className="guidance-heading">
-                <div><p className="eyebrow">Historical context · {selectedPlace.name}</p><h3 id="guidance-heading">Live guidance is paused.</h3></div>
+                <div><p className="utility-label">Historical context · {selectedPlace.name}</p><h3 id="guidance-heading">Live guidance is paused.</h3></div>
                 <p>Stored observations are for review and comparison only. They are not used as current travel, coastal, outdoor or safety guidance.</p>
               </div>
             </div>
@@ -2808,7 +2867,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <div className="now-guidance" aria-labelledby="guidance-heading">
               <div className="guidance-heading">
                 <div>
-                  <p className="eyebrow">Live context · {selectedPlace.name}</p>
+                  <p className="utility-label">Live context · {selectedPlace.name}</p>
                   <h3 id="guidance-heading">What the live data supports.</h3>
                 </div>
                 <p>Observed conditions, official notices and feed coverage grouped by intent. They are not a forecast, safety service, or promise of conditions at your exact location.</p>

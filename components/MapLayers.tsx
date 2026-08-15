@@ -124,7 +124,7 @@ export function StationMarker({
       {wet && <circle className="rain-ring" r="17" />}
       <circle className="station-halo" r="11" />
       <circle className="station-core" r="4" />
-      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "—"}°</text>
+      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "Unavailable"}°</text>
     </MapMarker>
   );
 }

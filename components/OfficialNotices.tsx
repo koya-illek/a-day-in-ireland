@@ -68,7 +68,7 @@ export function OfficialNotices({
         <>
           <div className="official-notices-heading">
             <div>
-              <p className="eyebrow">{timeMode === "past" ? "Stored official notices" : "Official notices"}</p>
+              <p className="utility-label">{timeMode === "past" ? "Stored official notices" : "Official notices"}</p>
               <h2 id="official-notices-heading">Official notices {timeMode === "past" ? "at the selected time" : "across Ireland"}</h2>
             </div>
             <p>{timeMode === "past" ? "Notices are evaluated against the selected capture time. Gaps remain explicit and the current warning page is not treated as an archive." : "Met Éireann notices are shown with their named scope and timing. Regional notices do not describe the whole island."}</p>

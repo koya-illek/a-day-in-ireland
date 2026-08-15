@@ -177,6 +177,8 @@ export type TransitVehicle = {
   id: string;
   latitude: number;
   longitude: number;
+  tripId?: string;
+  destination?: string;
   route: string;
   label: string;
   bearing: number | null;
@@ -231,6 +233,18 @@ export type ProviderProvenance = {
 
 export type ObservationSourceStatus = "live" | "partial" | "stale" | "fallback" | "unavailable";
 export type ContextSourceStatus = "live" | "partial" | "fallback" | "stale" | "credential-required" | "unavailable";
+export type ContextSourceProvenance = {
+  status: ContextSourceStatus;
+  fetchedAt: string | null;
+  lastSuccessAt: string | null;
+  ageSeconds: number | null;
+  staleSince: string | null;
+  errorCode: string | null;
+};
+export type ContextSourceName =
+  | "marine" | "radar" | "grid" | "measuredAir" | "modelledAir" | "aurora"
+  | "tides" | "bathing" | "satellite" | "earthquakes" | "iss" | "warnings"
+  | "solar" | "forecast";
 
 export type LiveSnapshot = {
   generatedAt: string;
@@ -275,6 +289,7 @@ export type LiveSnapshot = {
     solar: ContextSourceStatus;
     forecast: ContextSourceStatus;
   };
+  contextProvenance?: Partial<Record<ContextSourceName, ContextSourceProvenance>>;
   summary: {
     warmest: StationReading | null;
     wettest: StationReading | null;

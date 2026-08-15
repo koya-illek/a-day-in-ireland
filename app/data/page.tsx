@@ -4,7 +4,8 @@ import InfoPage from "../../components/InfoPage";
 export const metadata: Metadata = {
   title: "Data & methodology",
   description: "Sources, update intervals and interpretation used by A Day in Ireland.",
-  alternates: { canonical: "/data" }
+  alternates: { canonical: "/data" },
+  openGraph: { url: "/data", title: "Data & methodology · A Day in Ireland", description: "Sources, update intervals and interpretation used by A Day in Ireland." }
 };
 
 const sources = [
@@ -29,8 +30,8 @@ export default function DataPage() {
   return (
     <InfoPage
       current="data"
-      eyebrow="Data & methodology"
-      title="What the map knows—and what it does not."
+      sectionLabel="Data & methodology"
+      title="What the map knows, and what it does not."
       introduction="A Day in Ireland combines sources with different meanings and update schedules. The interface keeps observations, models, forecasts and local calculations distinct."
     >
       <section>
@@ -44,7 +45,7 @@ export default function DataPage() {
       </section>
       <section>
         <h2>Historical coverage and retention</h2>
-        <p>History is collected every 15 minutes once collection begins. Fifteen-minute snapshots—the raw history tier, not copies of every provider payload—are kept for 30 days. Hourly rollups are kept for 12 months, and daily summaries are retained thereafter.</p>
+        <p>History is collected every 15 minutes once collection begins. Fifteen-minute snapshots, the raw history tier, not copies of every provider payload, are kept for 30 days. Hourly rollups are kept for 12 months, and daily summaries are retained thereafter.</p>
         <p>Exact cross-provider playback begins when collection starts. Missing provider observations and collection gaps remain missing; they are never inferred as zero. Hourly rollups and daily summaries describe the available observations rather than recreating every value that was visible at the time.</p>
         <p>Transport history contains only national or route-level NTA summaries. It does not retain raw train or public-transport vehicle positions, vehicle identifiers or public messages. Radar and satellite image bytes are not archived, so historical imagery is not guaranteed.</p>
         <p>Solar events and official forecast text are not retained in history v1; a historical view exposes an explicit gap rather than substituting today&apos;s sky or forecast.</p>

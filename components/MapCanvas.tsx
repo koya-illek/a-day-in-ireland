@@ -100,7 +100,7 @@ export function MapCanvas({
           <mask id="satelliteContextMask"><ellipse cx="520" cy="470" rx="315" ry="445" fill="url(#satelliteFade)" /></mask>
         </defs>
         <g clipPath="url(#viewportClip)">
-          <rect width="1000" height="900" fill="url(#ocean)" />
+          <rect className="map-ocean" width="1000" height="900" fill="url(#ocean)" />
           <g
             className="map-viewport"
             data-scale={mapView.scale.toFixed(2)}

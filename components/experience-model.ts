@@ -180,8 +180,8 @@ export function weatherNarrative(snapshot: LiveSnapshot) {
     : !warm && !rain
     ? "Current weather observations are unavailable."
     : rain && (rain.rainfall ?? 0) > 0
-    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°.`
-    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "—"}°, and none of the reporting stations have measured rain.`;
+    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "Unavailable"}°.`
+    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "Unavailable"}°, and none of the reporting stations have measured rain.`;
 }
 
 export function buildHeroSentences(options: {

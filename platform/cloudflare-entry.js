@@ -9,20 +9,70 @@ const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
 const responseHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=15"
+  "cache-control": "public, max-age=15, s-maxage=15",
+  "x-robots-tag": "noindex, nofollow"
 };
 const partialHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=0"
+  "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=0",
+  "x-robots-tag": "noindex, nofollow"
 };
 const transitLiveHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0"
+  "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0",
+  "x-robots-tag": "noindex, nofollow"
 };
 const transitUnavailableHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "no-store"
+  "cache-control": "no-store",
+  "x-robots-tag": "noindex, nofollow"
 };
+
+const API_PATHS = new Set([
+  "/api/health",
+  "/api/history",
+  "/api/history/range",
+  "/api/transit",
+  "/api/living",
+  "/api/contexts"
+]);
+
+const methodResponse = (request) => {
+  const headers = {
+    allow: "GET, HEAD, OPTIONS",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, HEAD, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "x-robots-tag": "noindex, nofollow"
+  };
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+  return new Response("Method not allowed", { status: 405, headers });
+};
+
+const healthResponse = (env) => Response.json({
+  status: "ok",
+  service: "a-day-in-ireland",
+  runtime: "cloudflare-worker",
+  build: {
+    commitSha: env.BUILD_COMMIT_SHA ?? "unknown",
+    builtAt: env.BUILD_TIMESTAMP ?? "unknown",
+    configSha256: env.BUILD_CONFIG_SHA256 ?? "unknown",
+    transitDataSha256: env.BUILD_DATA_SHA256 ?? "unknown",
+    deploymentId: env.DEPLOYMENT_ID ?? "unknown"
+  },
+  storage: {
+    historyDb: Boolean(env.HISTORY_DB),
+    ntaCoordinator: Boolean(env.NTA_FEED),
+    riverCoordinator: Boolean(env.RIVER_FEED)
+  }
+}, {
+  headers: {
+    "cache-control": "no-store",
+    "access-control-allow-origin": "*",
+    "content-type": "application/json; charset=utf-8",
+    "x-robots-tag": "noindex, nofollow"
+  }
+});
 
 const captureCutoff = (url, fallback = Date.now()) => {
   const value = Number(url.searchParams.get("captureBucketStartMs"));
@@ -308,42 +358,42 @@ export const runPaidHistoryTick = async (env, scheduledTime, {
 };
 
 const staticResponse = async (request, env) => {
-  const incoming = new URL(request.url);
-  const pagesOrigin = env.PAGES_ORIGIN || "https://a-day-in-ireland.pages.dev";
-  const origin = new URL(`${incoming.pathname}${incoming.search}`, pagesOrigin);
-  return fetch(new Request(origin, request), {
-    cf: {
-      cacheEverything: true,
-      cacheTtlByStatus: {
-        "200-299": incoming.pathname.includes("/_next/static/") ? 31_536_000 : 300,
-        "404": 30,
-        "500-599": 0
-      }
-    }
+  return env.ASSETS.fetch(request);
+};
+
+const noIndexResponse = async (responsePromise) => {
+  const response = await responsePromise;
+  const headers = new Headers(response.headers);
+  headers.set("x-robots-tag", "noindex, nofollow");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
   });
 };
 
 const cloudflareWorker = {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (API_PATHS.has(url.pathname) && request.method !== "GET" && request.method !== "HEAD") {
+      return methodResponse(request);
+    }
+    if (url.pathname === "/api/health") return healthResponse(env);
     if (url.pathname === "/api/history" || url.pathname === "/api/history/range") {
-      return handleHistoryRequest(request, env);
+      return noIndexResponse(handleHistoryRequest(request, env));
     }
     if (url.pathname === "/api/transit") {
       const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
-      return coordinator.fetch("https://internal/transit");
+      return noIndexResponse(coordinator.fetch("https://internal/transit"));
     }
     if (url.pathname === "/api/living") {
       return livingResponse(env);
     }
     if (url.pathname === "/api/contexts") {
-      return apiWorker.fetch(request, env);
+      return noIndexResponse(apiWorker.fetch(request, env));
     }
     if (request.method === "GET" || request.method === "HEAD") return staticResponse(request, env);
-    return new Response("Method not allowed", {
-      status: 405,
-      headers: { allow: "GET, HEAD" }
-    });
+    return methodResponse(request);
   },
 
   async scheduled(controller, env, ctx) {

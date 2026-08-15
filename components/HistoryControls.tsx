@@ -143,7 +143,7 @@ export function HistoryControls({
     <section className="history-controls" aria-labelledby="history-controls-heading" aria-busy={history.status === "loading"}>
       <div className="history-mode-row">
         <div>
-          <p className="eyebrow">Time view</p>
+          <p className="utility-label">Time view</p>
           <h3 id="history-controls-heading">Now or past conditions</h3>
         </div>
         <div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
@@ -204,7 +204,7 @@ export function HistoryControls({
           {history.status === "ready" && resolutionMinutes >= 1440 && periodSummary && (
             <section className="history-period-summary" aria-labelledby="history-period-summary-heading">
               <div>
-                <p className="eyebrow">Retained daily summary</p>
+                <p className="utility-label">Retained daily summary</p>
                 <h4 id="history-period-summary-heading">Across {periodSummary.representedSamples.toLocaleString("en-IE")} retained hourly representative{periodSummary.representedSamples === 1 ? "" : "s"}</h4>
                 <p>These values describe the retained hourly representatives only. They are not full-day extrema or a reconstructed point map.</p>
               </div>

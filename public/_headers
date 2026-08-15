@@ -1,6 +1,6 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://a-day-in-ireland-api.koya-illek.workers.dev https://prodapi.metweb.ie https://www.met.ie https://gdal.met.ie https://discomap.eea.europa.eu https://cloudflareinsights.com; frame-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://prodapi.metweb.ie https://www.met.ie https://gdal.met.ie https://discomap.eea.europa.eu https://cloudflareinsights.com; frame-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
   Permissions-Policy: camera=(), microphone=(), geolocation=(self), payment=()
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
@@ -9,3 +9,9 @@
 
 /social/*
   Cache-Control: public, max-age=604800
+
+/data/transit-destinations.manifest.json
+  Cache-Control: public, max-age=300, must-revalidate
+
+/data/transit-destinations.*.json
+  Cache-Control: public, max-age=31536000, immutable

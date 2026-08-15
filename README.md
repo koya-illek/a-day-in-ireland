@@ -2,6 +2,9 @@
 
 A living, near-real-time portrait of weather, water, energy and movement across Ireland.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the frontend, Worker, Durable Object,
+history, source coordination, data-flow, and third-party provider architecture.
+
 ## Data
 
 - Met Éireann observations, warnings and five-minute rainfall-radar tiles, licensed under CC BY 4.0.
@@ -27,8 +30,8 @@ The NTA integration is credential-aware: without `NTA_API_KEY`, the UI explains 
 
 The Cloudflare production architecture uses:
 
-- Pages for the static export in `dist/client`.
-- A Worker custom domain on `day.illek.ie` that serves the API and edge-caches the Pages origin. This lets Cloudflare provision DNS without a separate DNS-write credential.
+- A static export in `dist/client`, served through the Worker asset binding.
+- A Worker custom domain on `day.illek.ie` that serves the API and static assets. Development and preview hostnames remain disabled.
 - A SQLite-backed Durable Object as the single global NTA refresh coordinator.
 - A 65-second upstream refresh floor and 60-second edge response cache, satisfying the NTA token limit across Cloudflare locations.
 - Independent weather, living and context state merges plus two-attempt browser refreshes prevent a single slow upstream from clearing unrelated healthy layers. Failed providers are marked unavailable instead of being kept live by a stale whole-response cache.
@@ -36,9 +39,9 @@ The Cloudflare production architecture uses:
 - Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error. Treat Browser Run as a temporary fetch path, not a second origin of truth.
 - The non-Cloudflare server adapter uses the hosted OpenAI river bridge for that same OPW fallback; treat that bridge as an operational dependency rather than an origin of truth for the data.
 
-The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while immutable Next.js assets are cached for a year at the edge and HTML is cached for five minutes. The direct `pages.dev` origin remains available as a fallback.
+The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while content-hashed generated data assets are cached for a year at the edge and HTML is cached for five minutes.
 
-The Pages origin is configured as `PAGES_ORIGIN` in `wrangler.api.toml` so changing the Pages project does not require editing the Worker source.
+The Worker serves the exported frontend directly from its static asset binding on `day.illek.ie`.
 
 The `/api/living` response includes `sourceStatus` and `sourceProvenance` for rail and river feeds. River provenance distinguishes direct OPW data, the Cloudflare Browser Run fallback, the hosted bridge fallback, cached stale data, and an unavailable source.
 
@@ -46,7 +49,7 @@ The `/api/living` response includes `sourceStatus` and `sourceProvenance` for ra
 npm run build
 npm run deploy:cloudflare:api
 npx wrangler secret put NTA_API_KEY --config wrangler.api.toml
-npm run deploy:cloudflare:pages
+npm run deploy:cloudflare
 ```
 
 Never place the NTA key in `wrangler.api.toml` `[vars]`, `.dev.vars` committed to git, `.env`, or source control. For local Worker runs, copy `.dev.vars.example` to `.dev.vars`. For production, use `wrangler secret put` so Cloudflare stores the encrypted secret.

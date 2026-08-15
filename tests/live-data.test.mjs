@@ -11,7 +11,7 @@ test("project declares production scripts", async () => {
   assert.match(packageJson.default.scripts.build, /weather-stations\.js/);
   assert.ok(packageJson.default.scripts["test:e2e"]);
   assert.ok(packageJson.default.scripts["deploy:cloudflare:api"]);
-  assert.ok(packageJson.default.scripts["deploy:cloudflare:pages"]);
+  assert.ok(packageJson.default.scripts["deploy:cloudflare"]);
 });
 
 test("hosting project id is persisted", async () => {
@@ -30,7 +30,8 @@ test("Cloudflare configuration uses the direct Workers Paid architecture", async
   assert.match(config, /new_sqlite_classes = \["RiverFeedCoordinator"\]/);
   assert.match(config, /\[browser\]\s+binding = "BROWSER"/);
   assert.match(config, /EDGE_RUNTIME = "cloudflare"/);
-  assert.match(config, /PAGES_ORIGIN = "https:\/\/a-day-in-ireland\.pages\.dev"/);
+  assert.match(config, /directory = "\.\/dist\/client"/);
+  assert.match(config, /workers_dev = false/);
 });
 
 test("NTA coordinator serves a fresh globally stored snapshot without refetching", async () => {

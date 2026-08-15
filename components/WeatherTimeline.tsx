@@ -34,7 +34,7 @@ export function WeatherTimeline({
   return (
     <section id="day-so-far" className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
       <div className="dayline-heading">
-        <div><p className="eyebrow">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
+        <div><p className="utility-label">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
         <p>{timeline.length
           ? "Temperature and average observed rain per reporting station use separate labelled scales. Select an hour for wind and exact values, or open the data list below."
           : "Hourly weather appears here only when recent Met Éireann observations can support it."}</p>
@@ -131,7 +131,7 @@ export function WeatherTimeline({
       )}
       {selectedPoint && (
         <p className="timeline-selection" role="status">
-          <b>{selectedPoint.time}</b> · {selectedPoint.temperature?.toFixed(1) ?? "—"}° average temperature · {selectedPoint.rainfall?.toFixed(1) ?? "—"} mm average observed rain per reporting station · {selectedPoint.windSpeed?.toFixed(0) ?? "—"} km/h average wind.
+          <b>{selectedPoint.time}</b> · {selectedPoint.temperature?.toFixed(1) ?? "Unavailable"}° average temperature · {selectedPoint.rainfall?.toFixed(1) ?? "Unavailable"} mm average observed rain per reporting station · {selectedPoint.windSpeed?.toFixed(0) ?? "Unavailable"} km/h average wind.
         </p>
       )}
     </section>

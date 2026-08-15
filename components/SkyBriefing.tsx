@@ -52,29 +52,29 @@ export function SkyLightStrip({ solar, status, now }: {
   if (!solar || status !== "live") {
     return (
       <section className="sky-light-strip unavailable" aria-labelledby="sky-light-heading">
-        <div><p className="eyebrow">Sky & light</p><h2 id="sky-light-heading">Solar events unavailable</h2></div>
+        <div><p className="utility-label">Sky & light</p><h2 id="sky-light-heading">Solar events unavailable</h2></div>
         <p>{status === "stale" ? "The last Dublin event day is cached and is not shown as current." : "Sunrise-Sunset.org did not provide a valid Dublin event day, so no event times are inferred."}</p>
       </section>
     );
   }
   const next = nextSolarTransition(solar, now);
   const illumination = solar.moonIllumination === null
-    ? "—"
+    ? "Unavailable"
     : `${solar.moonIllumination * 100 < 1
       ? (solar.moonIllumination * 100).toFixed(1)
       : Math.round(solar.moonIllumination * 100)}%`;
   return (
     <section className="sky-light-strip" aria-labelledby="sky-light-heading">
       <div className="sky-light-heading">
-        <p className="eyebrow">Sky & light · Dublin time</p>
+        <p className="utility-label">Sky & light · Dublin time</p>
         <h2 id="sky-light-heading">{next ? `${next.label} at ${formatTime(new Date(next.at!))}` : "No later light transition today"}</h2>
         <p>{next ? "The next authoritative change in Ireland’s light." : "The remaining event horizon has no later supplied transition."}</p>
       </div>
       <dl className="sky-light-facts">
-        <div><dt>Sunset</dt><dd>{solar.sunset ? formatTime(new Date(solar.sunset)) : "—"}</dd></div>
-        <div><dt>Dusk</dt><dd>{solar.dusk ? formatTime(new Date(solar.dusk)) : "—"}</dd></div>
+        <div><dt>Sunset</dt><dd>{solar.sunset ? formatTime(new Date(solar.sunset)) : "Unavailable"}</dd></div>
+        <div><dt>Dusk</dt><dd>{solar.dusk ? formatTime(new Date(solar.dusk)) : "Unavailable"}</dd></div>
         <div><dt>Moon</dt><dd>{moonPhaseLabel(solar.moonPhase, solar.moonPhaseName)} · {illumination}</dd></div>
-        <div><dt>Moonrise / set</dt><dd>{solar.moonrise ? formatTime(new Date(solar.moonrise)) : "—"} / {solar.moonset ? formatTime(new Date(solar.moonset)) : "—"}</dd></div>
+        <div><dt>Moonrise / set</dt><dd>{solar.moonrise ? formatTime(new Date(solar.moonrise)) : "Unavailable"} / {solar.moonset ? formatTime(new Date(solar.moonset)) : "Unavailable"}</dd></div>
       </dl>
       <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Source: Sunrise-Sunset.org ↗</a>
     </section>
@@ -90,7 +90,7 @@ export function ForecastStrip({ forecast, status, now }: {
   if (!forecast || !selected) {
     return (
       <section className="forecast-strip unavailable" aria-labelledby="forecast-heading">
-        <div><p className="eyebrow">FORECAST · Met Éireann</p><h2 id="forecast-heading">Official forecast unavailable</h2></div>
+        <div><p className="utility-label">FORECAST · Met Éireann</p><h2 id="forecast-heading">Official forecast unavailable</h2></div>
         <p>{status === "stale" ? "The last official forecast is cached and is not shown as current." : "The official forecast and current warnings could not be confirmed together."}</p>
       </section>
     );
@@ -105,7 +105,7 @@ export function ForecastStrip({ forecast, status, now }: {
   return (
     <section className="forecast-strip" aria-labelledby="forecast-heading">
       <div className="forecast-strip-heading">
-        <p className="eyebrow">FORECAST · Met Éireann · {selected.period}</p>
+        <p className="utility-label">FORECAST · Met Éireann · {selected.period}</p>
         <h2 id="forecast-heading">Next across Ireland</h2>
         <p>Issued {formatTime(new Date(forecast.issued))} Irish time · official copy</p>
       </div>

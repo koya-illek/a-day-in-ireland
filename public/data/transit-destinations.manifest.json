@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "assetPath": "/data/transit-destinations.json",
+  "immutable": false,
+  "source": {
+    "name": "NTA GTFS timetable feed",
+    "url": "https://developer.nationaltransport.ie/",
+    "feedVersion": null,
+    "archiveSha256": null
+  },
+  "generatedAt": "2026-08-14T20:35:04.454Z",
+  "parserVersion": "1.1.0",
+  "rowCount": 139833,
+  "destinationCount": 139833,
+  "collisionCount": 0,
+  "assetSha256": "1b4ff23a2ef2dd2c04b5f75c30db2402bfe51de51da10ed5c321fa3dc4406722"
+}

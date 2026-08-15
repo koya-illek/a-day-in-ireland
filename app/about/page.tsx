@@ -4,16 +4,17 @@ import InfoPage from "../../components/InfoPage";
 export const metadata: Metadata = {
   title: "About",
   description: "Why A Day in Ireland exists and what it is designed to show.",
-  alternates: { canonical: "/about" }
+  alternates: { canonical: "/about" },
+  openGraph: { url: "/about", title: "About · A Day in Ireland", description: "Why A Day in Ireland exists and what it is designed to show." }
 };
 
 export default function AboutPage() {
   return (
     <InfoPage
       current="about"
-      eyebrow="About the project"
+      sectionLabel="About the project"
       title="A living portrait of the island."
-      introduction="A Day in Ireland brings public observations together so the island can be understood as one changing place—not as a collection of disconnected dashboards."
+      introduction="A Day in Ireland brings public observations together so the island can be understood as one changing place, rather than a collection of disconnected dashboards."
     >
       <section>
         <h2>What it is</h2>
