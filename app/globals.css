@@ -1444,14 +1444,6 @@ footer {
   text-transform: none;
 }
 
-.what-matters-now,
-.dayline,
-.official-notices,
-.experience > footer {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 620px;
-}
-
 @media (max-width: 520px) {
   .dashboard-shell { padding: .65rem; }
   .section-rail { padding: .5rem; }

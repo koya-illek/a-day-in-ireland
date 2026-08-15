@@ -86,7 +86,6 @@ export function OfficialNotices({
                   key={warningIdentity}
                   className={`warning-strip official-notice ${(warning.level || "advisory").toLowerCase()} ${timing}`}
                   aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice ${timeMode === "past" ? "at the selected time " : ""}for ${warningScopeText(warning)}`}
-                  role="status"
                 >
                   <span className="warning-badge">{timeMode === "past" ? isActive ? "Active at capture" : "Upcoming at capture" : isActive ? "Official notice" : "Upcoming notice"}</span>
                   <div className="warning-copy">
