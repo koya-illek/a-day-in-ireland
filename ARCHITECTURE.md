@@ -127,7 +127,7 @@ Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. `OPT
 | `d3-geo` | Ireland map projection and geographic calculations |
 | `satellite.js` | Local ISS orbit propagation and pass calculations |
 
-The non-Cloudflare server adapter contains an OpenAI-hosted river bridge fallback. Production on `day.illek.ie` uses the Cloudflare adapter and Browser Rendering path. The bridge is an alternate-adapter dependency and is not an origin of truth.
+The non-Cloudflare server adapter supports an operator-configured river bridge fallback (`RIVER_BRIDGE_URL`, HTTPS only; the bridge is disabled unless the URL is explicitly provided). Production on `day.illek.ie` uses the Cloudflare adapter and Browser Rendering path. A configured bridge is an alternate-adapter dependency and is not an origin of truth.
 
 ## Internal data contract
 

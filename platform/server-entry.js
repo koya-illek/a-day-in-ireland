@@ -194,7 +194,14 @@ export const acquireRiverRaw = async (env, fetcher = fetch) => {
     }
     catch (browserError) { throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`); }
   }
-  const bridge = await fetcher("https://a-day-in-ireland.koya-illek.chatgpt.site/api/living?source=opw-bridge", {
+  // The hosted river bridge is an operator-configured fallback for the
+  // non-Cloudflare adapter only. It stays disabled unless an HTTPS bridge URL
+  // is explicitly provided, so no third-party host is embedded in source.
+  const bridgeUrl = typeof env?.RIVER_BRIDGE_URL === "string" && env.RIVER_BRIDGE_URL.startsWith("https://")
+    ? env.RIVER_BRIDGE_URL
+    : null;
+  if (!bridgeUrl) throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
+  const bridge = await fetcher(bridgeUrl, {
     cf: { cacheEverything: true, cacheTtl: 900 }
   });
   if (bridge.ok) {
@@ -202,7 +209,7 @@ export const acquireRiverRaw = async (env, fetcher = fetch) => {
     if (Array.isArray(bounded.body?.rivers)) return {
       body: { normalizedRivers: bounded.body.rivers.slice(0, 1200) }, bodyBytes: bounded.bodyBytes,
       sourceFeatureCount: bounded.body.rivers.length, truncated: bounded.body.rivers.length > 1200,
-      fetchedAt, status: bounded.body.rivers.length > 1200 ? "partial" : "fallback", fallback: "OpenAI-hosted river bridge"
+      fetchedAt, status: bounded.body.rivers.length > 1200 ? "partial" : "fallback", fallback: "Configured river bridge"
     };
   }
   throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
@@ -753,7 +760,9 @@ const livingLayers = async (env) => {
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: rivers.status === "fulfilled" ? rivers.value.rivers : [],
     riverProvenance: rivers.status === "fulfilled" ? rivers.value.provenance : null,
-    riverStatus: "unavailable"
+    riverStatus: rivers.status === "fulfilled"
+      ? rivers.value.provenance?.status ?? "unavailable"
+      : "unavailable"
   }));
 };
 
@@ -991,12 +1000,27 @@ const currentContexts = async (env) => {
 
 const transitContext = async (env) => {
   try {
-    const result = await fetchTransit(env);
+    // Prefer the shared coordinator when wired so every adapter honours the
+    // same 65-second NTA token-budget floor instead of fetching upstream
+    // directly. The direct fetch remains for adapters without DO bindings.
+    let vehicles;
+    let status;
+    if (env.NTA_FEED?.getByName) {
+      const response = await env.NTA_FEED.getByName("all-island-vehicles").fetch("https://internal/transit");
+      if (!response.ok) throw new Error(`transit-coordinator-http-${response.status}`);
+      const coordinated = await response.json();
+      vehicles = Array.isArray(coordinated.transit) ? coordinated.transit : [];
+      status = coordinated.transitStatus ?? "unavailable";
+    } else {
+      const result = await fetchTransit(env);
+      vehicles = result.vehicles;
+      status = result.status;
+    }
     return json({
       generatedAt: new Date().toISOString(),
-      transit: result.vehicles,
-      transitStatus: result.status
-    }, 200, result.status === "live" ? 15 : 0, 0);
+      transit: vehicles,
+      transitStatus: status
+    }, 200, status === "live" ? 15 : 0, 0);
   } catch (error) {
     console.error("NTA transit refresh failed", error);
     return json({

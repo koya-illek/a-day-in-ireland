@@ -16,7 +16,7 @@ export default function InfoPage({
   introduction,
   children
 }: {
-  current: "about" | "data" | "privacy" | "contact";
+  current: "about" | "data" | "privacy" | "contact" | "not-found";
   sectionLabel: string;
   title: string;
   introduction: string;

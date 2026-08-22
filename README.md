@@ -37,13 +37,13 @@ The Cloudflare production architecture uses:
 - Independent weather, living and context state merges plus two-attempt browser refreshes prevent a single slow upstream from clearing unrelated healthy layers. Failed providers are marked unavailable instead of being kept live by a stale whole-response cache.
 - Browser-side EEA monitoring-station retrieval, keeping heavy CSV processing outside the Worker context endpoint.
 - Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error. Treat Browser Run as a temporary fetch path, not a second origin of truth.
-- The non-Cloudflare server adapter uses the hosted OpenAI river bridge for that same OPW fallback; treat that bridge as an operational dependency rather than an origin of truth for the data.
+- The non-Cloudflare server adapter supports an operator-configured river bridge for that same OPW fallback (`RIVER_BRIDGE_URL`, HTTPS only, disabled unless set); treat any such bridge as an operational dependency rather than an origin of truth for the data.
 
 The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while content-hashed generated data assets are cached for a year at the edge and HTML is cached for five minutes.
 
 The Worker serves the exported frontend directly from its static asset binding on `day.illek.ie`.
 
-The `/api/living` response includes `sourceStatus` and `sourceProvenance` for rail and river feeds. River provenance distinguishes direct OPW data, the Cloudflare Browser Run fallback, the hosted bridge fallback, cached stale data, and an unavailable source.
+The `/api/living` response includes `sourceStatus` and `sourceProvenance` for rail and river feeds. River provenance distinguishes direct OPW data, the Cloudflare Browser Run fallback, the configured bridge fallback (only when `RIVER_BRIDGE_URL` is set), cached stale data, and an unavailable source.
 
 ```bash
 npm run build

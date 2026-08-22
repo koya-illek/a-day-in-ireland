@@ -1,3 +1,6 @@
 # Local Wrangler secrets. Copy to .dev.vars and fill in.
 # Never commit .dev.vars or put this value in wrangler.api.toml [vars].
 NTA_API_KEY=
+# Optional: OPW river bridge fallback for the non-Cloudflare adapter.
+# Leave unset to keep the bridge disabled; production uses Browser Rendering instead.
+# RIVER_BRIDGE_URL=
