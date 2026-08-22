@@ -18,7 +18,7 @@ export default function PrivacyPage() {
     >
       <section>
         <h2>What your browser stores</h2>
-        <p>The experience does not set advertising cookies or create an account for you. The selected place is saved as an identifier in your browser&apos;s local storage so it can be restored on a later visit. The app does not save your GPS coordinates or create a personal profile. Other map-view choices are reflected in the page URL.</p>
+        <p>The experience does not set advertising cookies or create an account for you. The selected place is saved as an identifier in your browser&apos;s local storage so it can be restored on a later visit, and your light or dark theme choice is remembered locally in the same way. The app does not save your GPS coordinates or create a personal profile. Other map-view choices are reflected in the page URL.</p>
       </section>
       <section>
         <h2>Historical public data</h2>

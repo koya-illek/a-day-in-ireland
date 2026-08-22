@@ -19,7 +19,7 @@ export default function AboutPage() {
       <section>
         <h2>What it is</h2>
         <p>The map combines weather, authoritative daylight and lunar events, the official Met Éireann national text forecast, rain radar, public transport, rail, rivers, sea conditions, air quality, tides, electricity and occasional events such as aurora or seismic activity.</p>
-        <p>It is an independent experimental project from <a href="https://illek.ie">Illek</a>. It is not operated by, endorsed by or affiliated with any of the public data providers shown.</p>
+        <p>It is an independent experimental project from <a href="https://illek.ie" target="_blank" rel="noreferrer">Illek</a>. It is not operated by, endorsed by or affiliated with any of the public data providers shown.</p>
       </section>
       <section>
         <h2>What it is not</h2>

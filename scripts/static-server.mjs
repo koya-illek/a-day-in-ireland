@@ -3,23 +3,47 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 
 const root = join(process.cwd(), "dist", "client");
-const staticHeaders = (() => {
+
+// Parse every _headers block (the global "/*" plus path-specific rules) so
+// local checks exercise the same caching and security posture as production.
+// Matching follows Cloudflare semantics: all matching rules apply, later
+// values override earlier ones for the same header name.
+const headerRules = (() => {
   const path = join(root, "_headers");
   if (!existsSync(path)) return [];
-  const headers = [];
-  let inGlobalBlock = false;
+  const rules = [];
+  let current = null;
   for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    if (line.trim() === "/*") {
-      inGlobalBlock = true;
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+    if (!/^\s/.test(line)) {
+      current = { pattern: line.trim(), headers: [] };
+      rules.push(current);
       continue;
     }
-    if (inGlobalBlock && line && !/^\s/.test(line)) break;
-    if (!inGlobalBlock) continue;
     const match = line.match(/^\s+([^:]+):\s*(.+)$/);
-    if (match) headers.push([match[1], match[2]]);
+    if (match && current) current.headers.push([match[1], match[2]]);
   }
-  return headers;
+  return rules;
 })();
+
+const ruleMatches = (pattern, pathname) => {
+  if (pattern.endsWith("*")) return pathname.startsWith(pattern.slice(0, -1));
+  return pattern === pathname;
+};
+
+const headersForPath = (pathname) => {
+  const merged = [];
+  for (const rule of headerRules) {
+    if (!ruleMatches(rule.pattern, pathname)) continue;
+    for (const [name, value] of rule.headers) {
+      const existing = merged.findIndex(([mergedName]) => mergedName.toLowerCase() === name.toLowerCase());
+      if (existing >= 0) merged[existing] = [name, value];
+      else merged.push([name, value]);
+    }
+  }
+  return merged;
+};
+
 const port = Number.parseInt(process.env.PORT ?? process.env.PLAYWRIGHT_PORT ?? "3000", 10);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error(`Invalid static server port: ${process.env.PORT ?? process.env.PLAYWRIGHT_PORT}`);
@@ -50,13 +74,27 @@ createServer(async (request, response) => {
     response.end(JSON.stringify({ unavailable: true }));
     return;
   }
-  for (const [name, value] of staticHeaders) response.setHeader(name, value);
+  for (const [name, value] of headersForPath(pathname)) response.setHeader(name, value);
   const requested = normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, requested === "/" ? "index.html" : requested);
   if (!extname(file) && existsSync(`${file}.html`) && statSync(`${file}.html`).isFile()) file = `${file}.html`;
   if (existsSync(file) && statSync(file).isDirectory() && existsSync(join(file, "index.html"))) file = join(file, "index.html");
-  if (!existsSync(file) && !extname(file)) file = join(root, "index.html");
   if (!existsSync(file)) {
+    // Mirror wrangler's not_found_handling = "404-page": unknown document
+    // paths get the branded page with a true 404 status, never a soft 200.
+    const notFoundFile = join(root, "404.html");
+    if (existsSync(notFoundFile)) {
+      response.setHeader("Content-Type", types[".html"]);
+      response.writeHead(404);
+      const stream = createReadStream(notFoundFile);
+      stream.on("error", () => {
+        if (!response.headersSent) response.writeHead(500);
+        response.end();
+      });
+      response.on("error", () => stream.destroy());
+      stream.pipe(response);
+      return;
+    }
     response.writeHead(404);
     response.end("Not found");
     return;

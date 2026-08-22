@@ -1,5 +1,13 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import InfoPage from "../components/InfoPage";
+
+// Without this the error page inherits the homepage canonical/description and
+// claims to be indexable; unknown URLs must not pose as duplicates of "/".
+export const metadata: Metadata = {
+  title: "Page not found",
+  robots: { index: false, follow: true }
+};
 
 export default function NotFound() {
   return (

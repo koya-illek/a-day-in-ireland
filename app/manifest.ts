@@ -10,7 +10,9 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     display: "standalone",
     background_color: "#edf2ea",
-    theme_color: "#365f4f",
+    // Matches the dark viewport theme color and the installed app chrome the
+    // site actually renders, not a separate brand green.
+    theme_color: "#071815",
     icons: [{
       src: "/icon.svg",
       sizes: "any",

@@ -127,6 +127,7 @@ Fresh-eyes review after rounds 1–2 (`315b9ae`, `1b82333`…`c0b6f8d`). Every i
 - Where: `public/_headers`
 - What: `island.json`/`major-roads.json` get heuristic caching only, revalidating ~400 KB of build-stable bytes on repeat visits.
 - How: add a `/map/*` rule with a bounded long max-age (7 days, matching `/social/*`).
+- Verified during implementation: no runtime code fetches these paths (both files are imported into the JS bundle at build time; `out/map/` contains only inert copies). A cache rule would be dead config, so this item is dropped rather than implemented.
 
 ### O3. Copy, privacy, and config honesty nits (nit bundle)
 - Where: `lib/activity-guidance.ts:183` ("2 notices … its category does not change"), `app/privacy/page.tsx:21` (theme preference undisclosed), `app/about/page.tsx:22` (external link missing the site-wide `rel="noreferrer"` convention), `app/manifest.ts` (`theme_color` matches neither viewport color), `scripts/check-performance-budget.mjs` (declares `initialRequestBudget` but never enforces it)

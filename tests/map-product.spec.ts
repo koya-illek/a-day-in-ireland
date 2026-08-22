@@ -260,7 +260,7 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
   const zoomIn = mapNavigation.getByRole("button", { name: "Zoom in" });
   const zoomOut = mapNavigation.getByRole("button", { name: "Zoom out" });
   const reset = mapNavigation.getByRole("button", { name: "Reset" });
-  const zoom = mapNavigation.getByLabel("Current map zoom");
+  const zoom = mapNavigation.locator(".zoom-readout");
   await zoomIn.click();
   await expect(zoom).toHaveText("140%");
   await zoomOut.click();

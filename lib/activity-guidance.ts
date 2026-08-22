@@ -180,7 +180,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
       ? `${relevantWarnings.length} active activity-relevant Met Éireann notice${relevantWarnings.length === 1 ? "" : "s"} ${relevantWarnings.some((warning) => warningScope(warning, place) === "localized") ? "is localized to named areas" : "applies to this selected scope"}; review the official notice above.`
       : null,
     unknownWarnings.length
-      ? `${unknownWarnings.length} active official notice${unknownWarnings.length === 1 ? " is" : "s are"} displayed separately; its category does not change this observation state.`
+      ? `${unknownWarnings.length} active official notice${unknownWarnings.length === 1 ? " is" : "s are"} displayed separately; ${unknownWarnings.length === 1 ? "its category does" : "their categories do"} not change this observation state.`
       : null,
     snapshot.contextStatus.warnings !== "live"
       ? "The Met Éireann notice feed is unavailable, so official notices cannot be assessed here."

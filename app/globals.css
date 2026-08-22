@@ -4778,7 +4778,7 @@ html[data-theme="light"] .history-result a { color: #0b4a56; }
 /* Cluster-count digits sit on circle fills that darken in this theme. */
 html[data-theme="light"] .movement-stack-marker text,
 html[data-theme="light"] .transit-marker text {
-  fill: #f0faf3;
+  fill: #fdfffe;
   paint-order: stroke;
   stroke: rgba(23, 50, 41, .4);
   stroke-width: 2px;

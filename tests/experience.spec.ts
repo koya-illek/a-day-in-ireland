@@ -1884,10 +1884,10 @@ test("map supports accessible zoom, pan and reset controls", async ({ page }) =>
   const navigation = page.getByRole("navigation", { name: "Map navigation" });
 
   await expect(navigation.getByRole("button", { name: "Zoom out" })).toBeDisabled();
-  await expect(navigation.getByLabel("Current map zoom")).toHaveText("100%");
+  await expect(navigation.locator(".zoom-readout")).toHaveText("100%");
   await navigation.getByRole("button", { name: "Zoom in" }).click();
   await expect(viewport).toHaveAttribute("data-scale", "1.40");
-  await expect(navigation.getByLabel("Current map zoom")).toHaveText("140%");
+  await expect(navigation.locator(".zoom-readout")).toHaveText("140%");
 
   const beforePan = await viewport.getAttribute("transform");
   await map.scrollIntoViewIfNeeded();
@@ -1902,7 +1902,7 @@ test("map supports accessible zoom, pan and reset controls", async ({ page }) =>
   await navigation.getByRole("button", { name: "Reset", exact: true }).click();
   await expect(viewport).toHaveAttribute("data-scale", "1.00");
   await expect(viewport).toHaveAttribute("transform", "translate(0 0) scale(1)");
-  await expect(navigation.getByLabel("Current map zoom")).toHaveText("100%");
+  await expect(navigation.locator(".zoom-readout")).toHaveText("100%");
 
   if (test.info().project.name === "mobile") {
     const centerX = (box?.x ?? 0) + (box?.width ?? 0) / 2;
