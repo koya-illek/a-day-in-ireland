@@ -2272,7 +2272,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         className="map-stage"
         ref={mapSectionRef}
         aria-label={`${timeMode === "past" ? "Historical" : "Live"} map of Ireland`}
-        aria-describedby="map-keyboard-instructions map-marker-announcement"
       >
         <div className="map-explorer-heading">
           <div>
