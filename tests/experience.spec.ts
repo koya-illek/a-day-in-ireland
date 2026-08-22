@@ -1868,7 +1868,9 @@ test("Stitch map workspace uses an island-only coastline and visible roads", asy
     await expect(dataDetails).toContainText("Provider:");
   }
 
-  const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
+  // The page h1 is the map's own title; the workspace title below the map
+  // carries id moment-heading. The map must render above it.
+  const heading = await page.locator("#moment-heading").boundingBox();
   const map = await page.getByLabel("Live map of Ireland").boundingBox();
   expect(heading).not.toBeNull();
   expect(map).not.toBeNull();
@@ -2983,7 +2985,7 @@ test("success then 503 then offline never claims erased data was retained", asyn
   await expect(connection).toContainText(/Connected|Checking for newer data/);
   await expect(page.locator(".station-marker")).toHaveCount(9);
   await expect(retry).toBeEnabled();
-  await expect(page.locator(".live-state[role='status'][aria-live='polite']")).toHaveCount(1);
+  await expect(page.locator(".live-state [role='status'][aria-live='polite']")).toHaveCount(1);
   await expect(connection).not.toHaveAttribute("role", "status");
   await expect(connection).not.toHaveAttribute("aria-live", "polite");
 

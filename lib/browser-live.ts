@@ -395,7 +395,7 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     // No CSV fallback here: met.ie's bulk download carries no per-reading
     // timestamp, so its rows could never pass freshness honestly.
     if (!valid.length) return retainLastGoodWeather(previous);
-    const stations = valid.map((result) => result.reading);
+    const stations = valid.map((result) => result.reading).filter((station) => station.fresh);
     const fresh = stations;
     if (!fresh.length) return retainLastGoodWeather(previous);
     const top = (field: "temperature" | "rainfall" | "windSpeed") =>
@@ -560,11 +560,16 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
     if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) throw new Error("Live layers response is incomplete");
     const retained = retainLastGoodLiving(previous);
     const trainsLive = next.sourceStatus?.trains !== "unavailable" && next.trains.length > 0;
-    // Same freshness gate the transit path applies: an upstream regression
-    // serving old positions must not render as current.
+    // Same freshness gate the transit path applies to parseable stamps: a
+    // regression serving hour-old positions must not render as current.
+    // Unparseable stamps stay visible because the UI can flag their time
+    // as unavailable instead of silently hiding services.
     const incomingTrains = trainsLive
       ? addCalculatedSpeeds(
-          next.trains.filter((train) => isRecent(train.observedAt, 30 * 60_000)),
+          next.trains.filter((train) => {
+            const observedMs = Date.parse(train.observedAt);
+            return !Number.isFinite(observedMs) || isRecent(train.observedAt, 30 * 60_000);
+          }),
           previous.trains,
           {
             maximumKmh: 200,
