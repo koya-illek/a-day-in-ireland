@@ -39,12 +39,14 @@ const loadTransitDestinations = () => {
   if (!transitDestinationsPromise) {
     transitDestinationsPromise = fetch("/data/transit-destinations.manifest.json", { cache: "force-cache" })
       .then(async (manifestResponse) => {
-        const manifest = manifestResponse.ok ? await manifestResponse.json() as { assetPath?: string } : {};
+        if (!manifestResponse.ok) throw new Error(`Transit destinations manifest returned ${manifestResponse.status}`);
+        const manifest = await manifestResponse.json() as { assetPath?: string };
         const assetPath = typeof manifest.assetPath === "string" && manifest.assetPath.startsWith("/data/")
           ? manifest.assetPath
           : "/data/transit-destinations.json";
         const response = await fetch(assetPath, { cache: "force-cache" });
-        return response.ok ? response.json() as Promise<Record<string, string>> : {};
+        if (!response.ok) throw new Error(`Transit destinations returned ${response.status}`);
+        return response.json() as Promise<Record<string, string>>;
       })
       .catch((error) => {
         // Clear the memo so a later enrichment tick can retry instead of

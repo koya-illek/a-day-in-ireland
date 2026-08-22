@@ -775,7 +775,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   padding: 0 .55rem}
 .map-navigation button:disabled { cursor: default; opacity: .34; }
 .map-navigation .map-reset { font-size: .58rem; letter-spacing: .05em; text-transform: uppercase; }
-.map-navigation output {
+.map-navigation .zoom-readout {
   color: var(--green);
   font: 600 .68rem ui-monospace, monospace;
   padding: 0 .55rem;
@@ -1395,7 +1395,7 @@ footer {
   .map-caption { font-size: .58rem; }
   .map-navigation { right: .55rem; top: 4.65rem; }
   .map-navigation button { height: 1.9rem; min-width: 1.9rem; padding: 0 .4rem; }
-  .map-navigation output { min-width: 2.6rem; padding: 0 .4rem; }
+  .map-navigation .zoom-readout { min-width: 2.6rem; padding: 0 .4rem; }
   .section-rail {
     background: rgba(10, 23, 42, .97);
     border: 1px solid var(--line);
@@ -1607,6 +1607,9 @@ footer {
   color: var(--accent-gold);
   font: 600 .88rem ui-monospace, monospace;
   margin: .25rem 0 .15rem;
+}
+.place-observation-value {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2301,7 +2304,7 @@ footer {
     font-size: clamp(11px, .42rem, 14px);
     letter-spacing: .02em;
   }
-  #live-map .map-navigation output {
+  #live-map .map-navigation .zoom-readout {
     align-items: center;
     box-sizing: border-box;
     display: flex;
@@ -2427,7 +2430,7 @@ footer {
 .map-caption,
 .map-notice > span,
 .map-navigation .map-reset,
-.map-navigation output,
+.map-navigation .zoom-readout,
 .live-signal-dock strong,
 .live-signal-dock > span,
 .radar-control > button,
@@ -2873,7 +2876,7 @@ footer {
     padding-left: .2rem;
     padding-right: .2rem;
   }
-  .map-navigation output {
+  .map-navigation .zoom-readout {
     align-items: center;
     display: flex;
     justify-content: center;
@@ -2970,7 +2973,7 @@ footer {
   justify-content: space-between;
   min-width: 0;
 }
-.history-mode-row h3 { font-size: 1rem; line-height: 1.25; margin: 0; }
+.history-mode-row h2 { font-size: 1rem; line-height: 1.25; margin: 0; }
 .history-mode-row .utility-label { color: var(--green); margin: 0 0 .2rem; }
 .history-mode-toggle {
   background: #071426;
@@ -3462,7 +3465,7 @@ body {
 .map-caption,
 .timeline-legend span,
 .map-navigation .map-reset,
-.map-navigation output,
+.map-navigation .zoom-readout,
 .freshness-chip small,
 .what-matters-heading > p,
 .activity-context > summary,
@@ -3930,7 +3933,7 @@ body {
 }
 
 .map-navigation button,
-.map-navigation output {
+.map-navigation .zoom-readout {
   background: rgba(255, 248, 232, .04);
   border: 1px solid rgba(230, 221, 196, .08);
   border-radius: .8rem;
@@ -3947,7 +3950,7 @@ body {
   color: var(--ink);
 }
 
-.map-navigation output {
+.map-navigation .zoom-readout {
   min-width: 3.4rem;
 }
 
@@ -4672,7 +4675,7 @@ html[data-theme="light"] .map-navigation {
 }
 
 html[data-theme="light"] .map-navigation button,
-html[data-theme="light"] .map-navigation output {
+html[data-theme="light"] .map-navigation .zoom-readout {
   background: #f9fcf8;
   border-color: rgba(38, 88, 76, .18);
   color: #173229;
@@ -4693,6 +4696,93 @@ html[data-theme="light"] .history-picker input {
 }
 
 html[data-theme="light"] a { text-decoration-color: rgba(49, 95, 73, .42); }
+
+/* Second pass over surfaces the first light-theme sweep missed: content cards
+   and map overlays that hardcode dark-navy backgrounds while their text uses
+   variables that flip dark in this theme. */
+html[data-theme="light"] :where(
+  .warning-strip,
+  .rail-metrics p,
+  .workspace-facts button,
+  .place-observations dl > div,
+  .guidance-card,
+  .notable-signals button,
+  .all-quiet,
+  .timeline-selection,
+  .timeline-data-list,
+  .official-notices-empty,
+  .movement-browser,
+  .movement-results button,
+  .movement-pagination button,
+  .map-presets,
+  .map-legend,
+  .map-context-disclosure,
+  .freshness-details > summary,
+  .history-result,
+  .history-comparison,
+  .history-period-summary
+) {
+  background: rgba(255, 255, 252, .92);
+  border-color: rgba(31, 73, 59, .18);
+  color: var(--ink);
+}
+
+html[data-theme="light"] .place-controls select,
+html[data-theme="light"] .layer-group-controls > button {
+  background: #fff;
+  border-color: rgba(31, 73, 59, .3);
+  color: var(--ink);
+}
+
+html[data-theme="light"] .guidance-card:hover,
+html[data-theme="light"] .guidance-card:focus-visible {
+  background: #eef4ec;
+  border-color: rgba(31, 73, 59, .34);
+}
+
+/* Map overlays keep their instrument-panel role but need readable text on the
+   light canvas; give them the same paper surface as the navigation rail. */
+html[data-theme="light"] :where(.map-notice, .map-data-panel, .live-signal-dock, .radar-control) {
+  background: rgba(252, 253, 249, .96);
+  border-color: rgba(38, 88, 76, .22);
+  box-shadow: 0 1rem 2.5rem rgba(46, 76, 64, .12);
+}
+
+html[data-theme="light"] .map-data-panel dl div { background: #f1f6ef; }
+
+/* Literal accent text tuned for dark surfaces needs darker equivalents here. */
+html[data-theme="light"] .info-content a {
+  color: #0b4a56;
+  text-decoration-color: rgba(11, 74, 86, .35);
+}
+html[data-theme="light"] .live-signal-dock > span { color: #3c4a5c; }
+html[data-theme="light"] .aurora-panel .utility-label,
+html[data-theme="light"] .aurora-probability strong { color: #1c6b4a; }
+html[data-theme="light"] .iss-panel .utility-label,
+html[data-theme="light"] .iss-orbit-value strong { color: #34527a; }
+html[data-theme="light"] .guidance-card.localized-notice .guidance-status,
+html[data-theme="light"] .warning-key-facts dt,
+html[data-theme="light"] .history-ambiguity legend { color: #6b4d0d; }
+html[data-theme="light"] .history-result.error,
+html[data-theme="light"] .history-result.gap,
+html[data-theme="light"] .history-error {
+  border-color: #8a6a14;
+  color: #5d4520;
+}
+html[data-theme="light"] .history-retry {
+  border-color: #8a6a14;
+  color: #5d4520;
+}
+html[data-theme="light"] .history-result a { color: #0b4a56; }
+
+/* Cluster-count digits sit on circle fills that darken in this theme. */
+html[data-theme="light"] .movement-stack-marker text,
+html[data-theme="light"] .transit-marker text {
+  fill: #f0faf3;
+  paint-order: stroke;
+  stroke: rgba(23, 50, 41, .4);
+  stroke-width: 2px;
+}
 
 @media (max-width: 600px) {
   html[data-theme="light"] .section-rail {

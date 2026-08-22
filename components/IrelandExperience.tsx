@@ -498,6 +498,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
   const liveSnapshotRef = useRef(initialSnapshot);
   const refreshAllRef = useRef<() => Promise<void>>(async () => undefined);
+  const lastRefreshAllAtRef = useRef(0);
   const historyRequestRef = useRef<AbortController | null>(null);
   const historyRequestGenerationRef = useRef(0);
   const comparisonRequestRef = useRef<AbortController | null>(null);
@@ -513,7 +514,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     handleMapPointerDown,
     handleMapPointerMove,
     handleMapPointerEnd,
-    handleMapWheel,
     suppressClickAfterPan
   } = useMapGestures(mapRef);
   const mapSectionRef = useRef<HTMLElement | null>(null);
@@ -717,8 +717,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, []);
 
   useEffect(() => {
-    const clock = window.setInterval(() => setWallClockNow(new Date()), 1000);
-    return () => window.clearInterval(clock);
+    // Hidden tabs do not need a per-second clock; resync on return to visible
+    // so ages and the Irish clock stay honest after throttling.
+    const tick = () => { if (!document.hidden) setWallClockNow(new Date()); };
+    const clock = window.setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(clock);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, []);
 
   useEffect(() => {
@@ -809,6 +816,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
         }
       } finally {
+        lastRefreshAllAtRef.current = Date.now();
         setInitialRefreshComplete(true);
         setLastCheckedAt(new Date());
         setServicesRefreshing(false);
@@ -817,6 +825,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     refreshAllRef.current = refreshAll;
     void refreshAll();
     const recoveryRefresh = window.setTimeout(() => {
+      if (document.hidden) return;
       const current = liveSnapshotRef.current;
       const missingCoreService =
         current.stations.length === 0 ||
@@ -828,10 +837,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         void refreshAll();
       }
     }, 20_000);
-    const refresh = window.setInterval(() => void update(), 5 * 60_000);
-    const livingRefresh = window.setInterval(() => void updateLivingLayers(), 60_000);
-    const contextRefresh = window.setInterval(() => void updateCurrentContexts(), 5 * 60_000);
-    const transitRefresh = window.setInterval(() => void updateTransit(), 65_000);
+    // A hidden tab keeps its timers but skips the work; returning to visible
+    // catches up immediately when the data had time to go stale.
+    const refreshWhenVisible = (refresh: () => Promise<void>) => () => {
+      if (document.hidden) return;
+      void refresh();
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) return;
+      if (Date.now() - lastRefreshAllAtRef.current > 90_000) void refreshAll();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    const refresh = window.setInterval(refreshWhenVisible(update), 5 * 60_000);
+    const livingRefresh = window.setInterval(refreshWhenVisible(updateLivingLayers), 60_000);
+    const contextRefresh = window.setInterval(refreshWhenVisible(updateCurrentContexts), 5 * 60_000);
+    const transitRefresh = window.setInterval(refreshWhenVisible(updateTransit), 65_000);
     return () => {
       active = false;
       window.clearInterval(refresh);
@@ -839,6 +859,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       window.clearInterval(contextRefresh);
       window.clearInterval(transitRefresh);
       window.clearTimeout(recoveryRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       refreshAllRef.current = async () => undefined;
     };
   }, [timeMode]);
@@ -860,6 +881,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     void enrichTransitDestinations(vehicles).then((enriched) => {
       if (!active) return;
       setLiveSnapshot((current) => {
+        // Trips missing from the destinations manifest stay unresolved. Committing
+        // them anyway would hand the effect a fresh array with the same guard true,
+        // looping renders (and manifest refetches) until the next real poll.
+        const unchanged = current.transit.length === enriched.length &&
+          current.transit.every((vehicle, index) => vehicle.destination === enriched[index]?.destination);
+        if (unchanged) return current;
         const next = { ...current, transit: enriched };
         liveSnapshotRef.current = next;
         return next;
@@ -2355,7 +2382,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onPointerMove={handleMapPointerMove}
           onPointerUp={handleMapPointerEnd}
           onPointerCancel={handleMapPointerEnd}
-          onWheel={handleMapWheel}
           onZoomIn={() => zoomMapAround(1.4)}
           onZoomOut={() => zoomMapAround(1 / 1.4)}
           onReset={() => setMapView({ scale: 1, x: 0, y: 0 })}
@@ -2882,7 +2908,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   : gridSnapshotDisplayable
                     ? "The saved grid response has no wind-share value; current grid conditions are unconfirmed"
                     : "EirGrid data unavailable; current wind share cannot be assessed"}</small>
-          <div className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div>
+          <span className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</span>
           <b>Open the grid {timeMode === "past" ? "at capture" : "now"} →</b>
         </button>
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>

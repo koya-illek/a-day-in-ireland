@@ -117,31 +117,35 @@ export function PlaceContext({
             <dl>
               <div>
                 <dt>Temperature</dt>
-                <dd>{localStation?.item.temperature ?? "Unavailable"}°</dd>
+                <dd><span className="place-observation-value">{localStation?.item.temperature ?? "Unavailable"}°</span>
                 <small>{localStation
                   ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations…` : timeMode === "past" ? weatherGap ?? `No point weather observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved weather is not used as a current nearby condition." : weatherAvailable ? selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
+              </dd>
               </div>
               <div>
                 <dt>Rain</dt>
-                <dd>{localStation?.item.rainfall == null ? "Unavailable" : `${localStation.item.rainfall} mm`}</dd>
+                <dd><span className="place-observation-value">{localStation?.item.rainfall == null ? "Unavailable" : `${localStation.item.rainfall} mm`}</span>
                 <small>{localStation
                   ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} rain observations…` : timeMode === "past" ? weatherGap ?? `No point rain observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved rain observations are not used as current nearby rainfall." : weatherAvailable ? selectedPlaceIsEphemeral ? "No current rain observation is available." : `No nearby rain observation within ${NEARBY_RADIUS_KM.weather} km.` : "Rain observations are unavailable; nearby rainfall cannot be assessed."}</small>
+              </dd>
               </div>
               <div>
                 <dt>River</dt>
-                <dd>{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "Unavailable"}</dd>
+                <dd><span className="place-observation-value">{localRiver ? `${localRiver.item.level.toFixed(2)} m` : "Unavailable"}</span>
                 <small>{localRiver
                   ? formatLocalObservation("OPW", localRiver.item, localRiver.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} river gauges…` : timeMode === "past" ? riverGap ?? `No point river observation was retained within ${NEARBY_RADIUS_KM.river} km for this historical record.` : riversAvailable ? selectedPlaceIsEphemeral ? "No current river observation is available." : `No nearby river observation within ${NEARBY_RADIUS_KM.river} km.` : riversCached ? "The river feed is unavailable; cached readings are not used as current local conditions." : "River readings are unavailable; nearby levels cannot be assessed."}</small>
+              </dd>
               </div>
               <div>
                 <dt>Air</dt>
-                <dd>{localAir?.item.europeanAqi == null ? "Unavailable" : `AQI ${localAir.item.europeanAqi}`}</dd>
+                <dd><span className="place-observation-value">{localAir?.item.europeanAqi == null ? "Unavailable" : `AQI ${localAir.item.europeanAqi}`}</span>
                 <small>{localAir
                   ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} air-quality sources…` : timeMode === "past" ? airGap ?? `No point air-quality observation was retained within ${NEARBY_RADIUS_KM.air} km for this historical record.` : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : airAvailable ? selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>
+              </dd>
               </div>
             </dl>
           </div>

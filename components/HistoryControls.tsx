@@ -83,6 +83,7 @@ export function HistoryControls({
   const selectedSeconds = selectedAt ? Math.floor(Date.parse(selectedAt) / 1000) : 0;
   const [scrubberSeconds, setScrubberSeconds] = useState(selectedSeconds);
   const submittedScrubberRef = useRef<number | null>(null);
+  const scrubberTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!selectedAt) return;
@@ -128,6 +129,27 @@ export function HistoryControls({
     onRequest(new Date(scrubberSeconds * 1000).toISOString());
   };
 
+  // Sweeping the range with arrow keys would otherwise fetch a snapshot per
+  // step; keyboard submissions coalesce, while blur always commits the value.
+  const scheduleScrubberSubmit = () => {
+    if (scrubberTimerRef.current !== null) window.clearTimeout(scrubberTimerRef.current);
+    scrubberTimerRef.current = window.setTimeout(() => {
+      scrubberTimerRef.current = null;
+      submitScrubber();
+    }, 300);
+  };
+  const flushScrubberSubmit = () => {
+    if (scrubberTimerRef.current !== null) {
+      window.clearTimeout(scrubberTimerRef.current);
+      scrubberTimerRef.current = null;
+    }
+    submitScrubber();
+  };
+
+  useEffect(() => () => {
+    if (scrubberTimerRef.current !== null) window.clearTimeout(scrubberTimerRef.current);
+  }, []);
+
   const rangeStart = Date.parse(range?.availableFrom ?? "");
   const rangeEnd = Date.parse(range?.availableTo ?? "");
   const hasRange = Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd >= rangeStart;
@@ -144,7 +166,7 @@ export function HistoryControls({
       <div className="history-mode-row">
         <div>
           <p className="utility-label">Time view</p>
-          <h3 id="history-controls-heading">Now or past conditions</h3>
+          <h2 id="history-controls-heading">Now or past conditions</h2>
         </div>
         <div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
           <button type="button" aria-pressed={mode === "now"} onClick={onNow}>Now</button>
@@ -181,8 +203,8 @@ export function HistoryControls({
               aria-valuetext={selectedAt ? `${formatIrelandHistoryTime(new Date((scrubberSeconds || selectedSeconds) * 1000))}; ${historyResolutionLabel(resolutionMinutes)}; ${gaps.length} recorded gap${gaps.length === 1 ? "" : "s"}` : "No stored snapshots available"}
               onChange={(event) => setScrubberSeconds(Number(event.target.value))}
               onPointerUp={submitScrubber}
-              onKeyUp={submitScrubber}
-              onBlur={submitScrubber}
+              onKeyUp={scheduleScrubberSubmit}
+              onBlur={flushScrubberSubmit}
             />
             <small>{hasRange ? `${formatIrelandHistoryTime(range!.availableFrom!)} to ${formatIrelandHistoryTime(range!.availableTo!)}` : "History has not collected a snapshot yet."}</small>
           </label>

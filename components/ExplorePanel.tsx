@@ -90,10 +90,13 @@ export function ExplorePanel({
       }
     };
 
-    panel.addEventListener("keydown", handleKeyDown);
+    // Document-scoped, like DetailCard: the backdrop button sits outside the
+    // aside, so a panel-scoped listener would stop seeing Escape or Tab once
+    // focus reached the backdrop or anything behind the overlay.
+    document.addEventListener("keydown", handleKeyDown);
     document.body.style.overflow = "hidden";
     return () => {
-      panel.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keydown", handleKeyDown);
       if (opener?.isConnected) opener.focus();
       document.body.style.overflow = "";
     };

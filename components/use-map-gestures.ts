@@ -2,13 +2,18 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
-  type WheelEvent as ReactWheelEvent,
   useCallback,
+  useEffect,
   useRef,
   useState
 } from "react";
 
 export type MapView = { scale: number; x: number; y: number };
+
+// A pan only suppresses the click that immediately follows it; a gesture that
+// ends without a click (pointercancel, release outside the window) must not
+// eat the user's next tap, so the marker expires on its own.
+const PAN_CLICK_SUPPRESSION_MS = 400;
 
 export const constrainMapView = (scale: number, x: number, y: number): MapView => {
   const nextScale = Math.min(4, Math.max(1, scale));
@@ -24,7 +29,7 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
   const mapPointersRef = useRef(new Map<number, { x: number; y: number }>());
   const mapGestureRef = useRef<{ center: { x: number; y: number }; distance: number } | null>(null);
   const mapPointerOriginRef = useRef<{ x: number; y: number } | null>(null);
-  const mapDidPanRef = useRef(false);
+  const mapPannedAtRef = useRef(0);
 
   const zoomMapAround = useCallback((factor: number, point = { x: 500, y: 450 }) => {
     setMapView((current) => {
@@ -59,7 +64,7 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
   }, []);
 
   const handleMapPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    mapDidPanRef.current = false;
+    mapPannedAtRef.current = 0;
     const point = mapPointFromClient(event.clientX, event.clientY);
     mapPointersRef.current.set(event.pointerId, point);
     // Capture on the SVG root even when the gesture starts on a marker:
@@ -84,7 +89,7 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
     if (!previous || !next) return;
     if (mapPointerOriginRef.current &&
       Math.hypot(point.x - mapPointerOriginRef.current.x, point.y - mapPointerOriginRef.current.y) > 3) {
-      mapDidPanRef.current = true;
+      mapPannedAtRef.current = Date.now();
     }
     setMapView((current) => {
       if (mapPointersRef.current.size > 1 && previous.distance > 0 && next.distance > 0) {
@@ -115,16 +120,25 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
     if (!mapPointersRef.current.size) mapPointerOriginRef.current = null;
   }, [mapGesture]);
 
-  const handleMapWheel = useCallback((event: ReactWheelEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    zoomMapAround(event.deltaY < 0 ? 1.22 : 1 / 1.22, mapPointFromClient(event.clientX, event.clientY));
-  }, [mapPointFromClient, zoomMapAround]);
+  // React attaches wheel as a passive root listener, so preventDefault inside
+  // onWheel is a no-op and the page scrolls while the map zooms. A native
+  // non-passive listener keeps zoom-on-wheel working without scrolling.
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return;
+    const handleMapWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomMapAround(event.deltaY < 0 ? 1.22 : 1 / 1.22, mapPointFromClient(event.clientX, event.clientY));
+    };
+    element.addEventListener("wheel", handleMapWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleMapWheel);
+  }, [mapRef, mapPointFromClient, zoomMapAround]);
 
   const suppressClickAfterPan = useCallback((event: ReactMouseEvent<SVGSVGElement>) => {
-    if (!mapDidPanRef.current) return;
+    if (Date.now() - mapPannedAtRef.current > PAN_CLICK_SUPPRESSION_MS) return;
     event.preventDefault();
     event.stopPropagation();
-    mapDidPanRef.current = false;
+    mapPannedAtRef.current = 0;
   }, []);
 
   return {
@@ -134,7 +148,6 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
     handleMapPointerDown,
     handleMapPointerMove,
     handleMapPointerEnd,
-    handleMapWheel,
     suppressClickAfterPan
   };
 }

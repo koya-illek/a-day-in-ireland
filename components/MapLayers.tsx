@@ -255,7 +255,7 @@ export function RadarTiles({
 }) {
   const zoom = 6;
   return (
-    <g className="radar-tiles" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar tiles for ${formatTime(new Date(frame.observedAt))}`}>
+    <g className="radar-tiles" role="img" aria-label={`${frame.provider ?? "Met Éireann"} rainfall radar tiles for ${formatTime(new Date(frame.observedAt))}`}>
       {IRELAND_RADAR_TILES.map(([x, y]) => {
         const west = x / 2 ** zoom * 360 - 180;
         const east = (x + 1) / 2 ** zoom * 360 - 180;
@@ -293,7 +293,7 @@ export function SatelliteTiles({
 }) {
   const zoom = 6;
   return (
-    <g className="satellite-tiles" mask="url(#satelliteContextMask)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
+    <g className="satellite-tiles" role="img" mask="url(#satelliteContextMask)" aria-label={`${frame.label}, ${formatDate(new Date(frame.observedAt))}`}>
       {[30, 31].flatMap((x) => [20, 21].map((y) => {
         const west = x / 2 ** zoom * 360 - 180;
         const east = (x + 1) / 2 ** zoom * 360 - 180;

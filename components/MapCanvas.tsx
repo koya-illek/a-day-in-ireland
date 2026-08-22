@@ -2,8 +2,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type Ref,
-  type WheelEvent as ReactWheelEvent
+  type Ref
 } from "react";
 import type { TimeMode } from "./experience-model";
 
@@ -20,7 +19,6 @@ export function MapCanvas({
   onPointerMove,
   onPointerUp,
   onPointerCancel,
-  onWheel,
   onZoomIn,
   onZoomOut,
   onReset,
@@ -38,7 +36,6 @@ export function MapCanvas({
   onPointerMove: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerUp: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<SVGSVGElement>) => void;
-  onWheel: (event: ReactWheelEvent<SVGSVGElement>) => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onReset: () => void;
@@ -61,7 +58,6 @@ export function MapCanvas({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
-        onWheel={onWheel}
       >
         <title id="map-title">{timeMode === "past" ? "Stored conditions across Ireland at the selected time" : "Near-real-time conditions across Ireland"}</title>
         <desc id="map-description">{timeMode === "past" ? "A map of retained historical observations across Ireland. Provider gaps and unavailable positions or imagery remain missing; daily summaries do not reconstruct point markers." : "A close map of Ireland showing weather, radar rain, observed wind, rail and public transport, river and tide gauges, sea conditions, measured and modelled air quality, bathing alerts, satellite imagery, seismic detections, ISS passes, aurora guidance and the live power grid."}</desc>
@@ -120,7 +116,10 @@ export function MapCanvas({
         >
           Reset
         </button>
-        <output aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
+        {/* A plain span, not <output>: output is an implicit polite live
+            region and would announce every wheel/pinch step. Static text
+            stays readable when browsing without streaming announcements. */}
+        <span className="zoom-readout">{Math.round(mapView.scale * 100)}%</span>
       </nav>
     </div>
   );

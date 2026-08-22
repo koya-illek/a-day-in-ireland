@@ -1,194 +1,147 @@
-# Improvement Plan — Round 2 (2026-08-22)
+# Improvement Plan — Round 3 (2026-08-22)
 
-Fresh-eyes review after the round-1 fixes (`315b9ae`). Every item below was verified against source before planning. Branch: `improve/review-2026-08-22`. Verification for all items: `npm test`, `npx tsc --noEmit`, `npm run lint`, `npm run build`.
+Fresh-eyes review after rounds 1–2 (`315b9ae`, `1b82333`…`c0b6f8d`). Every item was verified against current source before planning. Branch: `rerun3/review-2026-08-22`. Verification for all items: `npm test`, `npx tsc --noEmit`, `npm run lint`, `npm run build`, plus Playwright where surfaces changed. Items skipped in rounds 1–2 (chunk splitting, hash CSP, GTFS rebuild, dispatch extraction, clock-render isolation, D1 recovery policy) are not re-litigated here.
 
-## P0 — Technical correctness / data honesty
+## Technical
 
-### T1. Sort hourly weather timeline chronologically
-- Where: `lib/weather-timeline.js:34-39`
-- What: buckets are emitted in `Map` insertion order; a station that first reports an early hour late in its array appends out-of-order hours (e.g. `…15:00, 07:00`). The chart and data table render array order as "Hour of day · Irish time".
-- How: sort the mapped result by `time` (zero-padded `HH:MM`, lexicographic = chronological). Extend `tests/weather-timeline.test.mjs` with an out-of-order fixture.
+### T1. Infinite transit-enrichment render loop and unbackoffed manifest refetch (high)
+- Where: `components/IrelandExperience.tsx:855-869`, `lib/browser-live.ts:38-73`
+- What: the enrichment effect keys on `snapshot.transit` identity; `enrichTransitDestinations` always returns a new array, so if any vehicle still has `tripId && !destination` after enrichment (trip missing from the static manifest, or the manifest fetch failed) the guard stays true forever: render → effect → setState → render… When the load fails, the round-2 memo clear turns this into a zero-backoff request hammer. Separately, `loadTransitDestinations` resolves `{}` on a non-ok manifest or asset response, which memoizes that failure for the page lifetime (the round-2 retry fix only covers rejected promises).
+- How: throw on non-ok responses inside `loadTransitDestinations` so failures clear the memo; in the effect, skip the `setLiveSnapshot` commit when enrichment filled nothing (compare destinations element-wise). Retry then happens naturally on the next 65 s transit poll.
 
-### T2. Delete the dead Met Éireann CSV fallback fetch
-- Where: `lib/browser-live.ts:366-386`
-- What: when any prodapi endpoint fails, the client fetches the full met.ie CSV and parses it with `observedAt = null`; `parseLatestObservations` then marks every row `fresh: false` (`isWeatherObservationFresh(null)` → NaN) and line 393 filters them all out. Pure wasted bandwidth/parse in degraded conditions; removing it cannot change outcomes (`!valid.length` already retains last good).
-- How: delete the block and `fallbackStations`; keep the `retainLastGoodWeather` early return keyed on `!valid.length`.
+### T2. Wheel zoom's preventDefault is a no-op under React's passive listener (medium)
+- Where: `components/use-map-gestures.ts:118-121`, `components/MapCanvas.tsx:64`
+- What: React registers `wheel` as passive at the root, so `event.preventDefault()` throws and the document scrolls while the map also zooms.
+- How: register a native `wheel` listener with `{ passive: false }` on the SVG element inside `useMapGestures`; drop the React `onWheel` prop.
 
-### T3. Make provider request generations monotonic
-- Where: `lib/browser-live.ts:97-122`
-- What: generations derive from the prior map entry, so after a completed request deletes itself the next request reuses the same number. A slow superseded request whose continuation runs after a newer one registered passes `isCurrent()`, stores a stale fallback into `lastProviderResults`, and deletes the live entry.
-- How: module-scoped counter `let nextProviderGeneration = 0; generation: ++nextProviderGeneration;`
+### T3. Polling and the 1-second clock ignore tab visibility (medium)
+- Where: `components/IrelandExperience.tsx:719-722, 819-834`
+- What: four refresh intervals (~2,700 requests/day/tab) and the per-second clock tick run while the tab is hidden; the 20 s recovery refresh can also fire while hidden.
+- How: gate interval callbacks on `document.hidden`; on `visibilitychange` to visible, resync the clock and run a full refresh when the last attempt is older than 90 s.
 
-### T4. Filter stale trains on the `/api/living` path like transit does
-- Where: `lib/browser-live.ts:557-564`
-- What: transit vehicles get an individual 30-minute freshness gate client-side; trains are committed verbatim, so hour-old positions would render as-is if upstream regressed.
-- How: filter `next.trains` with the existing `isRecent(train.observedAt, 30 * 60_000)` before `addCalculatedSpeeds`.
+### T4. Interrupted pan swallows the next marker tap (medium-low)
+- Where: `components/use-map-gestures.ts:27, 62, 87, 107-128`
+- What: `mapDidPanRef` resets only when a click is suppressed; a gesture that ends without a click (`pointercancel`, release outside the window) leaves it set, so the user's next tap is eaten. Clearing at pointer end instead would break legitimate post-pan click suppression.
+- How: replace the boolean with a pan timestamp consumed through a short window (400 ms); stale flags expire on their own.
 
-### T5. Don't publish grid as "live" with a destroyed timestamp; stop viewer-local time guessing
-- Where: `lib/browser-live.ts:211-218, 674-681`
-- What: if both parsers fail, `normalizeGridTimestamp` returns null but the payload still counts as valid, so one cycle publishes grid labelled live with `observedAt: null`. Also the `Date.parse` fallback interprets zoneless strings in the viewer's timezone.
-- How: pass `Boolean(incomingGrid && incomingGrid.observedAt)` as the validity flag; restrict the parse fallback to strings carrying explicit zone info (`Z` or `±HH:MM`/`±HHMM`).
+### T5. History scrubber fires one request per keyboard step (low)
+- Where: `components/HistoryControls.tsx:182-186`
+- What: `onKeyUp={submitScrubber}` submits on every arrow press, fetching a snapshot per step and flashing "Loading…" between them.
+- How: debounce keyboard submissions ~300 ms with an immediate flush on blur; keep pointer-up immediate.
 
-### T6. Validate bathing-alert rows and expire end-less alerts
-- Where: `lib/browser-live.ts:223-231`
-- What: rows cast to `BathingAlert` with only dates checked — a row missing `id` throws inside `mergeBathingAlerts`' `localeCompare` (contained by the blanket catch, silently degrading the whole contexts refresh). An alert without usable `endsAt` passes the freshness gate forever.
-- How: require non-empty string `id` and `updatedAt`/`startedAt`; treat missing/unparseable `endsAt` as expiring 48 h after `startedAt` (server derives real ends from `expectedDuration`; this bounds malformed rows only).
+### T6. Unbounded upstream bodies in the `/api/contexts` loaders (medium)
+- Where: `platform/server-entry.js` warnings (:130), weather/coastal buoys (:265,:276), radar (:304), modelled air (:328), tides (:379-381), bathing locations (:441), NASA domains XML (:538), earthquakes (:646), aurora/Kp (:752,:759)
+- What: raw `response.json()` / `.text()` bypasses the repo's own bounded-IO discipline used everywhere else (including `history-sources.js` twins of these collectors); a misbehaving upstream can buffer unbounded bytes before parse.
+- How: route each through `readBoundedJsonResponse` / `readBoundedTextResponse` with caps mirroring `history-sources.js`.
 
-### T7. Retry the transit destinations manifest after failure
-- Where: `lib/browser-live.ts:37-53`
-- What: the module-level promise caches failure for the page lifetime (`.catch(() => ({})`) — one transient network error permanently disables destination lookup.
-- How: reset `transitDestinationsPromise = null` inside the rejection path so the next enrichment tick refetches.
+### T7. `/api/living` serves degraded rivers under `no-store` whenever trains are down (medium)
+- Where: `platform/cloudflare-entry.js:269-271`
+- What: the header tier checks only `riverResult.status === "live"`; with Irish Rail down and rivers `partial`/`stale`/`fallback` (all carry data), `anyLive` is false and the payload ships `no-store`, defeating the degradation tiers exactly during the flakiest upstream's outage.
+- How: treat any river status with readings (`live|partial|stale|fallback`) as usable for the partial tier.
 
-### T8. Prototype-safe destination lookup
-- Where: `lib/browser-live.ts:60`
-- What: `destinations[vehicle.tripId]` resolves inherited members (`constructor`, `toString`, …) for externally-supplied trip IDs, putting a function object into UI text.
-- How: `Object.hasOwn(destinations, vehicle.tripId)` guard.
+### T8. Unhandled errors escape as bare 1101 pages on `/api/history` and `/api/living` (low-medium)
+- Where: `platform/cloudflare-entry.js:264-266, 393-395, 400-402`
+- What: the production adapter lacks the JSON error wrappers its twin has (`server-entry.js:1112-1127`), and the coordinator body parse sits outside the settled region, so a corrupt row or malformed coordinator body returns Cloudflare HTML instead of the JSON/CORS/no-store contract.
+- How: mirror server-entry's try/catch wrappers; move `riverResponse.value.json()` into guarded handling that degrades to the unavailable fallback.
 
-### T9. Hoist the ISS Dublin-hour formatter out of the pass loop
-- Where: `lib/browser-live.ts:835-837`
-- What: `Intl.DateTimeFormat` constructed per completed pass inside `scanIssPasses`.
-- How: module-level constant next to the other formatters.
+### T9. `captureCutoff` fallback is dead code (low)
+- Where: `platform/cloudflare-entry.js:88-91`
+- What: `Number(null)` is 0, so an absent/empty `captureBucketStartMs` returns epoch 0, never the fallback, silently recording empty captures; arbitrarily large future values are accepted too.
+- How: treat null/empty/non-numeric/out-of-range as absent; bound against now.
 
-## P1 — Platform
+### T10. XML entity decode order double-decodes `&amp;` sequences (low)
+- Where: `platform/server-entry.js:77-84`
+- What: `value()` replaces `&amp;` first, turning provider-escaped literal text into markup characters (train `PublicMessage`, status, direction); sibling `decodeHtml` does it correctly.
+- How: reorder so `&amp;` is replaced last.
 
-### S1. Add CORS headers to production living/transit responses
-- Where: `platform/cloudflare-entry.js:10-29`
-- What: `responseHeaders`, `partialHeaders`, `transitLiveHeaders`, `transitUnavailableHeaders` lack `access-control-allow-origin` while health/history/method endpoints send it — internally contradictory posture, opaque failures for third-party consumers exactly on the degraded endpoints most likely polled elsewhere.
-- How: add `"access-control-allow-origin": "*"` (+ allow-methods/headers) to the four constants.
+### T11. History point-query misses are edge-cached for 300 s (low)
+- Where: `platform/history.js:389`
+- What: a `snapshot: null` miss (normal right after deployment or an outage) becomes resolvable within minutes yet is cached `s-maxage=300`.
+- How: branch cache headers on whether a snapshot resolved.
 
-### S2. Share satellite discovery in flight
-- Where: `platform/server-entry.js:778`
-- What: `shareInFlight: false` means concurrent cold `/api/contexts` requests each run their own NASA availability + frame probe (1 GET + up to 7 HEADs); fastest route to the 100-subrequest cap under burst.
-- How: drop the flag so `refreshContextSource` coalesces via `state.inFlight` like every other source; the resolver's own success/failure cache still prevents redundant work afterwards.
+### T12. No-snapshot history response claims the wrong resolution (nit)
+- Where: `platform/history-store.js:302-314,326`
+- What: `resolutionMinutes` is overwritten every loop iteration, so misses report the last allowed resolution (e.g. 1440 for a raw-eligible query).
+- How: keep the initialized value unless a candidate is selected.
 
-### S3. Cap the solar day cache
-- Where: `platform/sky-source.js:221, 267`
-- What: one entry per requested Dublin-day window grows unbounded over isolate lifetime.
-- How: evict oldest inserted keys beyond 8 entries.
+### T13. Dead ternary branch and hardcoded attribution year (nit)
+- Where: `platform/sky-source.js:410`, `platform/history-sources.js:567`
+- What: `freshness === "future" ? "unavailable" : "unavailable"` collapses to one value; captured transit aggregates permanently record "© 2025 NTA".
+- How: collapse the ternary; derive the year from the capture date.
 
-### S4. Harden the configured river bridge (round-1 follow-up)
-- Where: `platform/server-entry.js:200-215`, `tests/review-fixes.test.mjs`
-- What: (a) `startsWith("https://")` admits malformed URLs and the bridge fetch isn't wrapped, so a bad config value escapes as a bare TypeError instead of the contextual `OPW returned X … fallback unavailable` shape; (b) an ok-but-garbage bridge body throws the raw codec error with no OPW context.
-- How: validate with `new URL()` (protocol https:, hostname present); wrap the whole bridge attempt in try/catch folding failures into the standard message. Extend tests: malformed URL rejected, garbage body yields contextual error.
+### T14. Test static server cannot reproduce the branded 404 or per-path cache rules (low-medium)
+- Where: `scripts/static-server.mjs:6-22,56-62`
+- What: unknown extension-less paths fall back to `index.html` with 200 (soft 404), and the `_headers` parser keeps only the `/*` block, so no local test can exercise the round-1 branded 404 or the `/data/*`, `/social/*` rules.
+- How: serve `404.html` with status 404; parse path-specific blocks (exact paths and trailing-`*` prefixes).
 
-### S5. Align alternate-adapter transit response with production semantics
-- Where: `platform/server-entry.js:1019-1023`
-- What: coordinator "stale" results carry vehicles but the alternate adapter sends them cacheable=nothing (`max-age=0`) with vehicles attached, while production strips non-usable vehicles and edge-caches live at s-maxage=60. Divergent caching/status vocabulary for the same endpoint.
-- How: mirror production `transitResponse`: strip vehicles unless status is live/partial; live → `max-age=15, s-maxage=60`, partial → partial-tier 15/15, else no-store.
+## UI/UX
 
-## P1 — UI/UX
+### U1. Light theme dark-on-dark surfaces, batch two (high)
+- Where: `app/globals.css` light block (~4580+) vs `.guidance-card` (+hover :1662/:1679), `.notable-signals button, .all-quiet` (:1123), `.history-result` (+`.error/.gap`, retry, link colors :3053-3087), `.history-comparison`/:3083, `.history-period-summary`/:3092, `.movement-browser`/:2116 + results/pagination buttons, `.timeline-selection`/:1721, `.official-notices-empty`/:1816, `.warning-key-facts dt` (#f1c76f literal :2649), `.history-ambiguity legend` (#f1c76f literal :3041)
+- What: these keep hardcoded dark-navy backgrounds while text variables flip dark in light mode (≈1.2-2.5:1): activity guidance cards, notable signal buttons, history result/comparison/period summary, transport browser, timeline selection, empty-notices state.
+- How: extend the existing `html[data-theme="light"]` overrides with light surfaces and remapped accent literals, following the round-1/2 pattern.
 
-### U1. Light-theme text palette (critical contrast cluster)
-- Where: `app/globals.css` — hardcoded pale text colors used across themes: `#dffeff` (freshness chips 1484, timeline table th 2795, layer-group headings 1817, place summary 1757, dd values 1053, timeline-selection 1709, map-legend summary 1986), `#f7e5a5` (workspace facts 721, hero strongs 1055, station temperature 1066, rail metrics 698, pulse-card i 1171, live-signal-dock time 981), `#f4f7ff` (warning copy heads 2606, 2635), `#c7d2e2` (table td 2644, 2796), `#f8edd4` (official notices/warning badges 4007-4011). The light block (4474+) whitens these containers but never remaps the pale text → ≈1.1–1.4:1 unreadable.
-- How: introduce custom properties (`--accent-ice`, `--accent-gold`, `--accent-warn-head`, `--accent-table-dim`, `--accent-cream`) defined in `:root` (current dark values) and overridden in `html[data-theme="light"]` with dark equivalents meeting AA on light surfaces. Replace **color usages only** — SVG fills/strokes/borders/filters/backgrounds stay hex. Verify each match site individually.
+### U2. Map overlays unreadable in light mode (high)
+- Where: `app/globals.css` `.map-notice`/:926, `.map-data-panel`/:1039 (+ `dl div` #101d33), `.live-signal-dock`/:970, `.radar-control` (rgba(9,23,41,.95))
+- What: overlays sit on the now-light map canvas but keep dark backgrounds while their text uses flipped variables — the radar notice, grid/aurora/ISS panels and live-signal strip become invisible in light mode.
+- How: light surfaces for these overlays matching the established light map language (as already done for `.map-navigation`).
 
-### U2. Light-theme form controls keep dark backgrounds with theme-flipped text
-- Where: `app/globals.css:2109-2118` (.movement-browser-filters input/select), `2953-2956` (.history-mode-toggle), `2995-3007` (.history-picker input)
-- What: `background: #071426` hardcoded with `color: var(--ink)`; dark theme `--ink: #f5efdf` works, light theme `--ink: #12251f` gives ~2:1 dark-on-dark.
-- How: add `html[data-theme="light"]` overrides giving these controls light surfaces consistent with the rest of the light theme.
+### U3. ExplorePanel modal trap leaks (high)
+- Where: `components/ExplorePanel.tsx:60-100`
+- What: the keydown handler is scoped to the panel `<aside>`, the backdrop button sits outside it, and the app root is never inerted — once focus lands on the backdrop or behind the overlay, Tab walks the hidden page and Escape stops working.
+- How: attach the keydown handler to `document` (the DetailCard pattern, `MapPanels.tsx:110+`) and extend the existing inert effect in `IrelandExperience.tsx:871-876` to cover the open panel.
 
-### U3. Light-theme hover/active overrides lose specificity to base rules
-- Where: `app/globals.css:4588` vs base `.section-nav a:hover` (3565), `.layer-list > button.active` (1320, 4162), `.panel-presets button.active` (2178)
-- What: `html[data-theme="light"] :where(...)` computes (0,1,1) and is beaten by (0,2,1)/(0,2,2) base rules — hover/active feedback stays invisible translucent-white on white cards.
-- How: drop `:where()` from the hover/active rule so it inherits `[data-theme="light"]` specificity; extend the selector list with `.panel-presets button.active`, `.source-directory a:hover/:active`, `.section-nav a[aria-current="location"]`.
-
-### U4. Restore page scrolling over the map at scale 1
-- Where: `app/globals.css:728-737`, `components/use-map-gestures.ts`
-- What: `touch-action: none` blocks native scrolling over the full-width mobile map even at scale 1 where drags do nothing (constrain clamps x/y to 0) — a large dead scroll zone at the top of the page.
-- How: `.ireland-map { touch-action: pan-y }` and `.ireland-map.is-zoomed { touch-action: none }` (the class already toggles by scale). Wheel zoom keeps preventDefault; +/- buttons unaffected.
-
-### U5. Always capture pointers on the SVG root
-- Where: `components/use-map-gestures.ts:63-72`
-- What: drags starting on markers skip `setPointerCapture`; releasing outside the SVG leaks the pointer id and keeps panning until another click lands on the SVG.
-- How: capture unconditionally (keep try/catch); pointer capture retargets pointer events, not the derived click, so marker activation survives and `suppressClickAfterPan` still guards accidental pans.
-
-### U6. Prevent iOS zoom-on-focus (inputs < 16px)
-- Where: `app/globals.css:2109-2118` (search/type inputs, no font-size → ~13.3px default), `2995-3007` (.history-picker input at .875rem = 14px)
-- What: iOS Safari auto-zooms the viewport when focusing sub-16px text inputs.
-- How: set `font-size: 1rem` on movement-browser-filters input/select; raise history-picker input to 1rem.
-
-### U7. Heading order: h1 arrives after several h2s
-- Where: `components/WorkspaceHeading.tsx:22` (h1 mounted at IrelandExperience.tsx:2676) vs earlier `<h2>`s (map stage 2235, panels)
-- What: heading navigation hits h2s first and the page title mid-page.
-- How: promote the map-stage heading to the page's `<h1>` ("Ireland on the map" → becomes the document title heading) and demote WorkspaceHeading's h1 to an h2, preserving visual styling via CSS. Check `aria-labelledby`/copy-style tests referencing moment-heading.
-
-### U8. Remove aria-live from the detail dialog root
-- Where: `components/MapPanels.tsx:126`
-- What: the whole dialog announces politely on every internal change (typing, paging, ~65 s background refresh ticks).
-- How: remove `aria-live`; focus management and the stack counter already cover state changes.
-
-### U9. Stop announcing every wheel-tick zoom change
+### U4. Zoom readout still announces every step (medium)
 - Where: `components/MapCanvas.tsx:123`
-- What: `<output aria-live="polite">` streams announcements during pinch/wheel gestures.
-- How: drop `aria-live` (visual output; zoom buttons remain keyboard-accessible).
+- What: `<output>` maps to ARIA role=status (implicit polite live region); wheel/pinch changes announce continuously despite the round-2 intent.
+- How: render the percentage in a plain span (class `zoom-readout`), updating the CSS selectors that target `.map-navigation output`.
 
-### U10. Keep volatile clock text out of the atomic live-status region
-- Where: `components/IrelandExperience.tsx:2147-2166`
-- What: `aria-atomic="true"` re-reads the whole strip including `Checked HH:MM:SS` roughly every refresh (~65 s).
-- How: scope role/aria-live/aria-atomic to the state spans only; move `<time>` outside the live region (CSS unchanged visually).
+### U5. Cluster-count labels fail contrast in light mode (medium-low)
+- Where: `app/globals.css:315-319, 869-875`
+- What: near-black digits on `--green`/`--water-accent` circles whose fills flip darker in light mode (≈2.5-3:1); unlike sibling labels they have no stroke halo.
+- How: give both label styles the same `paint-order: stroke` halo pattern as other marker text.
 
-### U11. Radar notice: announce transitions, not tile events
-- Where: `components/IrelandExperience.tsx:2287-2294` (detail built at 1446-1476)
-- What: long notice sentences re-announced per radar tile load event.
-- How: remove aria-live from the visible notice; add a visually-hidden polite region that announces once per coarse transition (loading → partial/live/unavailable).
+### U6. Heading level skip h1 → h3 (low)
+- Where: `components/HistoryControls.tsx:147`
+- What: "Now or past conditions" is an `h3` directly under the page `h1` and before any `h2`.
+- How: demote to `h2` (id and styles unchanged).
 
-### U12. Dismiss control meets target size on all viewports
-- Where: `app/globals.css:934-944` (44px only ≤600px)
-- What: map-notice close button ≈16×18px on desktop/tablet.
-- How: apply ≥24px hit area (with spacing to reach ~44px) unconditionally.
+### U7. Radar/satellite groups expose no accessible name (low)
+- Where: `components/MapLayers.tsx:258,296`
+- What: `aria-label` on a `<g>` without a role is ignored by most mappings, so the satellite image date is unreachable for screen readers.
+- How: add `role="img"` to those groups (matching the root SVG pattern).
 
-### U13. History error gets a retry affordance
-- Where: `components/HistoryControls.tsx:125-129, 190-193`
-- What: errors render prose only; the scrubber guard blocks same-value resubmission, so there is no recovery path.
-- How: "Try again" button beside the error paragraph calling `onRequest` for the currently selected time and clearing `submittedScrubberRef` so slider resubmission works too.
+### U8. HTML validity odds and ends (nit)
+- Where: `components/IrelandExperience.tsx:2885,2892`, `components/PlaceContext.tsx:117-146`
+- What: `<div>` inside `<button>` (signal bars); `<small>` directly inside `dl > div` (only dt/dd allowed there).
+- How: use a span (class styling unchanged, ensure display survives); move each note inside its `<dd>`.
 
-### U14. Brand subtitle degrades honestly
-- Where: `components/IrelandExperience.tsx:2145`
-- What: "Live island view" persists while offline/cached — the one label that never downgrades in an otherwise honest interface.
-- How: derive from `serviceDisplayState` like the adjacent chip ("Saved island view" when cached/offline, "Island view" when unavailable; keep "Live island view" for live/connecting/partial).
+## Other
 
-### U15. Clean up share-button timers
-- Where: `components/IrelandExperience.tsx:2091, 2097`
-- What: `setTimeout(setShareStatus("idle"), 1800)` handles never stored/cleared → setState after unmount.
-- How: store handles in a ref, clear in an unmount effect and before setting anew.
+### O1. Branded 404 page is indexable with a homepage canonical (low)
+- Where: `app/not-found.tsx`
+- What: it inherits root metadata wholesale, emitting the homepage canonical/description and `index: true`.
+- How: add a robots noindex via metadata export (verify the emitted `out/404.html`; fall back to a React 19 hoisted meta tag if Next ignores metadata exports here).
 
-### U16. Move the radar frame-key ref mutation out of render
-- Where: `components/IrelandExperience.tsx:1315`
-- What: top-level side effect in the render body; unsafe under concurrent rendering.
-- How: assign inside `useEffect` (consumers are async callbacks that run post-commit).
+### O2. `/map/*.json` geography ships with no caching rule (low-medium)
+- Where: `public/_headers`
+- What: `island.json`/`major-roads.json` get heuristic caching only, revalidating ~400 KB of build-stable bytes on repeat visits.
+- How: add a `/map/*` rule with a bounded long max-age (7 days, matching `/social/*`).
 
-### U17. Throttle history.replaceState during pan
-- Where: `components/IrelandExperience.tsx:1790-1816`
-- What: effect depends on `mapView` identity → dozens of replaceState calls per drag gesture.
-- How: trailing debounce (~150 ms) keyed off serialized view; flush on cleanup.
+### O3. Copy, privacy, and config honesty nits (nit bundle)
+- Where: `lib/activity-guidance.ts:183` ("2 notices … its category does not change"), `app/privacy/page.tsx:21` (theme preference undisclosed), `app/about/page.tsx:22` (external link missing the site-wide `rel="noreferrer"` convention), `app/manifest.ts` (`theme_color` matches neither viewport color), `scripts/check-performance-budget.mjs` (declares `initialRequestBudget` but never enforces it)
+- How: grammar agreement fix; one privacy clause; link attributes; align `theme_color` with the declared dark UI chrome; count script/style requests in the built index and fail over budget.
 
-### U18. Raise content-bearing micro-copy off ~9px
-- Where: `app/globals.css` — `.guidance-status` (.55rem, 1666), `.guidance-reason/.caveat` (.61rem, 1682), `.layer-group-heading p` (.59rem, 1826), `.movement-results small` (.6rem, 2144), `.workspace-facts small` (.6rem, 722), `.map-navigation output` (.55rem, 766)
-- What: statuses/caveats/provider notes at 8.8–9.8px despite the stylesheet's own declared 12px practical floor.
-- How: raise these content-bearing selectors to ≥ .72rem (~11.5px); leave decorative repetition alone.
-
-### U19. Decorative SVG groups hidden from the accessibility tree
-- Where: `components/IrelandExperience.tsx:2346-2350` (road-network `role="img"`), sun/day-arc/night-shade shapes, duplicated describedby vs MapCanvas.tsx:57
-- What: decoration announced as images inside an already-described map; doubled descriptions.
-- How: `aria-hidden="true"` on road-network/day-arc/sun/night-shade groups; keep svg-level describedby on one element only.
-
-## Deferred (not in this round)
+## Deliberate skips this round
 
 | Item | Reason |
 | --- | --- |
-| Split the 642 KB main chunk / trim prerendered SVG | Round-1 skip stands: structural refactor of a live product needing measured budget work (`check:budgets`, Playwright perf suite). |
-| CSP hash-based inline allowances | Round-1 skip stands: Next static export injects build-varying inline scripts; needs build-integrated header generation. |
-| History bucket recovery / late-capture rollup resync / writeSnapshot race | D1/cron recovery policy needs production verification and its own PR; unit tests can't exercise delayed-event delivery faithfully here. |
-| Drop redundant `history_snapshots_time` index | Needs a new applied migration; bundling an unapplied migration file creates deploy ambiguity. Defer to the next planned migration wave. |
-| `resolveHistory` serial D1 round-trips | Query-shape change needing real-D1 latency measurement. |
-| Full memoization/isolation of the 1-second clock re-render | Contained memoization of the expensive derivations is included where trivially safe; moving the clock to leaf components touches the whole 2,961-line tree — separate effort. |
+| Split the 642 KB main chunk / trim prerendered SVG | Rounds 1-2 skip stands: structural refactor needing measured budget work. |
+| Hash-based CSP inline allowances | Round-1 skip stands: requires build-integrated header generation. |
 | Rebuild transit dictionary from pinned GTFS | Round-1 skip stands (tracked in IMPLEMENTATION_REPORT.md). |
-| Extract shared worker dispatch | Round-1 skip stands; symptoms fixed directly (S5 closes another divergence instance). |
-
-## Implementation order
-
-1. Technical batch (T1-T9) + tests → commit.
-2. Platform batch (S1-S5) + tests → commit.
-3. UI/UX CSS batches (U1-U3, U6, U12, U18) → commit.
-4. UI/UX component batches (U4-U5, U7-U11, U13-U17, U19) → commit.
-5. Full verification suite; append log.
+| Extract shared worker dispatch module | Round-1 skip stands; concrete divergences fixed directly (T7/T8). |
+| Full isolation of the 1-second clock render | Round-2 skip stands; T3 removes the hidden-tab cost instead. |
+| Cross-tab theme sync via storage events | Polish nit with no failure mode; not worth the surface area this round. |
+| "(opens in a new tab)" announcements | Site-wide convention change across ~15 links for marginal SR value; Referrer-Policy already caps leakage. |
+| Print styles | Out of scope for a live dashboard round; no reported need. |
+| Maskable PNG icons | The icon's glyph relies on a named serif font that renders inconsistently through local rasterization; shipping unpredictable binaries is worse than the nit. `theme_color` alignment done instead. |
