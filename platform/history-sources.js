@@ -563,7 +563,7 @@ export const summarizeTransit = (vehicles, status, capturedAt) => {
     byRoute: [...byRoute].map(([route, count]) => ({ route, count })).sort((a, b) => a.route.localeCompare(b.route)),
     attribution: {
       provider: "National Transport Authority",
-      copyright: "© 2025 NTA",
+      copyright: `© ${new Date().getFullYear()} NTA`,
       source: "NTA Developer Portal",
       license: "CC BY 4.0",
       adapted: true,

@@ -86,8 +86,13 @@ const healthResponse = (env) => Response.json({
 });
 
 const captureCutoff = (url, fallback = Date.now()) => {
-  const value = Number(url.searchParams.get("captureBucketStartMs"));
-  return Number.isInteger(value) && value >= 0 ? value : fallback;
+  const raw = url.searchParams.get("captureBucketStartMs");
+  // Number(null) and Number("") are 0, which would silently filter every
+  // reading out of a capture; only real, plausible timestamps may override
+  // the caller's fallback.
+  const value = raw === null || raw.trim() === "" ? Number.NaN : Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > fallback + 60_000) return fallback;
+  return value;
 };
 
 const transitUsable = (status) => status === "live" || status === "partial";
@@ -255,20 +260,36 @@ const dedupedFetchTrains = () => {
   return trainsInFlight;
 };
 
-const livingResponse = async (env) => {
-  const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
+// River statuses that carry readings; only "unavailable" means an empty feed.
+// Without this, Irish Rail outages would push usable river data into the
+// no-store tier and turn every client poll into origin work.
+const riverUsable = (status) => status === "live" || status === "partial" || status === "stale" || status === "fallback";
+
+// Exported for tests, which inject loadTrains to avoid the live upstream.
+export const livingResponse = async (env, { loadTrains = dedupedFetchTrains } = {}) => {  const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
   const [trains, riverResponse] = await Promise.allSettled([
-    dedupedFetchTrains(),
+    loadTrains(),
     riverCoordinator.fetch("https://internal/rivers")
   ]);
-  const riverResult = riverResponse.status === "fulfilled"
-    ? await riverResponse.value.json()
-    : { rivers: [], status: "unavailable", provenance: makeRiverProvenance({ status: "unavailable" }) };
+  // A malformed coordinator body must degrade to "unavailable", not escape as
+  // a bare runtime error, so the parse stays inside the settled region.
+  let riverResult;
+  if (riverResponse.status === "fulfilled") {
+    try {
+      riverResult = await riverResponse.value.json();
+    } catch (parseError) {
+      console.error("OPW coordinator body was unreadable", parseError);
+      riverResult = null;
+    }
+  }
+  riverResult ??= { rivers: [], status: "unavailable", provenance: makeRiverProvenance({ status: "unavailable" }) };
   if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
   if (riverResponse.status === "rejected") console.error("OPW coordinator failed", riverResponse.reason);
-  const allLive = trains.status === "fulfilled" && trains.value.length && riverResult.status === "live";
-  const anyLive = (trains.status === "fulfilled" && trains.value.length) || riverResult.status === "live";
-  const headers = allLive ? responseHeaders : anyLive ? partialHeaders : transitUnavailableHeaders;
+  const trainsLive = trains.status === "fulfilled" && trains.value.length > 0;
+  const riversUsable = riverUsable(riverResult.status) && Array.isArray(riverResult.rivers) && riverResult.rivers.length > 0;
+  const allLive = trainsLive && riverResult.status === "live";
+  const anyUsable = trainsLive || riversUsable;
+  const headers = allLive ? responseHeaders : anyUsable ? partialHeaders : transitUnavailableHeaders;
   return new Response(JSON.stringify(buildLivingPayload({
     trains: trains.status === "fulfilled" ? trains.value : [],
     rivers: riverResult.rivers,
@@ -383,6 +404,18 @@ const noIndexResponse = async (responsePromise) => {
   });
 };
 
+// Storage or coordinator failures must keep the JSON/CORS/no-store error
+// contract instead of escaping as a bare runtime (1101) HTML page.
+const apiErrorResponse = (message) => new Response(JSON.stringify({ error: message }), {
+  status: 503,
+  headers: {
+    ...CORS_HEADERS,
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-robots-tag": "noindex, nofollow"
+  }
+});
+
 const cloudflareWorker = {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -391,14 +424,24 @@ const cloudflareWorker = {
     }
     if (url.pathname === "/api/health") return healthResponse(env);
     if (url.pathname === "/api/history" || url.pathname === "/api/history/range") {
-      return noIndexResponse(handleHistoryRequest(request, env));
+      try {
+        return await noIndexResponse(handleHistoryRequest(request, env));
+      } catch (error) {
+        console.error("History request failed", error);
+        return apiErrorResponse("Stored history is temporarily unavailable.");
+      }
     }
     if (url.pathname === "/api/transit") {
       const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
       return noIndexResponse(coordinator.fetch("https://internal/transit"));
     }
     if (url.pathname === "/api/living") {
-      return livingResponse(env);
+      try {
+        return await livingResponse(env);
+      } catch (error) {
+        console.error("Living layers failed", error);
+        return apiErrorResponse("Live layers are temporarily unavailable.");
+      }
     }
     if (url.pathname === "/api/contexts") {
       return noIndexResponse(apiWorker.fetch(request, env));

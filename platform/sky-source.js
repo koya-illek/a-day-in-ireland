@@ -407,7 +407,7 @@ export const assessMetForecast = (body, now = Date.now()) => {
   const forecast = normalizeMetForecast(body, now);
   return forecast
     ? { forecast, status: "live", reason: null }
-    : { forecast: null, status: freshness === "stale" ? "stale" : freshness === "future" ? "unavailable" : "unavailable", reason: freshness };
+    : { forecast: null, status: freshness === "stale" ? "stale" : "unavailable", reason: freshness };
 };
 
 const irelandHour = (timestamp) => Number(new Intl.DateTimeFormat("en-IE", {

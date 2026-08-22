@@ -76,11 +76,13 @@ const json = (body, status = 200, cacheSeconds = 60, staleSeconds = 0) =>
 
 const value = (xml, name) =>
   (new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(xml)?.[1] ?? "")
-    .replaceAll("&amp;", "&")
+    // &amp; last: decoding it first would turn escaped literal text such as
+    // "&amp;lt;" into markup characters instead of the intended "&lt;".
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
     .replaceAll("&quot;", "\"")
     .replaceAll("&#39;", "'")
+    .replaceAll("&amp;", "&")
     .trim();
 
 export const fetchTrains = async () => {
@@ -127,7 +129,7 @@ const fetchWarnings = async () => {
     cf: { cacheEverything: true, cacheTtl: 300, cacheTtlByStatus: { "200-299": 300, "400-599": 0 } }
   });
   if (!response.ok) throw new Error(`Met Éireann warnings returned ${response.status}`);
-  return normalizeWeatherWarnings(await response.json());
+  return normalizeWeatherWarnings((await readBoundedJsonResponse(response, "met-warnings", 512_000)).body);
 };
 
 const decodeHtml = (value) => value
@@ -262,7 +264,7 @@ const freshEnough = (value, hours = 6) => {
 const fetchWeatherBuoys = async () => {
   const response = await fetch(weatherBuoyQuery().url, { cf: { cacheEverything: true, cacheTtl: 900 } });
   if (!response.ok) throw new Error(`Marine weather buoys returned ${response.status}`);
-  const body = await response.json();
+  const body = (await readBoundedJsonResponse(response, "marine-weather-buoys", 512_000)).body;
   return parseWeatherBuoyRows(body.table?.rows);
 };
 
@@ -273,7 +275,7 @@ const fetchCoastalBuoy = async (source) => {
     { cf: { cacheEverything: true, cacheTtl: 900 } }
   );
   if (!response.ok) throw new Error(`${source.name} returned ${response.status}`);
-  const body = await response.json();
+  const body = (await readBoundedJsonResponse(response, "marine-coastal", 512_000)).body;
   return parseCoastalObservatoryRow(source, body.table?.rows?.[0]);
 };
 
@@ -301,7 +303,7 @@ const fetchRadar = async () => {
     cf: { cacheEverything: true, cacheTtl: 300 }
   });
   if (!response.ok) throw new Error(`Met Éireann radar returned ${response.status}`);
-  return normalizeRadarFrames(await response.json());
+  return normalizeRadarFrames((await readBoundedJsonResponse(response, "met-radar", 512_000)).body);
 };
 
 
@@ -325,7 +327,7 @@ export const fetchAirQuality = async () => {
   }).toString();
   const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 1800 } });
   if (!response.ok) throw new Error(`Open-Meteo air quality returned ${response.status}`);
-  const bodies = await response.json();
+  const bodies = (await readBoundedJsonResponse(response, "open-meteo-air", 256_000)).body;
   const readings = airLocations.flatMap(([id, name, latitude, longitude], index) => {
     const current = bodies[index]?.current;
     if (!current?.time) return [];
@@ -376,9 +378,9 @@ export const fetchTides = async () => {
   const surgeResponse = surgeResult.status === "fulfilled" ? surgeResult.value : null;
   const predictionResponse = predictionResult.status === "fulfilled" ? predictionResult.value : null;
   if (!levelsResponse.ok) throw new Error(`Tide gauges returned ${levelsResponse.status}`);
-  const levelRows = (await levelsResponse.json()).table?.rows ?? [];
-  const surges = surgeResponse?.ok ? (await surgeResponse.json()).table?.rows ?? [] : [];
-  const predictions = predictionResponse?.ok ? (await predictionResponse.json()).table?.rows ?? [] : [];
+  const levelRows = (await readBoundedJsonResponse(levelsResponse, "tide-levels", 512_000)).body.table?.rows ?? [];
+  const surges = surgeResponse?.ok ? (await readBoundedJsonResponse(surgeResponse, "tide-surge", 512_000)).body.table?.rows ?? [] : [];
+  const predictions = predictionResponse?.ok ? (await readBoundedJsonResponse(predictionResponse, "tide-predictions", 512_000)).body.table?.rows ?? [] : [];
   const distance = (a, b) => Math.hypot(Number(a[1]) - Number(b[1]), Number(a[2]) - Number(b[2]));
   const now = Date.now();
   const stationRows = new Map();
@@ -432,13 +434,13 @@ export const fetchBathingAlerts = async () => {
     cf: { cacheEverything: true, cacheTtl: 900 }
   });
   if (!alertsResponse.ok) throw new Error(`EPA bathing alerts returned ${alertsResponse.status}`);
-  const alerts = normalizeBathingAlerts((await alertsResponse.json()).list ?? []);
+  const alerts = normalizeBathingAlerts((await readBoundedJsonResponse(alertsResponse, "epa-bathing-alerts", 512_000)).body.list ?? []);
   if (!alerts.length) return { alerts: [], status: "live" };
   const locationsResponse = await fetch("https://data.epa.ie/bw/api/v1/locations?per_page=500", {
     cf: { cacheEverything: true, cacheTtl: 86400 }
   });
   if (!locationsResponse.ok) throw new Error(`EPA bathing locations returned ${locationsResponse.status}`);
-  const locations = new Map(((await locationsResponse.json()).list ?? []).map((item) => [item.beach_id, item]));
+  const locations = new Map(((await readBoundedJsonResponse(locationsResponse, "epa-bathing-locations", 1_000_000)).body.list ?? []).map((item) => [item.beach_id, item]));
   const archived = alerts.flatMap((alert) => {
     const location = locations.get(alert.beach_id);
     const east = numeric(location?.easting);
@@ -535,7 +537,7 @@ export const resolveSatelliteAvailability = async ({
       cf: { cacheEverything: true, cacheTtl: 300 }
     });
     if (!domains.ok) throw new Error(`NASA GIBS Domains returned ${domains.status}`);
-    const advertisedDate = latestDomainDate(await domains.text(), today);
+    const advertisedDate = latestDomainDate(await readBoundedTextResponse(domains, "nasa-gibs-domains", 262_144), today);
     return {
       advertisedDate,
       startDate: advertisedDate ?? fallbackDate,
@@ -643,7 +645,7 @@ const fetchEarthquakes = async () => {
   }).toString();
   const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 900 } });
   if (!response.ok) throw new Error(`USGS earthquakes returned ${response.status}`);
-  const body = await response.json();
+  const body = (await readBoundedJsonResponse(response, "usgs-earthquakes", 512_000)).body;
   return (body.features ?? []).slice(0, 30).flatMap((feature) => {
     const [longitude, latitude, depthKm] = feature.geometry?.coordinates ?? [];
     const magnitude = numeric(feature.properties?.mag);
@@ -749,14 +751,14 @@ const fetchAurora = async () => {
     })
   ]);
   if (!auroraResponse.ok) throw new Error(`NOAA aurora returned ${auroraResponse.status}`);
-  const body = await auroraResponse.json();
+  const body = (await readBoundedJsonResponse(auroraResponse, "noaa-aurora", 900_000)).body;
   const probabilities = (body.coordinates ?? [])
     .filter((point) => point[0] >= 349 && point[0] <= 355 && point[1] >= 51 && point[1] <= 56)
     .map((point) => Number(point[2])).filter(Number.isFinite);
   if (!probabilities.length) return null;
   let kpIndex = null;
   if (kpResponse.ok) {
-    const rows = await kpResponse.json();
+    const rows = (await readBoundedJsonResponse(kpResponse, "noaa-kp", 128_000)).body;
     kpIndex = numeric(rows.at(-1)?.estimated_kp);
   }
   return {

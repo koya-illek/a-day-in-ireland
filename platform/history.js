@@ -386,5 +386,10 @@ export async function handleHistoryRequest(request, env, now = Date.now()) {
   if (!at || !validCalendar || !Number.isFinite(requestedAt) || requestedAt > now) {
     return json({ error: "at must be a valid RFC 3339 timestamp that is not in the future." }, 400);
   }
-  return json(await resolveHistory(env.HISTORY_DB, requestedAt, now), 200, "public, max-age=60, s-maxage=300");
+  const resolved = await resolveHistory(env.HISTORY_DB, requestedAt, now);
+  // A miss becomes resolvable as soon as the next capture lands, so it must
+  // not pin an empty answer to the edge for five minutes.
+  return json(resolved, 200, resolved.snapshot
+    ? "public, max-age=60, s-maxage=300"
+    : "public, max-age=15, s-maxage=30");
 }

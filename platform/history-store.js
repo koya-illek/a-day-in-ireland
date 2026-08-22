@@ -299,10 +299,8 @@ const adjacentTimestamp = async (db, resolutionMinutes, resolvedAt, direction) =
 export async function resolveHistory(db, requestedAt, now = Date.now()) {
   const range = await historyRange(db);
   let selected = null;
-  let resolutionMinutes = allowedResolutions(requestedAt, now)[0];
   for (const resolution of allowedResolutions(requestedAt, now)) {
     const candidate = await nearestAtOrBefore(db, resolution, requestedAt);
-    resolutionMinutes = resolution;
     if (!candidate) continue;
     const candidateAt = resolution === DAY_RESOLUTION_MINUTES
       ? Number(candidate.bucket_start_ms)
@@ -323,7 +321,9 @@ export async function resolveHistory(db, requestedAt, now = Date.now()) {
       availableTo: range.availableTo,
       previousAt: null,
       nextAt: null,
-      resolutionMinutes,
+      // Report the finest tier that could have served this query rather than
+      // whatever resolution happened to be iterated last.
+      resolutionMinutes: allowedResolutions(requestedAt, now)[0],
       snapshot: null,
       movementSummary: { rail: null, transit: null },
       periodSummary: null,
