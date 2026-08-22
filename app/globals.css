@@ -17,6 +17,14 @@
   --warning-strong: #a75d43;
   --panel-soft: rgba(255, 248, 232, .045);
   --panel-softer: rgba(255, 248, 232, .028);
+  /* Accent text tones. Dark theme keeps the original pale values; the light
+     theme remaps them so chip labels, fact values, and table cells keep AA
+     contrast on light surfaces. */
+  --accent-ice: #dffeff;
+  --accent-gold: #f7e5a5;
+  --accent-warn-head: #f4f7ff;
+  --accent-table-dim: #c7d2e2;
+  --accent-cream: #f8edd4;
 }
 
 /* Sky and forecast stay compact so the living map keeps its editorial lead. */
@@ -339,11 +347,11 @@ button { color: inherit; }
   background: rgba(7, 28, 25, .9);
   border: 1px solid var(--line);
   border-radius: 1rem;
-  bottom: 2rem;
+  bottom: calc(2rem + env(safe-area-inset-bottom));
   box-shadow: 0 2rem 5rem rgba(0, 0, 0, .3);
   padding: 1.25rem;
   position: fixed;
-  right: clamp(1rem, 4vw, 4rem);
+  right: calc(clamp(1rem, 4vw, 4rem) + env(safe-area-inset-right));
   width: min(19rem, calc(100vw - 2rem));
   z-index: 51;
 }
@@ -442,6 +450,8 @@ button { color: inherit; }
   bottom: 0;
   max-width: 27rem;
   padding: 1.5rem;
+  padding-top: calc(1.5rem + env(safe-area-inset-top));
+  padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
   position: fixed;
   right: 0;
   top: 0;
@@ -695,7 +705,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   padding: .7rem;
 }
 .rail-metrics span, .rail-metrics small { color: var(--muted); font: .58rem ui-monospace, monospace; text-transform: uppercase; }
-.rail-metrics strong { color: #f7e5a5; font: 600 1.05rem ui-monospace, monospace; grid-row: span 2; }
+.rail-metrics strong { color: var(--accent-gold); font: 600 1.05rem ui-monospace, monospace; grid-row: span 2; }
 .rail-metrics small { margin-top: .25rem; }
 .map-workspace { min-width: 0}
 .workspace-heading {
@@ -718,8 +728,8 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 }
 .workspace-facts button:hover, .workspace-facts button:focus-visible { border-color: rgba(109, 151, 178, .6); transform: translateY(-1px); }
 .workspace-facts b, .workspace-facts small { display: block; font-family: ui-monospace, monospace; }
-.workspace-facts b { color: #f7e5a5; font-size: .85rem; }
-.workspace-facts small { color: var(--muted); font-size: .6rem; line-height: 1.25; margin-top: .15rem; text-transform: uppercase; }
+.workspace-facts b { color: var(--accent-gold); font-size: .85rem; }
+.workspace-facts small { color: var(--muted); font-size: .72rem; line-height: 1.25; margin-top: .15rem; text-transform: uppercase; }
 .map-stage {
   background: #071426;
   border: 1px solid rgba(109, 151, 178, .2);
@@ -731,10 +741,13 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   inset: 0;
   min-width: 0;
   position: absolute;
-  touch-action: none;
+  /* At rest the page keeps vertical scrolling over the map; panning is
+     meaningless at scale 1 anyway. Once zoomed, the map owns every gesture. */
+  touch-action: pan-y;
   user-select: none;
   width: 100%;
 }
+.ireland-map.is-zoomed { touch-action: none; }
 .ireland-map.is-zoomed:active { cursor: grabbing; }
 .map-viewport {
   transform-box: fill-box;
@@ -763,7 +776,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .map-navigation .map-reset { font-size: .58rem; letter-spacing: .05em; text-transform: uppercase; }
 .map-navigation output {
   color: var(--green);
-  font: 600 .55rem ui-monospace, monospace;
+  font: 600 .68rem ui-monospace, monospace;
   padding: 0 .55rem;
   text-align: center}
 .island-shape { pointer-events: none; }
@@ -932,14 +945,20 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   text-transform: uppercase;
 }
 .map-notice > button {
+  align-items: center;
   background: transparent;
   border: 0;
   color: var(--muted);
   cursor: pointer;
+  display: grid;
+  /* Comfortable dismissal target on every viewport, not only mobile. */
   font-size: 1rem;
+  height: 2.75rem;
+  place-items: center;
+  width: 2.75rem;
   position: absolute;
-  right: .55rem;
-  top: .4rem;
+  right: .35rem;
+  top: .15rem;
   pointer-events: auto;
 }
 .map-notice strong { display: block; font-size: .82rem; padding-right: 1.25rem; }
@@ -978,7 +997,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 }
 .live-signal-dock > span { border-right: 1px solid var(--line); color: #b4c3d7; }
 .live-signal-dock > span:last-child { border-right: 0; }
-.live-signal-dock time { color: #f7e5a5; }
+.live-signal-dock time { color: var(--accent-gold); }
 .station-card {
   background: rgba(9, 23, 41, .96);
   border-color: rgba(109, 151, 178, .3);
@@ -1050,9 +1069,9 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .map-data-panel dl { display: grid; gap: .4rem; grid-template-columns: 1fr 1fr; margin: .8rem 0 0; }
 .map-data-panel dl div { background: #101d33; border: 1px solid var(--line); padding: .5rem; }
 .map-data-panel dt { color: var(--muted); font: .5rem ui-monospace, monospace; text-transform: uppercase; }
-.map-data-panel dd { color: #dffeff; font: 600 .72rem ui-monospace, monospace; margin: .2rem 0 0; }
+.map-data-panel dd { color: var(--accent-ice); font: 600 .72rem ui-monospace, monospace; margin: .2rem 0 0; }
 .grid-hero, .aurora-probability, .iss-orbit-value { align-items: flex-end; display: flex; gap: .7rem; }
-.grid-hero strong, .aurora-probability strong, .iss-orbit-value strong { color: #f7e5a5; font: 600 2.7rem/1 ui-monospace, monospace; }
+.grid-hero strong, .aurora-probability strong, .iss-orbit-value strong { color: var(--accent-gold); font: 600 2.7rem/1 ui-monospace, monospace; }
 .grid-hero span, .aurora-probability span, .iss-orbit-value span { color: var(--muted); font-size: .62rem; line-height: 1.35; max-width: 8.5rem; }
 .aurora-panel { border-color: rgba(106, 255, 196, .42); }
 .aurora-panel .utility-label { color: #78ffc6; }
@@ -1063,7 +1082,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .iss-panel small { color: var(--muted); display: block; font-size: .6rem; line-height: 1.5; margin-top: .75rem; }
 .mobile-context-panel { display: none; }
 .station-card h2, .station-temperature, .detail-emblem { font-family: "DM Sans", sans-serif; }
-.station-temperature, .detail-emblem { color: #f7e5a5; }
+.station-temperature, .detail-emblem { color: var(--accent-gold); }
 .warning-strip {
   background: #111d31;
   border: 1px solid rgba(236, 188, 91, .38);
@@ -1168,7 +1187,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   box-shadow: 0 0 1.8rem rgba(109, 151, 178, .08);
 }
 .pulse-card > span { color: var(--green); font-family: ui-monospace, monospace; }
-.pulse-card > span i { color: #f7e5a5; font-style: normal; margin-right: .35rem; }
+.pulse-card > span i { color: var(--accent-gold); font-style: normal; margin-right: .35rem; }
 .pulse-card strong {
   color: var(--ink);
   font-family: ui-monospace, monospace;
@@ -1266,7 +1285,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   background: rgba(109, 151, 178, .1);
   border: 1px solid rgba(109, 151, 178, .24);
   border-radius: .3rem;
-  color: #f7e5a5;
+  color: var(--accent-gold);
   display: flex;
   font-size: .9rem;
   grid-row: 1 / 3;
@@ -1481,7 +1500,7 @@ footer {
 .freshness-chip.connecting i, .freshness-chip.refreshing i { background: #65cbff; }
 .freshness-chip.partial i, .freshness-chip.fallback i, .freshness-chip.cached i, .freshness-chip.degraded i, .freshness-chip.stale i { background: #f1c76f; }
 .freshness-chip.offline i, .freshness-chip.unavailable i { background: #9aa7b8; }
-.freshness-chip b { color: #dffeff; font: 600 .62rem ui-monospace, monospace; text-transform: uppercase; }
+.freshness-chip b { color: var(--accent-ice); font: 600 .62rem ui-monospace, monospace; text-transform: uppercase; }
 .freshness-chip small { color: var(--muted); font: .57rem ui-monospace, monospace; white-space: nowrap; }
 .freshness-strip > button {
   background: transparent;
@@ -1584,7 +1603,7 @@ footer {
   text-transform: uppercase;
 }
 .place-observations dd {
-  color: #f7e5a5;
+  color: var(--accent-gold);
   font: 600 .88rem ui-monospace, monospace;
   margin: .25rem 0 .15rem;
   overflow: hidden;
@@ -1665,7 +1684,7 @@ footer {
 .guidance-card strong { font-size: .82rem; min-width: 0; }
 .guidance-status {
   color: var(--green);
-  font: 600 .55rem ui-monospace, monospace;
+  font: 600 .68rem ui-monospace, monospace;
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -1679,7 +1698,7 @@ footer {
 .guidance-card .guidance-reason, .guidance-card .guidance-caveat {
   color: var(--muted);
   display: block;
-  font-size: .61rem;
+  font-size: .72rem;
   line-height: 1.4;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1706,7 +1725,7 @@ footer {
   margin: .8rem 0 0;
   padding: .55rem .7rem;
 }
-.timeline-selection b { color: #dffeff; }
+.timeline-selection b { color: var(--accent-ice); }
 
 @media (max-width: 900px) {
   .place-context { grid-template-columns: 1fr; }
@@ -1754,7 +1773,7 @@ footer {
   margin-bottom: .35rem;
 }
 .place-context-summary {
-  color: #dffeff;
+  color: var(--accent-ice);
   font-size: .72rem;
   line-height: 1.45;
   margin: 0 0 .85rem;
@@ -1815,7 +1834,7 @@ footer {
   padding-top: 0;
 }
 .layer-group-heading h3 {
-  color: #dffeff;
+  color: var(--accent-ice);
   font: 600 .7rem ui-monospace, monospace;
   letter-spacing: .09em;
   margin: 0;
@@ -1823,7 +1842,7 @@ footer {
 }
 .layer-group-heading p {
   color: var(--muted);
-  font: .59rem/1.35 ui-monospace, monospace;
+  font: .68rem/1.35 ui-monospace, monospace;
   margin: .22rem 0 0;
 }
 .layer-group-controls {
@@ -1881,7 +1900,7 @@ footer {
   background: rgba(109, 151, 178, .1);
   border: 1px solid rgba(109, 151, 178, .38);
   border-radius: .35rem;
-  color: #dffeff;
+  color: var(--accent-ice);
   display: inline-flex;
   font: 700 .68rem ui-monospace, monospace;
   gap: .45rem;
@@ -1983,7 +2002,7 @@ footer {
 }
 .map-legend > summary,
 .map-context-disclosure > summary {
-  color: #dffeff;
+  color: var(--accent-ice);
   font: 700 .65rem ui-monospace, monospace;
   min-height: 2.75rem;
   padding: .8rem .9rem;
@@ -2112,6 +2131,8 @@ footer {
   border: 1px solid rgba(109, 151, 178, .3);
   border-radius: .3rem;
   color: var(--ink);
+  /* 16px keeps iOS Safari from auto-zooming the viewport on focus. */
+  font-size: 1rem;
   min-height: 2.75rem;
   padding: .55rem .65rem;
   width: 100%;
@@ -2141,7 +2162,7 @@ footer {
 .movement-results b,
 .movement-results small { display: block; overflow-wrap: anywhere; }
 .movement-results b { font-size: .7rem; }
-.movement-results small { color: var(--muted); font-size: .6rem; margin-top: .15rem; }
+.movement-results small { color: var(--muted); font-size: .72rem; margin-top: .15rem; }
 .movement-results-empty { color: var(--muted); font-size: .72rem; margin: .75rem 0 0; }
 .movement-pagination { align-items: center; display: flex; gap: .65rem; justify-content: center; margin-top: .65rem; }
 .movement-pagination button {
@@ -2603,7 +2624,7 @@ footer {
 
 .warning-copy { min-width: 0; }
 .warning-copy h3 {
-  color: #f4f7ff;
+  color: var(--accent-warn-head);
   font-size: 1.05rem;
   line-height: 1.3;
   margin: 0;
@@ -2632,7 +2653,7 @@ footer {
 }
 
 .warning-key-facts dd {
-  color: #f4f7ff;
+  color: var(--accent-warn-head);
   font-size: .9375rem;
   font-weight: 650;
   line-height: 1.35;
@@ -2641,7 +2662,7 @@ footer {
 }
 
 .warning-copy > p {
-  color: #c7d2e2;
+  color: var(--accent-table-dim);
   line-height: 1.55;
   margin: .75rem 0 0;
   overflow-wrap: anywhere;
@@ -2749,7 +2770,7 @@ footer {
 }
 
 .timeline-axis strong {
-  color: #dffeff;
+  color: var(--accent-ice);
   font-size: .75rem;
   letter-spacing: .04em;
   writing-mode: vertical-rl;
@@ -2792,8 +2813,8 @@ footer {
 .timeline-data-list th,
 .timeline-data-list td { border-top: 1px solid var(--line); padding: .65rem .85rem; text-align: left; }
 .timeline-data-list thead th { color: var(--green); font-size: .8125rem; }
-.timeline-data-list tbody th { color: #dffeff; }
-.timeline-data-list td { color: #c7d2e2; }
+.timeline-data-list tbody th { color: var(--accent-ice); }
+.timeline-data-list td { color: var(--accent-table-dim); }
 
 .place-context { box-shadow: 0 .8rem 2rem rgba(109, 151, 178, .035)}
 .place-observations dl > div,
@@ -2998,7 +3019,8 @@ footer {
   border-radius: .3rem;
   color: var(--ink);
   display: block;
-  font: 700 .875rem/1.2 ui-monospace, monospace;
+  /* 16px keeps iOS Safari from auto-zooming the viewport on focus. */
+  font: 700 1rem/1.2 ui-monospace, monospace;
   margin-top: .3rem;
   min-height: 44px;
   min-width: 0;
@@ -3183,7 +3205,7 @@ footer {
   background: #0b192d;
   border: 1px solid rgba(109, 151, 178, .3);
   border-radius: .3rem;
-  color: #dffeff;
+  color: var(--accent-ice);
   cursor: pointer;
   display: flex;
   font: 700 .75rem ui-monospace, monospace;
@@ -3214,7 +3236,7 @@ footer {
   grid-template-columns: auto auto minmax(0, 1fr);
 }
 .official-notices-compact-row h2 {
-  color: #dffeff;
+  color: var(--accent-ice);
   font: 700 .75rem/1.3 ui-monospace, monospace;
   letter-spacing: .02em;
   margin: 0;
@@ -3273,7 +3295,7 @@ footer {
 }
 .activity-context > summary {
   align-items: center;
-  color: #dffeff;
+  color: var(--accent-ice);
   cursor: pointer;
   display: flex;
   font: 700 .8125rem ui-monospace, monospace;
@@ -4007,7 +4029,7 @@ body {
 .official-notices-compact-row h2,
 .warning-strip > span,
 .warning-badge {
-  color: #f8edd4;
+  color: var(--accent-cream);
 }
 
 .official-notices .warning-strip {
@@ -4491,6 +4513,12 @@ html[data-theme="light"] {
   --warning-strong: #8b392a;
   --panel-soft: rgba(255, 255, 255, .7);
   --panel-softer: rgba(240, 247, 239, .8);
+  /* Accent text remapped for AA contrast on light surfaces. */
+  --accent-ice: #0b4a56;
+  --accent-gold: #6b4d0d;
+  --accent-warn-head: #223041;
+  --accent-table-dim: #3c4a5c;
+  --accent-cream: #5d4520;
   background: #edf2ea;
 }
 
@@ -4585,7 +4613,16 @@ html[data-theme="light"] :where(
   color: #173229;
 }
 
-html[data-theme="light"] :where(.section-nav a:hover, .section-nav a:focus-visible, .section-nav a.active, .map-presets button.active, .layer-list > button.active) {
+/* Deliberately not wrapped in :where(): the html[data-theme] attribute must
+   out-rank base hover/active rules that use translucent white overlays which
+   vanish on light surfaces. */
+html[data-theme="light"] .section-nav a:hover,
+html[data-theme="light"] .section-nav a:focus-visible,
+html[data-theme="light"] .section-nav a.active,
+html[data-theme="light"] .section-nav a[aria-current="location"],
+html[data-theme="light"] .map-presets button.active,
+html[data-theme="light"] .layer-list > button.active,
+html[data-theme="light"] .panel-presets button.active {
   background: #dce9dc;
   border-color: #62826a;
   color: #173229;
@@ -4631,6 +4668,17 @@ html[data-theme="light"] .map-navigation output {
 
 html[data-theme="light"] .panel-backdrop { background: rgba(29, 48, 41, .3); }
 html[data-theme="light"] .explore-panel { background: #fbfcf8; }
+
+/* Form controls keep dark navy surfaces in the dark theme only; light theme
+   gives them light surfaces so var(--ink) text stays readable. */
+html[data-theme="light"] .movement-browser-filters input,
+html[data-theme="light"] .movement-browser-filters select,
+html[data-theme="light"] .history-mode-toggle,
+html[data-theme="light"] .history-picker input {
+  background: #fff;
+  border-color: rgba(31, 73, 59, .3);
+  color: var(--ink);
+}
 
 html[data-theme="light"] a { text-decoration-color: rgba(49, 95, 73, .42); }
 
