@@ -218,7 +218,19 @@ export const findSolarDay = (days, dateOrTimestamp = Date.now()) => {
   return (Array.isArray(days) ? days : []).find((day) => day?.date === target) ?? null;
 };
 
+const SOLAR_DAY_CACHE_LIMIT = 8;
 const solarDayCache = new Map();
+
+const rememberSolarWindow = (cacheKey, result) => {
+  // One entry per requested Dublin-day window; evict oldest first so a
+  // long-lived isolate cannot grow the map without bound.
+  while (solarDayCache.size >= SOLAR_DAY_CACHE_LIMIT) {
+    const oldestKey = solarDayCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    solarDayCache.delete(oldestKey);
+  }
+  solarDayCache.set(cacheKey, result);
+};
 
 const addDublinDays = (date, days) => {
   const timestamp = Date.parse(`${date}T12:00:00Z`);
@@ -264,7 +276,7 @@ export const fetchSolarWindow = async ({ year, now = Date.now(), fetcher = fetch
     .sort((first, second) => first.date.localeCompare(second.date));
   if (!days.length) throw new Error("Sunrise-Sunset returned no valid solar days");
   const result = { year: requestedYear, days, fetchedAt: now, bodyBytes: bounded.bodyBytes, cached: false };
-  solarDayCache.set(cacheKey, result);
+  rememberSolarWindow(cacheKey, result);
   return result;
 };
 

@@ -57,9 +57,9 @@ const importDataStateAdapter = async () => {
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 
-const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
+const exerciseSatelliteContextCoalescing = async ({ sharedSucceeds }) => {
   const moduleUrl = new URL("../platform/server-entry.js", import.meta.url);
-  moduleUrl.searchParams.set("satellite-race", newerSucceeds ? "newer-success" : "newer-failure");
+  moduleUrl.searchParams.set("satellite-race", sharedSucceeds ? "newer-success" : "newer-failure");
   const api = await import(moduleUrl.href);
   const originalFetch = globalThis.fetch;
   const advertisedDate = new Date(Date.now() - 24 * 60 * 60_000).toISOString().slice(0, 10);
@@ -76,7 +76,7 @@ const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
     }
     if (url.includes("gibs.earthdata.nasa.gov") && url.endsWith(".jpeg")) {
       tileRequests += 1;
-      if (tileRequests <= 4) {
+      if (tileRequests <= 2) {
         return new Promise((resolve) => tileResolvers.push(resolve));
       }
       return new Response(null, { status: 503 });
@@ -90,6 +90,9 @@ const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
     }
     assert.equal(tileResolvers.length, count, `expected ${count} controlled satellite tile requests`);
   };
+  const settle = async () => {
+    for (let attempt = 0; attempt < 25; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
   const satelliteTile = () => new Response(null, {
     status: 200,
     headers: {
@@ -100,31 +103,30 @@ const exerciseSatelliteContextRace = async ({ newerSucceeds }) => {
   const failedTile = () => new Response(null, { status: 503 });
 
   try {
-    const olderResponse = api.default.fetch(
+    const firstResponse = api.default.fetch(
       new Request("https://day.illek.ie/api/contexts"),
       { EDGE_RUNTIME: "cloudflare" }
     );
     await waitForTileBatches(2);
-    const newerResponse = api.default.fetch(
+    // A second cold request arriving while discovery is in flight must
+    // share that refresh instead of duplicating its upstream probes.
+    const secondResponse = api.default.fetch(
       new Request("https://day.illek.ie/api/contexts"),
       { EDGE_RUNTIME: "cloudflare" }
     );
-    await waitForTileBatches(4);
+    await settle();
+    assert.equal(tileRequests, 2, "concurrent contexts must not duplicate satellite probes");
 
-    const newerResolvers = tileResolvers.slice(2, 4);
-    newerResolvers.forEach((resolve) => resolve(newerSucceeds ? satelliteTile() : failedTile()));
-    const newerBody = await (await newerResponse).json();
-
-    const olderResolvers = tileResolvers.slice(0, 2);
-    olderResolvers.forEach((resolve) => resolve(newerSucceeds ? failedTile() : satelliteTile()));
-    const olderBody = await (await olderResponse).json();
+    tileResolvers.forEach((resolve) => resolve(sharedSucceeds ? satelliteTile() : failedTile()));
+    const firstBody = await (await firstResponse).json();
+    const secondBody = await (await secondResponse).json();
     const tileRequestsBeforeThirdContext = tileRequests;
     const thirdBody = await (await api.default.fetch(
       new Request("https://day.illek.ie/api/contexts"),
       { EDGE_RUNTIME: "cloudflare" }
     )).json();
 
-    return { advertisedDate, newerBody, olderBody, thirdBody, tileRequests, tileRequestsBeforeThirdContext };
+    return { advertisedDate, firstBody, secondBody, thirdBody, tileRequests, tileRequestsBeforeThirdContext };
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -688,26 +690,24 @@ test("an older successful satellite context cannot overwrite a newer failed cach
   assert.equal(pending.length, 2, "the third context must retain the newer failed publication");
 });
 
-test("concurrent context endpoints retain a newer satellite success after the older request fails", async () => {
-  const result = await exerciseSatelliteContextRace({ newerSucceeds: true });
-  assert.equal(result.newerBody.contextStatus.satellite, "fallback");
-  assert.equal(result.newerBody.satellite?.observedAt?.slice(0, 10), result.advertisedDate);
-  assert.equal(result.olderBody.contextStatus.satellite, "unavailable");
-  assert.equal(result.olderBody.satellite, null);
+test("concurrent context endpoints share one satellite discovery and reuse its success", async () => {
+  const result = await exerciseSatelliteContextCoalescing({ sharedSucceeds: true });
+  assert.equal(result.firstBody.contextStatus.satellite, "fallback");
+  assert.equal(result.firstBody.satellite?.observedAt?.slice(0, 10), result.advertisedDate);
+  assert.deepEqual(result.secondBody.satellite, result.firstBody.satellite, "both requests receive the same shared discovery");
   assert.equal(result.thirdBody.contextStatus.satellite, "fallback");
-  assert.deepEqual(result.thirdBody.satellite, result.newerBody.satellite);
-  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must reuse the newer success without probing tiles");
+  assert.deepEqual(result.thirdBody.satellite, result.firstBody.satellite);
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must reuse the success without probing tiles");
 });
 
-test("concurrent context endpoints retain a newer satellite failure after the older request succeeds", async () => {
-  const result = await exerciseSatelliteContextRace({ newerSucceeds: false });
-  assert.equal(result.newerBody.contextStatus.satellite, "unavailable");
-  assert.equal(result.newerBody.satellite, null);
-  assert.equal(result.olderBody.contextStatus.satellite, "fallback");
-  assert.ok(result.olderBody.satellite);
+test("concurrent context endpoints share one satellite failure and retain it", async () => {
+  const result = await exerciseSatelliteContextCoalescing({ sharedSucceeds: false });
+  assert.equal(result.firstBody.contextStatus.satellite, "unavailable");
+  assert.equal(result.firstBody.satellite, null);
+  assert.deepEqual(result.secondBody.satellite, null);
   assert.equal(result.thirdBody.contextStatus.satellite, "unavailable");
   assert.equal(result.thirdBody.satellite, null);
-  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must retain the newer failure without probing tiles");
+  assert.equal(result.tileRequests, result.tileRequestsBeforeThirdContext, "third context must retain the failure without probing tiles");
 });
 
 test("satellite cache revalidates at UTC rollover and when the provider-advertised date advances", async () => {

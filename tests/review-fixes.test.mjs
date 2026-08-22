@@ -91,6 +91,91 @@ test("river bridge fallback stays disabled unless an HTTPS URL is configured", a
   assert.equal(configured.fallback, "Configured river bridge");
 });
 
+test("river bridge rejects malformed configured URLs without calling anything", async () => {
+  const { acquireRiverRaw } = await import("../platform/server-entry.js?living-status=bridge-malformed");
+  let called = 0;
+  const fetcher = async (url) => {
+    called += 1;
+    if (String(url).includes("waterlevel.ie")) return new Response("nope", { status: 502 });
+    return new Response("{}", { status: 200 });
+  };
+  for (const bad of ["https://", "not a url", "http://insecure.example", "https://user@evil.host/"]) {
+    await assert.rejects(
+      acquireRiverRaw({ RIVER_BRIDGE_URL: bad }, fetcher),
+      /OPW returned 502.*fallback unavailable/s,
+      `expected ${bad} to be rejected`
+    );
+  }
+  assert.equal(called, 4, "only the waterlevel.ie probe may run");
+});
+
+test("river bridge failures keep the contextual error shape", async () => {
+  const { acquireRiverRaw } = await import("../platform/server-entry.js?living-status=bridge-garbage");
+  const fetcher = async (url) => {
+    if (String(url).includes("waterlevel.ie")) return new Response("nope", { status: 503 });
+    return new Response("<html>gateway noise</html>", { status: 200 });
+  };
+  await assert.rejects(
+    acquireRiverRaw({ RIVER_BRIDGE_URL: "https://bridge.example/api/living" }, fetcher),
+    /OPW returned 503.*fallback unavailable.*opw-bridge/s
+  );
+});
+
+test("alternate adapter transit response mirrors production tiers", async () => {
+  const { default: worker } = await import("../platform/server-entry.js?living-status=transit-tiers");
+  const coordinatorPayload = (status) => new Response(JSON.stringify({
+    generatedAt: "2026-08-22T12:00:00.000Z",
+    transit: [{ id: "v1", latitude: 53.3, longitude: -6.2, observedAt: "2026-08-22T11:59:00.000Z" }],
+    transitStatus: status
+  }), { status: 200 });
+  const env = {
+    NTA_API_KEY: "test-key",
+    NTA_FEED: { getByName: () => ({ fetch: async () => coordinatorPayload("stale") }) }
+  };
+  const staleResponse = await worker.fetch(new Request("https://day.illek.ie/api/transit"), env);
+  const stalePayload = await staleResponse.json();
+  assert.equal(stalePayload.transitStatus, "stale");
+  assert.deepEqual(stalePayload.transit, [], "degraded responses must not carry vehicle positions");
+  assert.match(staleResponse.headers.get("cache-control"), /no-store/);
+
+  const liveEnv = {
+    NTA_API_KEY: "test-key",
+    NTA_FEED: { getByName: () => ({ fetch: async () => coordinatorPayload("live") }) }
+  };
+  const liveResponse = await worker.fetch(new Request("https://day.illek.ie/api/transit"), liveEnv);
+  const livePayload = await liveResponse.json();
+  assert.equal(livePayload.transitStatus, "live");
+  assert.equal(livePayload.transit.length, 1);
+  assert.match(liveResponse.headers.get("cache-control"), /max-age=15, s-maxage=60/);
+});
+
+test("production living response carries CORS and cache headers", async () => {
+  const { default: worker } = await import("../platform/cloudflare-entry.js?probe-cors");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("api.irishrail.ie")) return new Response(trainXml, { status: 200 });
+    throw new Error(`unexpected fetch target ${url}`);
+  };
+  const riverCoordinator = {
+    fetch: async () => new Response(JSON.stringify({
+      rivers: [{ id: "r1", latitude: 53, longitude: -8, level: 1, observedAt: new Date().toISOString() }],
+      status: "live",
+      provenance: { provider: "OPW waterlevel.ie", endpoint: "https://waterlevel.ie/geojson/latest/", status: "live", fetchedAt: new Date().toISOString(), latestObservedAt: new Date().toISOString(), fallback: null }
+    }), { status: 200 })
+  };
+  try {
+    const response = await worker.fetch(
+      new Request("https://day.illek.ie/api/living"),
+      { RIVER_FEED: { getByName: () => riverCoordinator } }
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), "*");
+    assert.match(response.headers.get("cache-control"), /max-age=15/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("transit context prefers the NTA coordinator when the binding is wired", async () => {
   const { default: worker } = await import("../platform/server-entry.js?living-status=transit");
   let directUpstreamCalls = 0;

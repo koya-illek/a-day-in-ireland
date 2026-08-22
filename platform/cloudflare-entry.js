@@ -7,22 +7,33 @@ export { addEstimatedSpeeds } from "./live-normalize.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
+// Same CORS posture as the health/history endpoints: public data, no
+// credentials, so every API tier answers cross-origin requests.
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, HEAD, OPTIONS",
+  "access-control-allow-headers": "content-type"
+};
 const responseHeaders = {
+  ...CORS_HEADERS,
   "content-type": "application/json; charset=utf-8",
   "cache-control": "public, max-age=15, s-maxage=15",
   "x-robots-tag": "noindex, nofollow"
 };
 const partialHeaders = {
+  ...CORS_HEADERS,
   "content-type": "application/json; charset=utf-8",
   "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=0",
   "x-robots-tag": "noindex, nofollow"
 };
 const transitLiveHeaders = {
+  ...CORS_HEADERS,
   "content-type": "application/json; charset=utf-8",
   "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0",
   "x-robots-tag": "noindex, nofollow"
 };
 const transitUnavailableHeaders = {
+  ...CORS_HEADERS,
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
   "x-robots-tag": "noindex, nofollow"

@@ -195,24 +195,42 @@ export const acquireRiverRaw = async (env, fetcher = fetch) => {
     catch (browserError) { throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`); }
   }
   // The hosted river bridge is an operator-configured fallback for the
-  // non-Cloudflare adapter only. It stays disabled unless an HTTPS bridge URL
-  // is explicitly provided, so no third-party host is embedded in source.
-  const bridgeUrl = typeof env?.RIVER_BRIDGE_URL === "string" && env.RIVER_BRIDGE_URL.startsWith("https://")
-    ? env.RIVER_BRIDGE_URL
-    : null;
-  if (!bridgeUrl) throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
-  const bridge = await fetcher(bridgeUrl, {
-    cf: { cacheEverything: true, cacheTtl: 900 }
-  });
-  if (bridge.ok) {
-    const bounded = await readBoundedJsonResponse(bridge, "opw-bridge", COORDINATOR_RAW_BODY_LIMIT);
-    if (Array.isArray(bounded.body?.rivers)) return {
-      body: { normalizedRivers: bounded.body.rivers.slice(0, 1200) }, bodyBytes: bounded.bodyBytes,
-      sourceFeatureCount: bounded.body.rivers.length, truncated: bounded.body.rivers.length > 1200,
-      fetchedAt, status: bounded.body.rivers.length > 1200 ? "partial" : "fallback", fallback: "Configured river bridge"
-    };
+  // non-Cloudflare adapter only. It stays disabled unless a valid HTTPS
+  // bridge URL is explicitly provided, so no third-party host is embedded
+  // in source, and every failure keeps the same diagnosable message shape.
+  let bridgeUrl = null;
+  if (typeof env?.RIVER_BRIDGE_URL === "string") {
+    try {
+      const parsed = new URL(env.RIVER_BRIDGE_URL);
+      // Userinfo in a configured fetch target is always a mistake here; the
+      // plain fetcher would never use such credentials.
+      if (parsed.protocol === "https:" && parsed.hostname && !parsed.username && !parsed.password) {
+        bridgeUrl = parsed.toString();
+      }
+    } catch {
+      bridgeUrl = null;
+    }
   }
-  throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
+  const fallbackUnavailable = () => new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable`);
+  if (!bridgeUrl) throw fallbackUnavailable();
+  try {
+    const bridge = await fetcher(bridgeUrl, {
+      cf: { cacheEverything: true, cacheTtl: 900 }
+    });
+    if (bridge.ok) {
+      const bounded = await readBoundedJsonResponse(bridge, "opw-bridge", COORDINATOR_RAW_BODY_LIMIT);
+      if (Array.isArray(bounded.body?.rivers)) return {
+        body: { normalizedRivers: bounded.body.rivers.slice(0, 1200) }, bodyBytes: bounded.bodyBytes,
+        sourceFeatureCount: bounded.body.rivers.length, truncated: bounded.body.rivers.length > 1200,
+        fetchedAt, status: bounded.body.rivers.length > 1200 ? "partial" : "fallback", fallback: "Configured river bridge"
+      };
+      throw new Error("configured river bridge returned no rivers array");
+    }
+    throw new Error(`configured river bridge returned ${bridge.status}`);
+  } catch (bridgeError) {
+    const cause = String(bridgeError?.message ?? bridgeError).slice(0, 240);
+    throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable (${cause})`);
+  }
 };
 
 export const normalizeRiverRaw = (raw, captureNow = Date.now()) => {
@@ -775,7 +793,9 @@ export const CONTEXT_SOURCE_POLICIES = Object.freeze({
   aurora: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
   tides: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
   bathingAlerts: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
-  satellite: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000, shareInFlight: false },
+  // Satellite discovery costs up to 8 subrequests per miss, so concurrent
+  // cold contexts must share one in-flight refresh like every other source.
+  satellite: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
   earthquakes: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
   issTle: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
   warnings: { ttlMs: 5 * 60_000, jitterMs: 30_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
@@ -1016,11 +1036,28 @@ const transitContext = async (env) => {
       vehicles = result.vehicles;
       status = result.status;
     }
-    return json({
+    // Mirror production /api/transit: only usable statuses carry vehicles,
+    // and each tier keeps its production cache posture so NTA flaps do not
+    // turn every client poll into an origin execution.
+    const usable = status === "live" || status === "partial";
+    const cacheControl = status === "live"
+      ? "public, max-age=15, s-maxage=60, stale-while-revalidate=0"
+      : usable
+        ? "public, max-age=15, s-maxage=15, stale-while-revalidate=0"
+        : "no-store";
+    return new Response(JSON.stringify({
       generatedAt: new Date().toISOString(),
-      transit: vehicles,
+      transit: usable ? vehicles : [],
       transitStatus: status
-    }, 200, status === "live" ? 15 : 0, 0);
+    }), {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": cacheControl,
+        "access-control-allow-origin": "*",
+        "x-robots-tag": "noindex, nofollow"
+      }
+    });
   } catch (error) {
     console.error("NTA transit refresh failed", error);
     return json({
