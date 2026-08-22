@@ -149,6 +149,7 @@ button { color: inherit; }
   display: flex;
   font-size: .72rem}
 .live-state time { border-left: 1px solid var(--line); margin-left: .2rem; padding-left: .6rem}
+.live-state-summary { align-items: center; display: flex; gap: .45rem; }
 .live-dot { background: #ddad67; border-radius: 50%; box-shadow: 0 0 0 4px rgba(221, 173, 103, .1); height: .42rem; width: .42rem; }
 .live-dot.live { animation: pulse 2.2s infinite; background: #8fcf97; box-shadow: 0 0 0 4px rgba(143, 207, 151, .1); }
 .header-actions { display: flex; gap: .55rem; justify-self: end; }
@@ -712,7 +713,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   justify-content: space-between;
   max-width: 92rem}
 .workspace-heading .utility-label { color: var(--green); margin-bottom: .35rem; }
-.workspace-heading h1 {
+.workspace-heading h1, .workspace-heading h2 {
   font-family: "DM Sans", sans-serif}
 .workspace-heading > div > p:last-child { color: var(--muted); font-size: .72rem; margin: .55rem 0 0; max-width: 42rem; }
 .moment-summary { display: none; }
@@ -1384,7 +1385,7 @@ footer {
   .panel-button { padding: .58rem .7rem; }
   .map-workspace { padding: .7rem; }
   .workspace-heading { margin-bottom: .65rem; }
-  .workspace-heading h1 { font-size: 1.45rem; }
+  .workspace-heading h1, .workspace-heading h2 { font-size: 1.45rem; }
   .workspace-heading > div > p:last-child { display: none; }
   .moment-summary { color: var(--muted); display: block; font-size: .75rem; margin: .35rem 0 0; }
   .map-stage { aspect-ratio: 10 / 9; height: auto; min-height: 0; }
@@ -3065,6 +3066,17 @@ footer {
 .history-result p { margin: 0; }
 .history-result p + p { margin-top: .35rem; }
 .history-result a { color: #8feaff; }
+.history-retry {
+  background: transparent;
+  border: 1px solid #f1c76f;
+  border-radius: .3rem;
+  color: #ffe6a6;
+  cursor: pointer;
+  font-size: .875rem;
+  margin-top: .5rem;
+  min-height: 44px;
+  padding: .45rem .9rem;
+}
 .history-error { font-size: .875rem; line-height: 1.45; margin: .6rem 0 0; }
 .history-compare-actions { align-items: flex-start; margin-top: .7rem; }
 .history-compare-actions small { max-width: 42rem; }
@@ -3431,7 +3443,7 @@ body {
 
 .brand b,
 .hero-sentence,
-.workspace-heading h1,
+.workspace-heading h1, .workspace-heading h2,
 .what-matters-heading h2,
 .pulse-intro h2,
 .pulse-card strong,
@@ -3662,7 +3674,7 @@ body {
   min-width: 0;
 }
 
-.workspace-heading h1 {
+.workspace-heading h1, .workspace-heading h2 {
   font-size: clamp(1.3rem, 2.4vw, 1.85rem);
   font-weight: 400;
   letter-spacing: -.04em;
@@ -3802,7 +3814,7 @@ body {
   margin-bottom: .4rem;
 }
 
-.map-explorer-heading h2 {
+.map-explorer-heading h1 {
   font-size: clamp(1.05rem, 1.6vw, 1.35rem);
   font-weight: 500;
   letter-spacing: -.03em;
@@ -4258,7 +4270,7 @@ body {
     padding: 1rem 1.1rem;
   }
 
-  .workspace-heading h1 {
+  .workspace-heading h1, .workspace-heading h2 {
     font-size: clamp(1.45rem, 5vw, 1.85rem);
   }
 
@@ -4309,7 +4321,7 @@ body {
     border-radius: 1.45rem;
   }
 
-  .workspace-heading h1 {
+  .workspace-heading h1, .workspace-heading h2 {
     font-size: clamp(1.4rem, 6vw, 1.75rem);
     max-width: none;
   }
@@ -4450,7 +4462,7 @@ body {
     min-height: clamp(300px, 72vw, 360px);
   }
 
-  .map-explorer-heading h2 {
+  .map-explorer-heading h1 {
     font-size: clamp(1rem, 6vw, 1.5rem);
     line-height: 1.1;
   }

@@ -1312,7 +1312,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const radarFrames = timeMode !== "past" && online && !radarHistoryGap && snapshot.contextStatus.radar === "live" ? snapshot.radar : [];
   const radarFrame = radarFrames[Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))] ?? null;
   const radarFrameKey = radarFrame ? `${radarFrame.id}:${radarFrame.modifiedTime}` : null;
-  activeRadarFrameKeyRef.current = radarLayerActive ? radarFrameKey : null;
+  useEffect(() => {
+    activeRadarFrameKeyRef.current = radarLayerActive ? radarFrameKey : null;
+  }, [radarFrameKey, radarLayerActive]);
   const reportRadarTileStatus = useCallback<RadarTileStatusReporter>((frameKey, tileKey, status) => {
     if (frameKey !== activeRadarFrameKeyRef.current) return;
     setRadarTileState((current) => {
@@ -1359,6 +1361,25 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     }, 850);
     return () => window.clearInterval(animation);
   }, [prefersReducedMotion, radarFrames.length, radarLayerActive, radarPlaying, radarPresentationState]);
+  // Announce coarse radar transitions only; the visible notice updates per
+  // tile event and would otherwise re-read long sentences dozens of times.
+  const [radarAnnouncement, setRadarAnnouncement] = useState("");
+  const previousRadarPresentationRef = useRef<RadarPresentationState | null>(null);
+  useEffect(() => {
+    const previous = previousRadarPresentationRef.current;
+    previousRadarPresentationRef.current = radarPresentationState;
+    if (!radarLayerActive || previous === radarPresentationState) return;
+    const message = radarPresentationState === "loading"
+      ? "Loading rainfall radar tiles."
+      : radarPresentationState === "partial"
+        ? `Partial rainfall radar: ${radarReadyCount} of ${radarTileCount} Ireland tiles loaded.`
+        : radarPresentationState === "live"
+          ? "Rainfall radar fully loaded."
+          : radarPresentationState === "unavailable"
+            ? "Rainfall radar unavailable."
+            : "";
+    setRadarAnnouncement(message);
+  }, [radarLayerActive, radarPresentationState, radarReadyCount, radarTileCount]);
   const trainsLive = online && snapshot.sourceProvenance?.trains.status === "live";
   const trainsCached = snapshot.sourceProvenance?.trains.status === "stale" || (!online && snapshot.sourceProvenance?.trains.status === "live" && snapshot.trains.length > 0);
   const riversLive = online && snapshot.sourceProvenance?.rivers.status === "live";
@@ -1790,29 +1811,35 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   useEffect(() => {
     if (!viewHydrated) return;
     if (!ephemeralPlace) storePlace(selectedPlaceId);
-    const serialized = new URL(serializeViewState(window.location.href, {
-      placeId: ephemeralPlace ? DEFAULT_PLACE_ID : selectedPlaceId,
-      view: activePreset,
-      layers,
-      zoom: mapView.scale,
-      panX: mapView.x,
-      panY: mapView.y,
-      at: timeMode === "past"
-        ? historyState.envelope?.resolvedAt ?? historyState.requestedAt
-        : null
-    }));
-    if (mapView.scale > 1) {
-      const centerX = (500 - mapView.x) / mapView.scale;
-      const centerY = (450 - mapView.y) / mapView.scale;
-      const invert = projection.invert;
-      if (invert) {
-        const geo = invert([centerX, centerY]);
-        if (geo) {
-          serialized.hash = `lat=${geo[1].toFixed(4)}&lng=${geo[0].toFixed(4)}&zoom=${mapView.scale.toFixed(2)}`;
+    // Trailing-debounce the URL sync: pan gestures set mapView many times a
+    // second and each replaceState costs a serialization plus history entry
+    // churn. The cleanup flushes the final state when inputs settle.
+    const timeout = window.setTimeout(() => {
+      const serialized = new URL(serializeViewState(window.location.href, {
+        placeId: ephemeralPlace ? DEFAULT_PLACE_ID : selectedPlaceId,
+        view: activePreset,
+        layers,
+        zoom: mapView.scale,
+        panX: mapView.x,
+        panY: mapView.y,
+        at: timeMode === "past"
+          ? historyState.envelope?.resolvedAt ?? historyState.requestedAt
+          : null
+      }));
+      if (mapView.scale > 1) {
+        const centerX = (500 - mapView.x) / mapView.scale;
+        const centerY = (450 - mapView.y) / mapView.scale;
+        const invert = projection.invert;
+        if (invert) {
+          const geo = invert([centerX, centerY]);
+          if (geo) {
+            serialized.hash = `lat=${geo[1].toFixed(4)}&lng=${geo[0].toFixed(4)}&zoom=${mapView.scale.toFixed(2)}`;
+          }
         }
       }
-    }
-    window.history.replaceState(null, "", `${serialized.pathname}${serialized.search}${serialized.hash}`);
+      window.history.replaceState(null, "", `${serialized.pathname}${serialized.search}${serialized.hash}`);
+    }, 150);
+    return () => window.clearTimeout(timeout);
   }, [activePreset, ephemeralPlace, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, projection, selectedPlaceId, timeMode, viewHydrated]);
 
   const focusContext = useCallback((focus: ContextFocus) => {
@@ -2059,6 +2086,17 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     });
   }, [prefersReducedMotion]);
 
+  const shareResetTimeoutRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (shareResetTimeoutRef.current !== null) window.clearTimeout(shareResetTimeoutRef.current);
+  }, []);
+  const scheduleShareReset = useCallback(() => {
+    if (shareResetTimeoutRef.current !== null) window.clearTimeout(shareResetTimeoutRef.current);
+    shareResetTimeoutRef.current = window.setTimeout(() => {
+      shareResetTimeoutRef.current = null;
+      setShareStatus("idle");
+    }, 1800);
+  }, []);
   const shareExperience = useCallback(async () => {
     const shareablePlaceId = selectedPlaceIsEphemeral ? DEFAULT_PLACE_ID : selectedPlace.id;
     const url = serializeViewState(window.location.href, {
@@ -2088,18 +2126,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }
       await navigator.clipboard.writeText(shareData.url);
       setShareStatus("copied");
-      window.setTimeout(() => setShareStatus("idle"), 1800);
+      scheduleShareReset();
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       try {
         await navigator.clipboard.writeText(shareData.url);
         setShareStatus("copied");
-        window.setTimeout(() => setShareStatus("idle"), 1800);
+        scheduleShareReset();
       } catch {
         window.prompt("Copy this link", shareData.url);
       }
     }
-  }, [activePreset, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
+  }, [activePreset, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, scheduleShareReset, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
 
   useLayoutEffect(() => {
     let storedTheme: string | null = null;
@@ -2142,26 +2180,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               <path className="brand-horizon" d="M5 18h22M8 22h16" />
             </svg>
           </span>
-          <span><b>A Day in Ireland</b><small>{timeMode === "past" ? "Historical island view" : "Live island view"}</small></span>
+          <span><b>A Day in Ireland</b><small>{timeMode === "past"
+            ? "Historical island view"
+            : serviceDisplayState === "offline" || serviceDisplayState === "cached" || serviceDisplayState === "stale"
+              ? "Saved island view"
+              : serviceDisplayState === "unavailable"
+                ? "Island view"
+                : "Live island view"}</small></span>
         </Link>
         <div
           className="live-state"
           data-connection-status={connectionStatus}
           data-service-state={serviceDisplayState}
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
           title={timeMode === "past"
             ? `${connectionLabel}. Stored record ${lastSuccessLabel}.`
             : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. Checked ${formatTime(lastCheckedAt)}.`}
         >
-          <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} aria-hidden="true" />
-          <span className="network-state">{connectionLabel}</span>
-          <span>{timeMode === "past"
-            ? historyState.status === "ready"
-              ? isDailyHistorySummary ? "Stored daily summary" : "Stored observations"
-              : historyState.status === "loading" ? "Loading history" : "History unavailable"
-            : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
+          {/* Only the state words are a live region; the volatile clock text
+              below would re-read the whole strip every refresh otherwise. */}
+          <span role="status" aria-live="polite" aria-atomic="true" className="live-state-summary">
+            <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} aria-hidden="true" />
+            <span className="network-state">{connectionLabel}</span>
+            <span>{timeMode === "past"
+              ? historyState.status === "ready"
+                ? isDailyHistorySummary ? "Stored daily summary" : "Stored observations"
+                : historyState.status === "loading" ? "Loading history" : "History unavailable"
+              : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
+          </span>
           <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
@@ -2232,7 +2277,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="map-explorer-heading">
           <div>
             <p className="utility-label">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
-            <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
+            <h1>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h1>
             <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
           </div>
         </div>
@@ -2285,13 +2330,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           </aside>
         )}
         {displayedMapNotice && (
-          <aside className="map-notice" data-radar-availability={displayedMapNotice.focus === "radar" ? radarPresentationState : undefined} aria-live="polite">
+          <aside className="map-notice" data-radar-availability={displayedMapNotice.focus === "radar" ? radarPresentationState : undefined}>
             <span>Focused view</span>
             <button onClick={() => setMapNotice(null)} aria-label="Dismiss map context">×</button>
             <strong>{displayedMapNotice.title}</strong>
             <p>{displayedMapNotice.detail}</p>
           </aside>
         )}
+        <p id="radar-availability-announcement" className="sr-only" role="status" aria-live="polite">{radarAnnouncement}</p>
         <div id="map-keyboard-instructions" className="sr-only">
           Use Left and Right or Up and Down to move between map markers. Home and End move to the first or last marker. Press Enter or Space to open marker details.
         </div>
@@ -2315,9 +2361,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onZoomOut={() => zoomMapAround(1 / 1.4)}
           onReset={() => setMapView({ scale: 1, x: 0, y: 0 })}
         >
-            <path className="day-arc" d="M120 145 Q500 -65 880 145" />
-            <circle cx={sunX} cy={sunY} r="82" fill="url(#sunGlow)" className="sun-glow" />
-            <circle cx={sunX} cy={sunY} r="7" className="sun-core" />
+            <g className="day-sky" aria-hidden="true">
+              <path className="day-arc" d="M120 145 Q500 -65 880 145" />
+              <circle cx={sunX} cy={sunY} r="82" fill="url(#sunGlow)" className="sun-glow" />
+              <circle cx={sunX} cy={sunY} r="7" className="sun-core" />
+            </g>
             {online && layers.has("aurora") && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") && snapshot.aurora && (
               <path
                 className="aurora-curtain"
@@ -2343,12 +2391,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 onTileStatus={reportRadarTileStatus}
               />
             )}
-            <g className="road-network" role="img" aria-label="Major roads from OpenStreetMap">
+            <g className="road-network" aria-hidden="true">
               {roadPaths.map((road, index) => (
                 <path key={`${road.ref}-${index}`} d={road.path} className={road.roadClass} />
               ))}
             </g>
-            <rect className="night-shade" x={isNight ? 0 : Math.max(0, sunX - 700)} width={isNight ? 1000 : 460} height="900" />
+            <rect className="night-shade" x={isNight ? 0 : Math.max(0, sunX - 700)} width={isNight ? 1000 : 460} height="900" aria-hidden="true" />
             {online && layers.has("wind") && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && (
               <g className="wind-field" aria-hidden="true">
                 {Array.from({ length: 12 }, (_, index) => (

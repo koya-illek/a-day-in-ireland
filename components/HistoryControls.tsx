@@ -189,7 +189,16 @@ export function HistoryControls({
 
           <div className={`history-result ${history.status}`} role="status" aria-live="polite" aria-atomic="true">
             {history.status === "loading" && <p>Loading the stored snapshot for {history.requestedAt ? formatIrelandHistoryTime(history.requestedAt) : "the selected time"}…</p>}
-            {history.status === "error" && <p>Historical conditions could not be loaded. {history.error}</p>}
+            {history.status === "error" && (
+              <>
+                <p>Historical conditions could not be loaded. {history.error}</p>
+                {history.requestedAt && (
+                  <button type="button" className="history-retry" onClick={() => onRequest(history.requestedAt!)}>
+                    Try again
+                  </button>
+                )}
+              </>
+            )}
             {history.status === "gap" && <p>No stored snapshot exists at or before that time within the available resolution. Missing history remains missing.</p>}
             {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes < 1440 && (
               <p><b>Showing {formatIrelandHistoryTime(history.envelope.resolvedAt)}</b> · {historyResolutionLabel(history.envelope.resolutionMinutes)}{history.envelope.requestedAt !== history.envelope.resolvedAt ? ` · nearest stored record at or before ${formatIrelandHistoryTime(history.envelope.requestedAt)}` : ""}.</p>

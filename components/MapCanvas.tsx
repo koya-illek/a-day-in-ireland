@@ -54,7 +54,6 @@ export function MapCanvas({
         viewBox="0 0 1000 900"
         role="group"
         aria-labelledby="map-title map-description"
-        aria-describedby="map-keyboard-instructions map-marker-announcement"
         onClickCapture={onClickCapture}
         onClick={onClick}
         onPointerDown={onPointerDown}
@@ -120,7 +119,7 @@ export function MapCanvas({
         >
           Reset
         </button>
-        <output aria-live="polite" aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
+        <output aria-label="Current map zoom">{Math.round(mapView.scale * 100)}%</output>
       </nav>
     </div>
   );

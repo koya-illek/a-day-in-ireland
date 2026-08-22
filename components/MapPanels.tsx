@@ -123,7 +123,6 @@ export function DetailCard({
     <aside
       ref={dialogRef}
       className={`station-card detail-${type} ${stack ? "has-movement-browser" : ""}`}
-      aria-live="polite"
       aria-modal="true"
       aria-labelledby="map-detail-title"
       role="dialog"

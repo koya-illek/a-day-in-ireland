@@ -60,15 +60,16 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
 
   const handleMapPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
     mapDidPanRef.current = false;
-    const startedOnMarker = Boolean((event.target as Element).closest("[data-marker-pointer-target]"));
     const point = mapPointFromClient(event.clientX, event.clientY);
     mapPointersRef.current.set(event.pointerId, point);
-    if (!startedOnMarker) {
-      try {
-        event.currentTarget.setPointerCapture(event.pointerId);
-      } catch {
-        // Synthetic accessibility tests do not create an active browser pointer.
-      }
+    // Capture on the SVG root even when the gesture starts on a marker:
+    // without it, releasing outside the SVG leaks the pointer id and keeps
+    // panning. Capture retargets pointer events, not the derived click, so
+    // marker activation still works and suppressClickAfterPan guards pans.
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic accessibility tests do not create an active browser pointer.
     }
     mapGestureRef.current = mapGesture();
     mapPointerOriginRef.current = point;
