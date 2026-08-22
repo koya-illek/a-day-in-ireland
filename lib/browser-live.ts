@@ -1,8 +1,7 @@
 import type { LiveSnapshot, StationReading, WeatherWarning } from "./types";
 import {
   parseEirGridLocalTimestamp,
-  parseIrelandLocalTimestamp,
-  parseLatestObservations
+  parseIrelandLocalTimestamp
 } from "./latest-observations";
 import {
   normalizeOfficialWeatherWarnings,
@@ -47,17 +46,29 @@ const loadTransitDestinations = () => {
         const response = await fetch(assetPath, { cache: "force-cache" });
         return response.ok ? response.json() as Promise<Record<string, string>> : {};
       })
-      .catch(() => ({}));
+      .catch((error) => {
+        // Clear the memo so a later enrichment tick can retry instead of
+        // caching this failure for the rest of the page.
+        transitDestinationsPromise = null;
+        throw error;
+      });
   }
   return transitDestinationsPromise;
 };
 
 export async function enrichTransitDestinations<T extends { tripId?: string; destination?: string }>(vehicles: T[]): Promise<T[]> {
   if (!vehicles.some((vehicle) => vehicle.tripId && !vehicle.destination)) return vehicles;
-  const destinations = await loadTransitDestinations();
+  let destinations: Record<string, string> = {};
+  try {
+    destinations = await loadTransitDestinations();
+  } catch {
+    destinations = {};
+  }
   return vehicles.map((vehicle) => ({
     ...vehicle,
-    destination: vehicle.tripId ? destinations[vehicle.tripId] ?? vehicle.destination : vehicle.destination
+    destination: vehicle.tripId && Object.hasOwn(destinations, vehicle.tripId)
+      ? destinations[vehicle.tripId]
+      : vehicle.destination
   }));
 }
 
@@ -93,6 +104,7 @@ type ProviderRequest = {
 
 const activeProviderRequests = new Map<ProviderName, ProviderRequest>();
 const lastProviderResults = new Map<ProviderName, LiveSnapshot>();
+let nextProviderGeneration = 0;
 
 const beginProviderRequest = (provider: ProviderName, previous: LiveSnapshot): ProviderRequest => {
   const prior = activeProviderRequests.get(provider);
@@ -102,12 +114,15 @@ const beginProviderRequest = (provider: ProviderName, previous: LiveSnapshot): P
     resolveDone = resolve;
   });
   const controller = new AbortController();
+  // A module-scoped counter keeps generations unique even after a completed
+  // request removes its tracking entry; reused numbers could let a slow
+  // superseded request pass isCurrent() against the newer one.
   const request: ProviderRequest = {
     provider,
     previous,
     controller,
     signal: controller.signal,
-    generation: (prior?.generation ?? 0) + 1,
+    generation: ++nextProviderGeneration,
     done,
     isCurrent: () => activeProviderRequests.get(provider)?.generation === request.generation,
     complete: (result: LiveSnapshot | undefined) => {
@@ -208,24 +223,38 @@ const fetchWithRetry = async (url: string, timeoutMs: number, signal: AbortSigna
 };
 
 const timestamp = parseIrelandLocalTimestamp;
+const hasExplicitTimeZone = (text: string) => /(?:z|[+-]\d{2}:?\d{2})$/i.test(text);
 const normalizeGridTimestamp = (value: unknown): string | null => {
   const text = String(value ?? "").trim();
   if (!text) return null;
   const local = parseEirGridLocalTimestamp(text);
   if (local) return local;
-  const parsed = Date.parse(text);
+  // Only strings carrying their own zone offset are unambiguous; anything
+  // else would be interpreted in the viewer's timezone and mislabel the data.
+  const parsed = hasExplicitTimeZone(text) ? Date.parse(text) : Number.NaN;
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 };
 
 export const normalizeBrowserWarnings = (rows: unknown[], now = Date.now()): WeatherWarning[] =>
   normalizeOfficialWeatherWarnings(rows, now);
 
+const BATHING_ALERT_MAXIMUM_WITHOUT_END_MS = 48 * 60 * 60 * 1000;
+
 const normalizeBrowserBathingAlerts = (rows: unknown[], now = Date.now()): LiveSnapshot["bathingAlerts"] => rows.flatMap((item) => {
   if (!item || typeof item !== "object") return [];
   const alert = item as Record<string, unknown>;
+  // Rows without an identity cannot merge or dedupe downstream, and rows
+  // without an update time cannot age honestly.
+  if (typeof alert.id !== "string" || !alert.id.trim()) return [];
+  if (typeof alert.updatedAt !== "string" || !Number.isFinite(Date.parse(alert.updatedAt))) return [];
   const startedAt = Date.parse(String(alert.startedAt ?? ""));
   const endsAt = Date.parse(String(alert.endsAt ?? ""));
-  return Number.isFinite(startedAt) && startedAt <= now && (!Number.isFinite(endsAt) || endsAt > now)
+  // The server derives ends from the provider's expected duration; this
+  // browser-side bound only stops a malformed end-less row living forever.
+  const expiresAt = Number.isFinite(endsAt)
+    ? endsAt
+    : startedAt + BATHING_ALERT_MAXIMUM_WITHOUT_END_MS;
+  return Number.isFinite(startedAt) && startedAt <= now && expiresAt > now
     ? [item as LiveSnapshot["bathingAlerts"][number]]
     : [];
 });
@@ -363,34 +392,10 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
       })
     );
     const valid = results.filter((result): result is NonNullable<typeof result> => result !== null);
-    let fallbackStations: StationReading[] = [];
-    if (valid.length < WEATHER_STATIONS.length) {
-      try {
-        const response = await fetchWithTimeout(
-          "https://www.met.ie/latest-reports/observations/download",
-          { cache: "no-store" },
-          7_000,
-          request.signal
-        );
-        if (response.ok) {
-          fallbackStations = parseLatestObservations(
-            await response.text(),
-            WEATHER_STATIONS,
-            null,
-            captureNow
-          );
-        }
-      } catch {
-        // The fallback has no source timestamp, so it cannot keep old data live.
-      }
-    }
-    if (!valid.length && !fallbackStations.length) return retainLastGoodWeather(previous);
-    const validIds = new Set(valid.map((result) => result.reading.id));
-    const stationCandidates = [
-      ...valid.map((result) => result.reading),
-      ...fallbackStations.filter((station) => !validIds.has(station.id))
-    ];
-    const stations = stationCandidates.filter((station) => station.fresh);
+    // No CSV fallback here: met.ie's bulk download carries no per-reading
+    // timestamp, so its rows could never pass freshness honestly.
+    if (!valid.length) return retainLastGoodWeather(previous);
+    const stations = valid.map((result) => result.reading);
     const fresh = stations;
     if (!fresh.length) return retainLastGoodWeather(previous);
     const top = (field: "temperature" | "rainfall" | "windSpeed") =>
@@ -555,11 +560,17 @@ export async function refreshLivingLayers(previous: LiveSnapshot): Promise<LiveS
     if (!Array.isArray(next.trains) || !Array.isArray(next.rivers)) throw new Error("Live layers response is incomplete");
     const retained = retainLastGoodLiving(previous);
     const trainsLive = next.sourceStatus?.trains !== "unavailable" && next.trains.length > 0;
+    // Same freshness gate the transit path applies: an upstream regression
+    // serving old positions must not render as current.
     const incomingTrains = trainsLive
-      ? addCalculatedSpeeds(next.trains, previous.trains, {
-          maximumKmh: 200,
-          maximumIntervalMinutes: 15
-        })
+      ? addCalculatedSpeeds(
+          next.trains.filter((train) => isRecent(train.observedAt, 30 * 60_000)),
+          previous.trains,
+          {
+            maximumKmh: 200,
+            maximumIntervalMinutes: 15
+          }
+        )
       : [];
     const trains = incomingTrains.length ? incomingTrains : retained.trains;
     const riversStatus = next.sourceStatus?.rivers;
@@ -673,12 +684,13 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       : normalizeBrowserBathingAlerts(next.bathingAlerts, now);
     const incomingGrid = next.grid && typeof next.grid === "object"
       ? { ...next.grid, observedAt: normalizeGridTimestamp(next.grid.observedAt) }
-      : null;
-    const incomingSolar = acceptClientSolar(next.solar, now);
+      : null;    const incomingSolar = acceptClientSolar(next.solar, now);
     const incomingForecast = acceptClientForecast(next.forecast, now);
     const marineStatus = statusFor("marine", Array.isArray(next.marine));
     const radarStatus = statusFor("radar", Array.isArray(next.radar) && next.radar.length > 0, true);
-    const gridStatus = statusFor("grid", Boolean(incomingGrid), true);
+    // A grid reading whose timestamp could not be normalized must not be
+    // presented as live data with no observation time.
+    const gridStatus = statusFor("grid", Boolean(incomingGrid && incomingGrid.observedAt), true);
     const auroraStatus = statusFor("aurora", Boolean(next.aurora && typeof next.aurora === "object"), true);
     const tidesStatus = statusFor("tides", Array.isArray(next.tides));
     const satelliteStatus = statusFor("satellite", Boolean(next.satellite && typeof next.satellite === "object"), true);
@@ -810,6 +822,10 @@ const compassDirection = (azimuth: number) => {
 
 type IssPassList = NonNullable<LiveSnapshot["iss"]>["passes"];
 
+const issDublinHourFormatter = new Intl.DateTimeFormat("en-IE", {
+  hour: "2-digit", hour12: false, timeZone: "Europe/Dublin"
+});
+
 let issPassScan: { key: string; scannedAtMs: number; passes: IssPassList } | null = null;
 
 const scanIssPasses = (
@@ -832,9 +848,7 @@ const scanIssPasses = (
         active.peaksAt = time;
       }
     } else if (active) {
-      const localHour = Number(new Intl.DateTimeFormat("en-IE", {
-        hour: "2-digit", hour12: false, timeZone: "Europe/Dublin"
-      }).format(active.peaksAt)) % 24;
+      const localHour = Number(issDublinHourFormatter.format(active.peaksAt)) % 24;
       passes.push({
         startsAt: active.startsAt.toISOString(),
         peaksAt: active.peaksAt.toISOString(),
