@@ -9,8 +9,8 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
         <main style={{ boxSizing: "border-box", maxWidth: "42rem", margin: "0 auto", padding: "3rem 1.25rem" }}>
           <h1 style={{ fontSize: "1.6rem", margin: "0 0 .8rem" }}>A Day in Ireland could not load.</h1>
           <p style={{ lineHeight: 1.6 }}>
-            An unexpected client error interrupted the page before it could render. Live data sources and stored
-            history are unaffected.
+            An unexpected client error interrupted the page before it could render. The live data feeds and stored
+            history live outside this page, so a rendering fault here does not change what providers have recorded.
           </p>
           <p>
             <button
