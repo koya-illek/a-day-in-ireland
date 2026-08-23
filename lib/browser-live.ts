@@ -260,6 +260,18 @@ const normalizeBrowserBathingAlerts = (rows: unknown[], now = Date.now()): LiveS
   // without an update time cannot age honestly.
   if (typeof alert.id !== "string" || !alert.id.trim()) return [];
   if (typeof alert.updatedAt !== "string" || !Number.isFinite(Date.parse(alert.updatedAt))) return [];
+  // Defense in depth at the browser trust boundary: coordinates, display
+  // strings and notice links are placed on the map verbatim once validated,
+  // so they must be shape-checked here even though the Worker normalizes
+  // them upstream.
+  if (typeof alert.name !== "string" || typeof alert.restriction !== "string") return [];
+  const latitude = Number(alert.latitude);
+  const longitude = Number(alert.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+  if (latitude < 51.2 || latitude > 55.6 || longitude < -10.8 || longitude > -5.2) return [];
+  const noticeUrl = alert.noticeUrl;
+  if (noticeUrl !== null && noticeUrl !== undefined && noticeUrl !== "" &&
+    (typeof noticeUrl !== "string" || !noticeUrl.startsWith("https://"))) return [];
   const startedAt = Date.parse(String(alert.startedAt ?? ""));
   const endsAt = Date.parse(String(alert.endsAt ?? ""));
   // The server derives ends from the provider's expected duration; this
@@ -413,6 +425,9 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
     if (!fresh.length) return retainLastGoodWeather(previous);
     const top = (field: "temperature" | "rainfall" | "windSpeed") =>
       [...fresh].filter((station) => station[field] !== null).sort((a, b) => (b[field] ?? -Infinity) - (a[field] ?? -Infinity))[0] ?? null;
+    // The hourly chart intentionally aggregates every parsed station's recent
+    // history (freshness gates the latest reading shown on the map, not the
+    // within-window history a station already reported).
     const timeline = aggregateHourlyWeather(valid.map(({ history }) => history));
     const now = Date.now();
     const generatedAt = new Date().toISOString();
@@ -420,7 +435,8 @@ export async function refreshWeather(previous: LiveSnapshot): Promise<LiveSnapsh
       ...previous,
       generatedAt,
       lastSuccessAt: latestSuccess(previous, generatedAt),
-      sourceStatus: fresh.length >= 6 ? "live" : fresh.length > 0 ? "partial" : "fallback",
+      // fresh.length > 0 is guaranteed by the early return above.
+      sourceStatus: fresh.length >= 6 ? "live" : "partial",
       stations,
       marine: previous.marine.filter((buoy) => {
         const timestamp = new Date(buoy.observedAt).getTime();
@@ -652,6 +668,12 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const statedStatus = next.contextStatus && typeof next.contextStatus === "object"
       ? next.contextStatus
       : {} as Partial<LiveSnapshot["contextStatus"]>;
+    // Status inference only applies while the response carries a context
+    // status map at all. If the whole field is missing (contract drift or a
+    // pre-status cached edge response), inferring "live" from delivered
+    // payloads would present unlabelled data as fully current; those sources
+    // fall back to retained evidence instead.
+    const statusMapPresent = Boolean(next.contextStatus && typeof next.contextStatus === "object");
     const statusFor = (
       name: keyof LiveSnapshot["contextStatus"],
       validPayload: boolean,
@@ -659,7 +681,7 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     ): LiveSnapshot["contextStatus"][typeof name] => {
       const status = statedStatus[name];
       if (validPayload && ["live", "partial", "fallback", "stale", "credential-required"].includes(status ?? "")) return status!;
-      if (validPayload && status === undefined && inferWhenMissing) return "live";
+      if (validPayload && status === undefined && inferWhenMissing && statusMapPresent) return "live";
       return "unavailable";
     };
     const incomingAirQuality = Array.isArray(next.airQuality) ? next.airQuality : [];
@@ -702,7 +724,8 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       : normalizeBrowserBathingAlerts(next.bathingAlerts, now);
     const incomingGrid = next.grid && typeof next.grid === "object"
       ? { ...next.grid, observedAt: normalizeGridTimestamp(next.grid.observedAt) }
-      : null;    const incomingSolar = acceptClientSolar(next.solar, now);
+      : null;
+    const incomingSolar = acceptClientSolar(next.solar, now);
     const incomingForecast = acceptClientForecast(next.forecast, now);
     const marineStatus = statusFor("marine", Array.isArray(next.marine));
     const radarStatus = statusFor("radar", Array.isArray(next.radar) && next.radar.length > 0, true);
@@ -713,7 +736,6 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const tidesStatus = statusFor("tides", Array.isArray(next.tides));
     const satelliteStatus = statusFor("satellite", Boolean(next.satellite && typeof next.satellite === "object"), true);
     const earthquakeStatus = statusFor("earthquakes", Array.isArray(next.earthquakes));
-    const issStatus = statusFor("iss", Boolean(next.issTle && typeof next.issTle === "object"));
     const solarStatus = statusFor("solar", Boolean(incomingSolar), true);
     // Warnings and the national forecast are independent upstreams with their
     // own server-side state; a degraded warnings feed must not discard a
@@ -721,6 +743,13 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const forecastStatus = statusFor("forecast", Boolean(incomingForecast), true);
     const useIncoming = (status: LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]) =>
       status !== "unavailable" && status !== "credential-required";
+    // A delivered element set that fails local orbit propagation must not stay
+    // labelled live with a null prediction; the propagation result decides
+    // whether the ISS source stays usable in this response.
+    const incomingIssPrediction = useIncoming(statusFor("iss", Boolean(next.issTle && typeof next.issTle === "object"))) && next.issTle
+      ? predictIss(next.issTle.line1, next.issTle.line2)
+      : null;
+    const issStatus = incomingIssPrediction ? statusFor("iss", true) : "unavailable";
     const contextStatus: LiveSnapshot["contextStatus"] = {
       marine: useIncoming(marineStatus) ? marineStatus : retained.contextStatus.marine,
       radar: useIncoming(radarStatus) ? radarStatus : retained.contextStatus.radar,
@@ -762,14 +791,17 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
           ? incomingBathingAlerts
           : mergeBathingAlerts(incomingBathingAlerts, retained.bathingAlerts)
         : retained.bathingAlerts,
-      iss: useIncoming(issStatus) && next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : retained.iss,
-      issTle: useIncoming(issStatus) && next.issTle ? next.issTle : retained.issTle,
+      iss: incomingIssPrediction ?? retained.iss,
+      issTle: incomingIssPrediction && next.issTle ? next.issTle : retained.issTle,
       satellite: useIncoming(satelliteStatus) ? next.satellite! : retained.satellite,
       earthquakes: useIncoming(earthquakeStatus) ? next.earthquakes! : retained.earthquakes,
       solar: useIncoming(solarStatus) ? incomingSolar : retained.solar,
       forecast: useIncoming(forecastStatus) ? incomingForecast : retained.forecast,
       contextStatus,
-      contextProvenance: next.contextProvenance
+      // A degraded response without a provenance map must not erase the
+      // previous refresh's provenance; the retained metadata still truthfully
+      // describes when that evidence was fetched.
+      contextProvenance: next.contextProvenance ?? previous.contextProvenance
     };
   }, () => retainLastGoodContexts(previous));
 }
