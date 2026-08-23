@@ -181,4 +181,5 @@ The product does not replace official warnings, emergency services, transport op
 - Built-page metadata, headings, skip links, and external-link safety: `npm run check:html`
 - Asset and request budgets: `npm run check:budgets`
 - Release provenance gate: `npm run check:release`
+- Read-only deployed-candidate provenance, CSP, and 404 verification: `npm run check:deployment`
 - D1 schema: `migrations/0001_history_v1.sql`

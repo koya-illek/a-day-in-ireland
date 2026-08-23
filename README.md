@@ -58,7 +58,10 @@ npm run build
 npm run deploy:cloudflare:api
 npx wrangler secret put NTA_API_KEY --config wrangler.api.toml
 npm run deploy:cloudflare
+npm run check:deployment
 ```
+
+Run `npm run check:deployment` after an authorised production deployment. The read-only check fails unless `day.illek.ie` reports the current commit, Worker configuration hash, and transit-data hash. It also checks the hash-based script CSP and the branded 404 response. Pass another HTTPS origin and expected commit only when verifying a staged candidate: `npm run check:deployment -- https://staging.example.ie <commit>`.
 
 Never place the NTA key in `wrangler.api.toml` `[vars]`, `.dev.vars` committed to git, `.env`, or source control. For local Worker runs, copy `.dev.vars.example` to `.dev.vars`. For production, use `wrangler secret put` so Cloudflare stores the encrypted secret.
 
@@ -71,4 +74,5 @@ npm test
 npm run test:e2e
 npm run build
 npm run check:html
+npm run check:budgets
 ```
