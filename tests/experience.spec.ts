@@ -367,11 +367,16 @@ test("boot refresh uses canonical weather stations and one contexts request", as
   const requestedStations: string[] = [];
   let contextsRequests = 0;
   const observation = metObservationTime(50);
+  // Hold observation responses until the connecting-state assertions have
+  // run. A fixed delay raced the polling assertions on loaded machines and
+  // the page could reach its live state before the first check sampled it.
+  let releaseObservations: (() => void) | null = null;
+  const observationsReleased = new Promise<void>((resolve) => { releaseObservations = resolve; });
 
   await page.route("https://prodapi.metweb.ie/observations/*/today", async (route) => {
     const endpoint = new URL(route.request().url()).pathname.split("/")[2];
     requestedStations.push(endpoint);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await observationsReleased;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify([{
@@ -387,7 +392,7 @@ test("boot refresh uses canonical weather stations and one contexts request", as
   });
   await page.route("**/api/contexts", async (route) => {
     contextsRequests += 1;
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await observationsReleased;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -400,20 +405,27 @@ test("boot refresh uses canonical weather stations and one contexts request", as
       })
     });
   });
-  await page.route("**/api/living", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
-  }));
-  await page.route("**/api/transit", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
-  }));
+  await page.route("**/api/living", async (route) => {
+    await observationsReleased;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+    });
+  });
+  await page.route("**/api/transit", async (route) => {
+    await observationsReleased;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+    });
+  });
 
   await page.goto("/");
   await expect(page.locator(".live-state")).toHaveAttribute("data-service-state", "connecting");
   await expect(page.locator(".live-state")).toContainText("Connecting");
   await expect(page.locator(".workspace-heading .hero-sentence"))
     .toHaveText("Connecting to live observations across the island…");
+  releaseObservations?.();
   await expect(page.locator(".station-marker")).toHaveCount(9);
   const weatherChip = page.locator(".freshness-chip").filter({ hasText: "Weather provider" });
   await expect(weatherChip).toContainText(/live · observed/);

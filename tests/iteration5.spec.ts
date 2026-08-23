@@ -67,8 +67,10 @@ test("expiring the inspected item parks keyboard focus on the map instead of <bo
 
   await expect(page.locator(".station-card")).toHaveCount(0);
   // Focus is parked on the next animation frame after the dialog unmounts.
+  // Advancing the fake clock inside the poll keeps timer-driven steps moving
+  // even when parallel workers slow the runner between samples.
   await expect.poll(async () => {
-    await page.clock.runFor(50);
+    await page.clock.runFor(500);
     return page.evaluate(() => document.activeElement?.tagName);
   }).not.toBe("BODY");
   await expect(page.locator("svg.ireland-map [data-map-marker]:focus")).toHaveCount(1);
