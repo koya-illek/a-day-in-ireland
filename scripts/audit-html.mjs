@@ -7,6 +7,7 @@ const documents = [
   { file: "index.html", path: "", indexable: true },
   { file: "about.html", path: "/about", indexable: true },
   { file: "data.html", path: "/data", indexable: true },
+  { file: "developers.html", path: "/developers", indexable: true },
   { file: "privacy.html", path: "/privacy", indexable: true },
   { file: "contact.html", path: "/contact", indexable: true },
   { file: "404.html", path: null, indexable: false }

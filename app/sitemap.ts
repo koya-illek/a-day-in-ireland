@@ -3,7 +3,7 @@ import type { MetadataRoute } from "next";
 export const dynamic = "force-static";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const routes = ["", "/about", "/data", "/privacy", "/contact"];
+  const routes = ["", "/about", "/data", "/developers", "/privacy", "/contact"];
   return routes.map((route) => ({
     url: `https://day.illek.ie${route}`,
     changeFrequency: route === "" ? "daily" : "monthly",

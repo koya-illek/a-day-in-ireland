@@ -5,6 +5,7 @@ const INFO_LINKS = [
   { href: "/", label: "Live map" },
   { href: "/about", label: "About" },
   { href: "/data", label: "Data" },
+  { href: "/developers", label: "Developers" },
   { href: "/privacy", label: "Privacy" },
   { href: "/contact", label: "Contact" }
 ] as const;
@@ -16,7 +17,7 @@ export default function InfoPage({
   introduction,
   children
 }: {
-  current: "about" | "data" | "privacy" | "contact" | "not-found";
+  current: "about" | "data" | "developers" | "privacy" | "contact" | "not-found";
   sectionLabel: string;
   title: string;
   introduction: string;
