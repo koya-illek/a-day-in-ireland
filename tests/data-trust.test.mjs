@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { importBrowserLive, importLibData, importStandaloneTypeScript } from "./import-ts.mjs";
 
 import {
   isIrelandCoordinate,
@@ -22,39 +23,7 @@ test("provider links accept only absolute HTTPS URLs", () => {
   }
 });
 
-const importStandaloneTypeScript = async (relativePath) => {
-  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  return import(`data:text/javascript,${encodeURIComponent(output)}`);
-};
 
-const importWarningAdapter = async (relativePath) => {
-  const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
-  const latestSource = await readFile(new URL("../lib/latest-observations.ts", import.meta.url), "utf8");
-  const latestOutput = ts.transpileModule(latestSource, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
-  const latestUrl = `data:text/javascript,${encodeURIComponent(latestOutput.replace('"./weather-stations"', JSON.stringify(weatherUrl)))}`;
-  const platformUrl = new URL("../platform/river-source.js", import.meta.url).href;
-  const liveNormalizeUrl = new URL("../platform/live-normalize.js", import.meta.url).href;
-  const skySourceUrl = new URL("../platform/sky-source.js", import.meta.url).href;
-  const satelliteUrl = new URL("../node_modules/satellite.js/lib/index.js", import.meta.url).href;
-  const timelineUrl = new URL("../lib/weather-timeline.js", import.meta.url).href;
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText
-    .replace('"./latest-observations"', JSON.stringify(latestUrl))
-    .replace('"./weather-stations"', JSON.stringify(weatherUrl))
-    .replace('"./weather-timeline.js"', JSON.stringify(timelineUrl))
-    .replace('"../platform/river-source.js"', JSON.stringify(platformUrl))
-    .replace('"../platform/live-normalize.js"', JSON.stringify(liveNormalizeUrl))
-    .replace('"../platform/sky-source.js"', JSON.stringify(skySourceUrl))
-    .replace('"satellite.js"', JSON.stringify(satelliteUrl));
-  return import(`data:text/javascript,${encodeURIComponent(output)}`);
-};
 
 const importDataStateAdapter = async () => {
   const source = await readFile(new URL("../lib/data-state.ts", import.meta.url), "utf8");
@@ -238,7 +207,7 @@ test("last-good retention is age bounded and is always relabelled cached rather 
     retainLastGoodLiving,
     retainLastGoodTransit,
     retainLastGoodWeather
-  } = await importWarningAdapter("../lib/browser-live.ts");
+  } = await importBrowserLive();
   const now = Date.parse("2026-08-04T12:00:00.000Z");
   const observedAt = new Date(now - 5 * 60_000).toISOString();
   const empty = createInitialSnapshot(new Date(now).toISOString());
@@ -317,7 +286,7 @@ const bathingRefreshFixtureAlert = () => {
 
 const refreshContextsWithBathing = async ({ status, alerts, retainedAlert }) => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
-  const { refreshCurrentContexts } = await importWarningAdapter("../lib/browser-live.ts");
+  const { refreshCurrentContexts } = await importBrowserLive();
   const now = Date.now();
   const previous = createInitialSnapshot(new Date(now).toISOString());
   previous.bathingAlerts = [retainedAlert ?? bathingRefreshFixtureAlert()];
@@ -364,7 +333,7 @@ test("degraded bathing tiers keep previously seen advisories until the provider 
 
 test("browser context refresh preserves partial/stale warnings truth and valid live-empty truth", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
-  const { refreshCurrentContexts } = await importWarningAdapter("../lib/browser-live.ts");
+  const { refreshCurrentContexts } = await importBrowserLive();
   const now = Date.parse("2026-08-05T12:00:00Z");
   const previous = createInitialSnapshot(new Date(now).toISOString());
   const originalFetch = globalThis.fetch;
@@ -404,7 +373,7 @@ test("browser context refresh preserves partial/stale warnings truth and valid l
 
 test("browser living refresh preserves partial river provenance instead of upgrading it to live", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
-  const { refreshLivingLayers } = await importWarningAdapter("../lib/browser-live.ts");
+  const { refreshLivingLayers } = await importBrowserLive();
   const now = Date.now();
   const previous = createInitialSnapshot(new Date(now).toISOString());
   const originalFetch = globalThis.fetch;
@@ -442,7 +411,7 @@ test("browser living refresh preserves partial river provenance instead of upgra
 
 test("browser weather removes future station rows before latest selection and timeline aggregation", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
-  const { refreshWeather } = await importWarningAdapter("../lib/browser-live.ts");
+  const { refreshWeather } = await importBrowserLive();
   const now = Date.now();
   const previous = createInitialSnapshot(new Date(now).toISOString());
   const originalFetch = globalThis.fetch;
@@ -477,7 +446,7 @@ test("browser weather removes future station rows before latest selection and ti
 
 test("browser weather resolves both autumn folds by capture time and rejects the spring gap", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
-  const { refreshWeather } = await importWarningAdapter("../lib/browser-live.ts");
+  const { refreshWeather } = await importBrowserLive();
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
   const originalDateNow = Date.now;
@@ -920,8 +889,8 @@ test("all warning adapters preserve Met Éireann metadata and decode entities", 
   }];
   const shared = normalizeOfficialWeatherWarnings(raw, now);
   const server = (await import("../platform/api-core.js")).normalizeWeatherWarnings(raw, now);
-  const build = (await importWarningAdapter("../lib/live-data.ts")).normalizeWeatherWarnings(raw, now);
-  const browser = (await importWarningAdapter("../lib/browser-live.ts")).normalizeBrowserWarnings(raw, now);
+  const build = (await importLibData()).normalizeWeatherWarnings(raw, now);
+  const browser = (await importBrowserLive()).normalizeBrowserWarnings(raw, now);
   for (const adapter of [shared, server, build, browser]) {
     assert.equal(adapter.length, 1);
     assert.equal(adapter[0].id, "7");
@@ -1029,7 +998,7 @@ test("server and public grid integrations use the newest component timestamp", a
     return Response.json({ Rows: rowsByChart[chart] ?? [] });
   };
   const server = await (await import("../platform/live-normalize.js")).fetchGrid(fetcher, now);
-  const browser = await (await importWarningAdapter("../lib/live-data.ts")).fetchGrid(fetcher, now);
+  const browser = await (await importLibData()).fetchGrid(fetcher, now);
   for (const result of [server, browser]) {
     assert.equal(result.status, "live");
     assert.equal(result.reading.observedAt, "2026-08-02T12:10:00.000Z");
@@ -1149,7 +1118,7 @@ test("OPW non-OK diagnostics cancel a chunked body as soon as it reaches the cap
 
 test("server, public, and scheduled EirGrid readers cancel before consuming later chunks", async () => {
   const serverApi = await import("../platform/live-normalize.js");
-  const browserApi = await importWarningAdapter("../lib/live-data.ts");
+  const browserApi = await importLibData();
   const { collectGrid } = await import("../platform/history-sources.js");
   const now = Date.parse("2026-08-05T12:00:00.000Z");
 

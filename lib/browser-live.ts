@@ -791,7 +791,7 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
           ? incomingBathingAlerts
           : mergeBathingAlerts(incomingBathingAlerts, retained.bathingAlerts)
         : retained.bathingAlerts,
-      iss: incomingIssPrediction ?? retained.iss,
+      iss: incomingIssPrediction ?? previous.iss,
       issTle: incomingIssPrediction && next.issTle ? next.issTle : retained.issTle,
       satellite: useIncoming(satelliteStatus) ? next.satellite! : retained.satellite,
       earthquakes: useIncoming(earthquakeStatus) ? next.earthquakes! : retained.earthquakes,
@@ -936,6 +936,9 @@ function predictIss(line1: string, line2: string): LiveSnapshot["iss"] {
     const currentPosition = propagate(satrec, now)?.position;
     if (!currentPosition || typeof currentPosition === "boolean") return null;
     const currentGeo = eciToGeodetic(currentPosition, gstime(now));
+    // A malformed element set can parse into NaN geometry instead of throwing;
+    // a non-finite position is not a usable observation.
+    if (![currentGeo.latitude, currentGeo.longitude, currentGeo.height].every(Number.isFinite)) return null;
     // Pass windows depend only on the element set, so run the 48-hour scan once
     // per TLE and keep serving it until every listed pass has ended.
     const key = `${line1}\n${line2}`;
