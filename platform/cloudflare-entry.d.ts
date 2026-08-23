@@ -1,7 +1,5 @@
 import type { ProviderProvenance, RiverReading, TransitVehicle } from "../lib/types";
 
-export { addEstimatedSpeeds } from "./live-normalize.js";
-
 export class NtaFeedCoordinator {
   constructor(state: unknown, env: unknown);
   fetch(request: Request | string): Promise<Response>;
@@ -37,6 +35,14 @@ export function runPaidHistoryTick(
   scheduledTime: number,
   options?: { capture?: typeof import("./history.js").captureHistory; maintain?: typeof import("./history.js").maintainHistory }
 ): Promise<unknown>;
+
+export function livingResponse(
+  env: unknown,
+  options?: {
+    loadTrains?: () => Promise<unknown[]>;
+    loadRivers?: () => Promise<{ rivers: unknown[]; status: string; provenance: unknown }>;
+  }
+): Promise<Response>;
 
 declare const cloudflareWorker: {
   fetch(request: Request, env: unknown): Promise<Response>;

@@ -1,141 +1,23 @@
-import apiWorker, { fetchRiversResult, fetchTrains, fetchTransit } from "./server-entry.js";
-import { buildLivingPayload, makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
+import {
+  apiErrorResponse,
+  dedupedFetchTrains,
+  fetchRiversResult,
+  fetchTransit,
+  handleApiRequest,
+  healthResponse,
+  livingResponse as sharedLivingResponse,
+  methodResponse,
+  transitResponse
+} from "./api-core.js";
+import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
 import { captureHistory, handleHistoryRequest, maintainHistory } from "./history.js";
 import { summarizeTransit } from "./history-sources.js";
 import { addEstimatedSpeeds } from "./live-normalize.js";
-export { addEstimatedSpeeds } from "./live-normalize.js";
 
 const NTA_REFRESH_MS = 65_000;
 const RIVER_REFRESH_MS = 15 * 60_000;
-// Same CORS posture as the health/history endpoints: public data, no
-// credentials, so every API tier answers cross-origin requests.
-const CORS_HEADERS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, HEAD, OPTIONS",
-  "access-control-allow-headers": "content-type"
-};
-const responseHeaders = {
-  ...CORS_HEADERS,
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=15",
-  "x-robots-tag": "noindex, nofollow"
-};
-const partialHeaders = {
-  ...CORS_HEADERS,
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=15, stale-while-revalidate=0",
-  "x-robots-tag": "noindex, nofollow"
-};
-const transitLiveHeaders = {
-  ...CORS_HEADERS,
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=15, s-maxage=60, stale-while-revalidate=0",
-  "x-robots-tag": "noindex, nofollow"
-};
-const transitUnavailableHeaders = {
-  ...CORS_HEADERS,
-  "content-type": "application/json; charset=utf-8",
-  "cache-control": "no-store",
-  "x-robots-tag": "noindex, nofollow"
-};
-
-const API_PATHS = new Set([
-  "/api/health",
-  "/api/history",
-  "/api/history/range",
-  "/api/transit",
-  "/api/living",
-  "/api/contexts"
-]);
-
-const methodResponse = (request) => {
-  const headers = {
-    allow: "GET, HEAD, OPTIONS",
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET, HEAD, OPTIONS",
-    "access-control-allow-headers": "content-type",
-    "x-robots-tag": "noindex, nofollow"
-  };
-  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
-  return new Response("Method not allowed", { status: 405, headers });
-};
-
-// Build provenance ships with the static assets (written by
-// scripts/write-build-provenance.mjs on every build). Reading it through the
-// assets binding keeps health reporting truthful; no deploy path provides the
-// BUILD_* vars this endpoint once relied on. Memoised per isolate, with a
-// short retry window after failed reads so a transient asset hiccup can heal.
-const PROVENANCE_RETRY_MS = 5 * 60_000;
-let provenanceCache = null;
-const loadBuildProvenance = async (env) => {
-  const now = Date.now();
-  if (provenanceCache && (provenanceCache.value || now - provenanceCache.at < PROVENANCE_RETRY_MS)) {
-    return provenanceCache.value;
-  }
-  let value = null;
-  try {
-    if (env?.ASSETS) {
-      const response = await env.ASSETS.fetch(new Request("https://assets.local/build-provenance.json"));
-      if (response.ok) {
-        const parsed = await response.json();
-        if (parsed && typeof parsed === "object") value = parsed;
-      }
-    }
-  } catch (error) {
-    console.error("Build provenance was unreadable", error);
-  }
-  provenanceCache = { at: now, value };
-  return value;
-};
-
-const healthResponse = async (env) => {
-  const provenance = await loadBuildProvenance(env);
-  const fileDeploymentId = typeof provenance?.deploymentId === "string" && provenance.deploymentId !== "not-deployed"
-    ? provenance.deploymentId
-    : null;
-  return Response.json({
-    status: "ok",
-    service: "a-day-in-ireland",
-    runtime: "cloudflare-worker",
-    build: {
-      commitSha: env.BUILD_COMMIT_SHA ?? provenance?.source?.commitSha ?? "unknown",
-      builtAt: env.BUILD_TIMESTAMP ?? provenance?.builtAt ?? "unknown",
-      configSha256: env.BUILD_CONFIG_SHA256 ?? provenance?.source?.configSha256 ?? "unknown",
-      transitDataSha256: env.BUILD_DATA_SHA256 ?? provenance?.generatedData?.sha256 ?? "unknown",
-      deploymentId: env.DEPLOYMENT_ID ?? fileDeploymentId ?? "unknown"
-    },
-    storage: {
-      historyDb: Boolean(env.HISTORY_DB),
-      ntaCoordinator: Boolean(env.NTA_FEED),
-      riverCoordinator: Boolean(env.RIVER_FEED)
-    }
-  }, {
-    headers: {
-      "cache-control": "no-store",
-      "access-control-allow-origin": "*",
-      "content-type": "application/json; charset=utf-8",
-      "x-robots-tag": "noindex, nofollow"
-    }
-  });
-};
-
-const captureCutoff = (url, fallback = Date.now()) => {
-  const raw = url.searchParams.get("captureBucketStartMs");
-  // Number(null) and Number("") are 0, which would silently filter every
-  // reading out of a capture; only real, plausible timestamps may override
-  // the caller's fallback.
-  const value = raw === null || raw.trim() === "" ? Number.NaN : Number(raw);
-  if (!Number.isInteger(value) || value < 0 || value > fallback + 60_000) return fallback;
-  return value;
-};
 
 const transitUsable = (status) => status === "live" || status === "partial";
-
-const transitResponse = (value) => new Response(JSON.stringify({
-  generatedAt: new Date().toISOString(),
-  transit: transitUsable(value.status) ? value.vehicles : [],
-  transitStatus: value.status
-}), { headers: value.status === "live" ? transitLiveHeaders : value.status === "partial" ? partialHeaders : transitUnavailableHeaders });
 
 export class NtaFeedCoordinator {
   constructor(state, env) {
@@ -286,55 +168,64 @@ export class RiverFeedCoordinator {
   }
 }
 
-let trainsInFlight = null;
-const dedupedFetchTrains = () => {
-  if (!trainsInFlight) {
-    trainsInFlight = fetchTrains().finally(() => { trainsInFlight = null; });
-  }
-  return trainsInFlight;
+const captureCutoff = (url, fallback = Date.now()) => {
+  const raw = url.searchParams.get("captureBucketStartMs");
+  // Number(null) and Number("") are 0, which would silently filter every
+  // reading out of a capture; only real, plausible timestamps may override
+  // the caller's fallback.
+  const value = raw === null || raw.trim() === "" ? Number.NaN : Number(raw);
+  if (!Number.isInteger(value) || value < 0 || value > fallback + 60_000) return fallback;
+  return value;
 };
 
-// River statuses that carry readings; only "unavailable" means an empty feed.
-// Without this, Irish Rail outages would push usable river data into the
-// no-store tier and turn every client poll into origin work.
-const riverUsable = (status) => status === "live" || status === "partial" || status === "stale" || status === "fallback";
-
-// Exported for tests, which inject loadTrains to avoid the live upstream.
-export const livingResponse = async (env, { loadTrains = dedupedFetchTrains } = {}) => {  const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
-  const [trains, riverResponse] = await Promise.allSettled([
-    loadTrains(),
-    riverCoordinator.fetch("https://internal/rivers")
-  ]);
-  // A malformed coordinator body must degrade to "unavailable", not escape as
-  // a bare runtime error, so the parse stays inside the settled region.
-  let riverResult;
-  if (riverResponse.status === "fulfilled") {
-    try {
-      riverResult = await riverResponse.value.json();
-    } catch (parseError) {
-      console.error("OPW coordinator body was unreadable", parseError);
-      riverResult = null;
-    }
+// Build provenance ships with the static assets (written by
+// scripts/write-build-provenance.mjs on every build). Reading it through the
+// assets binding keeps health reporting truthful; no deploy path provides the
+// BUILD_* vars this endpoint once relied on. Memoised per isolate, with a
+// short retry window after failed reads so a transient asset hiccup can heal.
+const PROVENANCE_RETRY_MS = 5 * 60_000;
+let provenanceCache = null;
+const loadBuildProvenance = async (env) => {
+  const now = Date.now();
+  if (provenanceCache && (provenanceCache.value || now - provenanceCache.at < PROVENANCE_RETRY_MS)) {
+    return provenanceCache.value;
   }
-  riverResult ??= { rivers: [], status: "unavailable", provenance: makeRiverProvenance({ status: "unavailable" }) };
-  if (trains.status === "rejected") console.error("Irish Rail refresh failed", trains.reason);
-  if (riverResponse.status === "rejected") console.error("OPW coordinator failed", riverResponse.reason);
-  const trainsLive = trains.status === "fulfilled" && trains.value.length > 0;
-  const riversUsable = riverUsable(riverResult.status) && Array.isArray(riverResult.rivers) && riverResult.rivers.length > 0;
-  const allLive = trainsLive && riverResult.status === "live";
-  const anyUsable = trainsLive || riversUsable;
-  const headers = allLive ? responseHeaders : anyUsable ? partialHeaders : transitUnavailableHeaders;
-  return new Response(JSON.stringify(buildLivingPayload({
-    trains: trains.status === "fulfilled" ? trains.value : [],
-    rivers: riverResult.rivers,
-    riverProvenance: riverResult.provenance ?? null,
-    riverStatus: riverResult.status ?? "unavailable"
-  })), { headers });
+  let value = null;
+  try {
+    if (env?.ASSETS) {
+      const response = await env.ASSETS.fetch(new Request("https://assets.local/build-provenance.json"));
+      if (response.ok) {
+        const parsed = await response.json();
+        if (parsed && typeof parsed === "object") value = parsed;
+      }
+    }
+  } catch (error) {
+    console.error("Build provenance was unreadable", error);
+  }
+  provenanceCache = { at: now, value };
+  return value;
 };
 
 // Historical rail retention is disabled unless reuse permission is explicitly
 // recorded in configuration. Avoid even calling the Irish Rail upstream during
 // the default scheduled capture; only the OPW half of /api/living is needed.
+const loadCoordinatedRivers = async (env) => {
+  const response = await env.RIVER_FEED.getByName("opw-all-island-gauges").fetch("https://internal/rivers");
+  try {
+    return await response.json();
+  } catch (parseError) {
+    console.error("OPW coordinator body was unreadable", parseError);
+    return { rivers: [], status: "unavailable", provenance: null };
+  }
+};
+
+// Exported for tests, which inject loadTrains to avoid the live upstream.
+export const livingResponse = (env, { loadTrains = dedupedFetchTrains, loadRivers } = {}) =>
+  sharedLivingResponse({
+    loadTrains,
+    loadRivers: loadRivers ?? (() => loadCoordinatedRivers(env))
+  });
+
 export const historyLivingSnapshot = async (env, captureBucketStartMs = Date.now()) => {
   const riverCoordinator = env.RIVER_FEED.getByName("opw-all-island-gauges");
   try {
@@ -423,10 +314,8 @@ export const runPaidHistoryTick = async (env, scheduledTime, {
   return settled[0].value;
 };
 
-const staticResponse = async (request, env) => {
-  return env.ASSETS.fetch(request);
-};
-
+// History responses carry their own headers from the store layer; keep the
+// documented noindex posture on top without disturbing anything else.
 const noIndexResponse = async (responsePromise) => {
   const response = await responsePromise;
   const headers = new Headers(response.headers);
@@ -438,59 +327,24 @@ const noIndexResponse = async (responsePromise) => {
   });
 };
 
-// Storage or coordinator failures must keep the JSON/CORS/no-store error
-// contract instead of escaping as a bare runtime (1101) HTML page.
-const apiErrorResponse = (message) => new Response(JSON.stringify({ error: message }), {
-  status: 503,
-  headers: {
-    ...CORS_HEADERS,
-    "content-type": "application/json; charset=utf-8",
-    "cache-control": "no-store",
-    "x-robots-tag": "noindex, nofollow"
-  }
-});
-
 const cloudflareWorker = {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    if (API_PATHS.has(url.pathname) && request.method !== "GET" && request.method !== "HEAD") {
-      return methodResponse(request);
-    }
-    if (url.pathname === "/api/health") return healthResponse(env);
-    if (url.pathname === "/api/history" || url.pathname === "/api/history/range") {
-      try {
-        return await noIndexResponse(handleHistoryRequest(request, env));
-      } catch (error) {
-        console.error("History request failed", error);
-        return apiErrorResponse("Stored history is temporarily unavailable.");
+    const apiResponse = await handleApiRequest(request, env, {
+      health: async (boundEnv) => healthResponse(boundEnv, await loadBuildProvenance(boundEnv)),
+      living: (boundEnv) => livingResponse(boundEnv),
+      // Storage or coordinator failures must keep the JSON/CORS/no-store
+      // error contract instead of escaping as a bare runtime (1101) page.
+      history: async (boundRequest, boundEnv) => {
+        try {
+          return await noIndexResponse(handleHistoryRequest(boundRequest, boundEnv));
+        } catch (error) {
+          console.error("History request failed", error);
+          return apiErrorResponse("Stored history is temporarily unavailable.");
+        }
       }
-    }
-    if (url.pathname === "/api/transit") {
-      try {
-        const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
-        return await noIndexResponse(coordinator.fetch("https://internal/transit"));
-      } catch (error) {
-        console.error("Transit request failed", error);
-        return apiErrorResponse("Live transport positions are temporarily unavailable.");
-      }
-    }
-    if (url.pathname === "/api/living") {
-      try {
-        return await livingResponse(env);
-      } catch (error) {
-        console.error("Living layers failed", error);
-        return apiErrorResponse("Live layers are temporarily unavailable.");
-      }
-    }
-    if (url.pathname === "/api/contexts") {
-      try {
-        return await noIndexResponse(apiWorker.fetch(request, env));
-      } catch (error) {
-        console.error("Current contexts failed", error);
-        return apiErrorResponse("Current island contexts are temporarily unavailable.");
-      }
-    }
-    if (request.method === "GET" || request.method === "HEAD") return staticResponse(request, env);
+    });
+    if (apiResponse) return apiResponse;
+    if (request.method === "GET" || request.method === "HEAD") return env.ASSETS.fetch(request);
     return methodResponse(request);
   },
 
