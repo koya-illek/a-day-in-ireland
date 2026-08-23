@@ -35,7 +35,7 @@ export default function DataPage() {
     >
       <section>
         <h2>Freshness</h2>
-        <p>Weather and movement are checked roughly every minute where provider limits allow. Radar is normally issued every five minutes. Solar events use a bounded Dublin-day response and are reused for the current date. The official text forecast follows its issued timestamp and a short official-feed cache. Marine, river, tide, air-quality and grid sources update on their own schedules and may be delayed.</p>
+        <p>Weather observations and broader island context are checked every five minutes. Current train positions are checked every minute, and public-transport vehicles every 65 seconds, where provider access and limits allow. Radar is normally issued every five minutes. Solar events use a bounded Dublin-day response and are reused for the current date. The official text forecast follows its issued timestamp and a short official-feed cache. Marine, river, tide, air-quality and grid sources update on their own schedules and may be delayed.</p>
         <p>A timestamp describes the underlying observation or model time whenever the source provides one. Irish Rail positions are stamped at refresh because the realtime XML has no per-train observation clock. A service can be online while an individual measurement is older than expected.</p>
       </section>
       <section>

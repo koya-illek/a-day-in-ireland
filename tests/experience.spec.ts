@@ -446,7 +446,7 @@ test("renders the living map and live observations", async ({ page }) => {
   await expect(page.getByText("Today so far")).toBeVisible();
   await expect(page.locator(".station-marker").first()).toBeVisible();
   const markerLabel = await page.locator(".station-marker").first().getAttribute("aria-label");
-  expect(markerLabel).toMatch(/degrees|unknown/);
+  expect(markerLabel).toMatch(/°|temperature unavailable/);
   await expect(
     page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ })
   ).toBeVisible();
@@ -802,7 +802,7 @@ test("weather and wind share one accessible station entry while wind-only remain
   await expect(page.locator("svg.ireland-map [role='button']")).toHaveCount(9);
   await expect(page.locator(".wind-marker[aria-hidden='true']")).toHaveCount(9);
   expect(await page.locator(".wind-marker[aria-hidden='true']").first().getAttribute("aria-label")).toBeNull();
-  await expect(page.locator(".station-marker").first()).toHaveAccessibleName(/Bright intervals.*wind 12 kilometres per hour/);
+  await expect(page.locator(".station-marker").first()).toHaveAccessibleName(/Bright intervals.*wind 12 km\/h/);
 
   const combined = page.locator(".station-marker[data-marker-id='station:johnstown-castle']");
   const glyph = page.locator(".wind-marker[aria-hidden='true'][data-wind-for='johnstown-castle']");
@@ -810,7 +810,7 @@ test("weather and wind share one accessible station entry while wind-only remain
   await expect(glyph).toHaveCount(1);
   await expect(glyph).not.toHaveAttribute("data-map-marker");
   await expect(glyph).not.toHaveAttribute("data-marker-pointer-target");
-  await expect(page.getByRole("button", { name: /Wexford.*wind 12 kilometres per hour/ })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /Wexford.*wind 12 km\/h/ })).toHaveCount(1);
   await expect(combined.locator(":scope > .map-marker-hit-target")).toHaveCount(2);
   const glyphPointerEvents = await glyph.locator(":scope, :scope *").evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).pointerEvents)
@@ -879,7 +879,7 @@ test("weather and wind share one accessible station entry while wind-only remain
   expect(windStops.filter((tabIndex) => tabIndex === 0)).toHaveLength(1);
   expect(windStops.filter((tabIndex) => tabIndex === -1)).toHaveLength(8);
   await page.locator(".wind-marker[role='button']").first().focus();
-  await expect(page.locator("#map-marker-announcement")).toHaveText(/wind 12 kilometres per hour.*item 1 of 9/);
+  await expect(page.locator("#map-marker-announcement")).toHaveText(/wind 12 km\/h.*item 1 of 9/);
   await page.keyboard.press("Enter");
   await expect(page.locator(".detail-station")).toBeVisible();
   await page.getByRole("button", { name: "Close map details" }).click();
@@ -909,7 +909,7 @@ test("station identity and focus survive weather and wind representation changes
   await expect(page.locator(".explore-panel.is-open")).toHaveCount(0);
   await expect(explore).toBeFocused();
   await expect(windFinner).toHaveAttribute("tabindex", "0");
-  await expect(windFinner).toHaveAccessibleName(/wind 12 kilometres per hour from E/);
+  await expect(windFinner).toHaveAccessibleName(/wind 12 km\/h from E/);
   await windFinner.focus();
   await expect(windFinner).toBeFocused();
 

@@ -648,6 +648,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     comparisonRequestRef.current?.abort();
     historyRequestGenerationRef.current += 1;
     initialHistoryAtRef.current = null;
+    // The general view-state writer is intentionally debounced for map pans.
+    // Leaving history is a discrete navigation, so clear its timestamp before
+    // the live UI can be copied, bookmarked, or observed with a stale URL.
+    const url = new URL(window.location.href);
+    url.searchParams.delete("at");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     setTimeMode("now");
     setHistoryComparison({ status: "idle", envelope: null, error: null });
     setSelected(null);
@@ -2671,8 +2677,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 onSelect={(item) => setSelected({ type: "station", item })}
                 interaction={markerInteraction(
                   `station:${station.id}`,
-                  `${station.name}, ${station.temperature ?? "unknown"} degrees, ${station.description}${layers.has("wind")
-                    ? `, wind ${station.windSpeed ?? "unknown"} kilometres per hour from ${station.windDirection || "an unknown direction"}`
+                  `${station.name}, ${station.temperature === null ? "temperature unavailable" : `${station.temperature}°`}, ${station.description}${layers.has("wind")
+                    ? `, wind ${station.windSpeed === null ? "unavailable" : `${station.windSpeed} km/h`} from ${station.windDirection || "an unknown direction"}`
                     : ""}`,
                   () => setSelected({ type: "station", item: station })
                 )}
@@ -2681,7 +2687,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             {layers.has("wind") && displayedStations.map((station) => {
               const point = projection([station.longitude, station.latitude]);
               if (!point || station.windSpeed === null) return null;
-              const windLabel = `${station.name}, wind ${station.windSpeed} kilometres per hour from ${station.windDirection || "an unknown direction"}`;
+              const windLabel = `${station.name}, wind ${station.windSpeed} km/h from ${station.windDirection || "an unknown direction"}`;
               const onActivate = () => setSelected({ type: "station", item: station });
               const windInteraction = layers.has("weather")
                 ? null
