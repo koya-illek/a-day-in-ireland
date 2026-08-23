@@ -68,7 +68,7 @@ test("alternate adapter living payload reports unavailable rivers when OPW fails
 });
 
 test("river bridge fallback stays disabled unless an HTTPS URL is configured", async () => {
-  const { acquireRiverRaw } = await import("../platform/server-entry.js?living-status=bridge");
+  const { acquireRiverRaw } = await import("../platform/api-core.js?living-status=bridge");
   let bridgeCalled = false;
   const fetcher = async (url) => {
     if (String(url).includes("waterlevel.ie")) return new Response("nope", { status: 500 });
@@ -92,7 +92,7 @@ test("river bridge fallback stays disabled unless an HTTPS URL is configured", a
 });
 
 test("river bridge rejects malformed configured URLs without calling anything", async () => {
-  const { acquireRiverRaw } = await import("../platform/server-entry.js?living-status=bridge-malformed");
+  const { acquireRiverRaw } = await import("../platform/api-core.js?living-status=bridge-malformed");
   let called = 0;
   const fetcher = async (url) => {
     called += 1;
@@ -110,7 +110,7 @@ test("river bridge rejects malformed configured URLs without calling anything", 
 });
 
 test("river bridge failures keep the contextual error shape", async () => {
-  const { acquireRiverRaw } = await import("../platform/server-entry.js?living-status=bridge-garbage");
+  const { acquireRiverRaw } = await import("../platform/api-core.js?living-status=bridge-garbage");
   const fetcher = async (url) => {
     if (String(url).includes("waterlevel.ie")) return new Response("nope", { status: 503 });
     return new Response("<html>gateway noise</html>", { status: 200 });

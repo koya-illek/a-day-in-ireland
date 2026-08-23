@@ -545,12 +545,20 @@ test("history weather and marine ingest reuse the shared station and buoy module
   assert.ok(WEATHER_STATIONS.every((station) => station.csvName));
 });
 
-test("Cloudflare and local living adapters share one payload builder", async () => {
+test("both worker adapters delegate to one shared API core", async () => {
   const { buildLivingPayload } = await import("../platform/river-source.js");
   const cloudflare = await readFile(new URL("../platform/cloudflare-entry.js", import.meta.url), "utf8");
   const server = await readFile(new URL("../platform/server-entry.js", import.meta.url), "utf8");
-  assert.match(cloudflare, /buildLivingPayload\(/);
-  assert.match(server, /buildLivingPayload\(/);
+  const core = await readFile(new URL("../platform/api-core.js", import.meta.url), "utf8");
+  // Exactly one definition of the shared machinery may exist; the adapters
+  // must delegate through handleApiRequest instead of growing private copies.
+  assert.match(core, /export const CONTEXT_SOURCE_POLICIES/);
+  assert.match(core, /buildLivingPayload\(/);
+  for (const adapter of [cloudflare, server]) {
+    assert.match(adapter, /handleApiRequest\(/);
+    assert.doesNotMatch(adapter, /CONTEXT_SOURCE_POLICIES = /);
+    assert.doesNotMatch(adapter, /buildLivingPayload\(/);
+  }
   const payload = buildLivingPayload({ trains: [], rivers: [], riverStatus: "unavailable" });
   assert.equal(payload.sourceStatus.trains, "unavailable");
   assert.equal(payload.sourceStatus.rivers, "unavailable");
@@ -580,7 +588,7 @@ test("radar no-data masking removes only the provider's grey sentinel pixels", a
 });
 
 test("radar frame normalization keeps Met Éireann provenance and rejects malformed provider URLs", async () => {
-  const { normalizeRadarFrames } = await import("../platform/server-entry.js");
+  const { normalizeRadarFrames } = await import("../platform/live-normalize.js");
   const frames = normalizeRadarFrames([
     { src: "202608041510", modifiedTime: 1785856549, server: "https://gdal.met.ie/" },
     { src: "not-a-frame", modifiedTime: 1, server: "https://gdal.met.ie" },
@@ -597,7 +605,7 @@ test("radar frame normalization keeps Met Éireann provenance and rejects malfor
 });
 
 test("satellite discovery walks back from the advertised GIBS date until every Ireland tile is valid", async () => {
-  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const { findLatestSatelliteFrame } = await import("../platform/api-core.js");
   const probes = [];
   const fetcher = async (url, init = {}) => {
     if (String(url).endsWith("/all/all.xml")) {
@@ -633,7 +641,7 @@ test("satellite discovery walks back from the advertised GIBS date until every I
 });
 
 test("satellite availability starts at today when the active GIBS range ends in the future", async () => {
-  const { resolveSatelliteAvailability } = await import("../platform/server-entry.js");
+  const { resolveSatelliteAvailability } = await import("../platform/api-core.js");
   const availability = await resolveSatelliteAvailability({
     now: Date.parse("2026-08-04T12:00:00Z"),
     fetcher: async () => new Response(
@@ -649,7 +657,7 @@ test("satellite availability starts at today when the active GIBS range ends in 
 });
 
 test("satellite discovery suppresses the layer when no recent Ireland tile is valid", async () => {
-  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const { findLatestSatelliteFrame } = await import("../platform/api-core.js");
   const fetcher = async (url) => String(url).endsWith("/all/all.xml")
     ? new Response("<Domain>2026-08-03/2026-08-03/P1D</Domain>")
     : new Response(null, { status: 404, headers: { "content-type": "text/html" } });
@@ -665,7 +673,7 @@ test("satellite discovery suppresses the layer when no recent Ireland tile is va
 });
 
 test("satellite discovery defaults to five lookback days and two Ireland tiles", async () => {
-  const { findLatestSatelliteFrame } = await import("../platform/server-entry.js");
+  const { findLatestSatelliteFrame } = await import("../platform/api-core.js");
   const probes = [];
   const fetcher = async (url, init = {}) => {
     if (String(url).endsWith("/all/all.xml")) {
@@ -689,7 +697,7 @@ test("satellite discovery defaults to five lookback days and two Ireland tiles",
 });
 
 test("an older failed satellite context cannot clear a newer successful cache publication", async () => {
-  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const { createSatelliteAvailabilityResolver } = await import("../platform/api-core.js");
   const pending = [];
   const frame = {
     observedAt: "2026-08-03T00:00:00Z",
@@ -722,7 +730,7 @@ test("an older failed satellite context cannot clear a newer successful cache pu
 });
 
 test("an older successful satellite context cannot overwrite a newer failed cache publication", async () => {
-  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const { createSatelliteAvailabilityResolver } = await import("../platform/api-core.js");
   const pending = [];
   const olderFrame = {
     observedAt: "2026-08-02T00:00:00Z",
@@ -775,7 +783,7 @@ test("concurrent context endpoints share one satellite failure and retain it", a
 });
 
 test("satellite cache revalidates at UTC rollover and when the provider-advertised date advances", async () => {
-  const { createSatelliteAvailabilityResolver } = await import("../platform/server-entry.js");
+  const { createSatelliteAvailabilityResolver } = await import("../platform/api-core.js");
   let now = Date.parse("2026-08-04T23:59:00Z");
   let advertisedDate = "2026-08-03";
   let metadataCalls = 0;
@@ -812,7 +820,7 @@ test("satellite cache revalidates at UTC rollover and when the provider-advertis
 });
 
 test("tide query windows remain stable inside a cache bucket", async () => {
-  const { tideQueryWindow } = await import("../platform/server-entry.js");
+  const { tideQueryWindow } = await import("../platform/live-normalize.js");
   const first = Date.parse("2026-08-03T09:01:01.000Z");
   const second = Date.parse("2026-08-03T09:14:59.000Z");
   const nextBucket = Date.parse("2026-08-03T09:15:00.000Z");
@@ -826,7 +834,7 @@ test("tide query windows remain stable inside a cache bucket", async () => {
 });
 
 test("tide trend uses the recent 30-minute movement instead of only the latest pair", async () => {
-  const { classifyTideTrend } = await import("../platform/server-entry.js");
+  const { classifyTideTrend } = await import("../platform/live-normalize.js");
   const sample = (minutes, waterLevel) => ({
     observedAt: new Date(Date.parse("2026-08-04T12:00:00.000Z") + minutes * 60_000).toISOString(),
     waterLevel
@@ -853,7 +861,7 @@ test("tide trend uses the recent 30-minute movement instead of only the latest p
 });
 
 test("tide trend ignores readings outside its recent window and requires three valid samples", async () => {
-  const { classifyTideTrend } = await import("../platform/server-entry.js");
+  const { classifyTideTrend } = await import("../platform/live-normalize.js");
   const sample = (minutes, waterLevel) => ({
     observedAt: new Date(Date.parse("2026-08-04T12:00:00.000Z") + minutes * 60_000).toISOString(),
     waterLevel
@@ -903,7 +911,7 @@ test("all warning adapters preserve Met Éireann metadata and decode entities", 
     expiry: "2026-08-03T18:00:00+01:00"
   }];
   const shared = normalizeOfficialWeatherWarnings(raw, now);
-  const server = (await import("../platform/server-entry.js")).normalizeWeatherWarnings(raw, now);
+  const server = (await import("../platform/api-core.js")).normalizeWeatherWarnings(raw, now);
   const build = (await importWarningAdapter("../lib/live-data.ts")).normalizeWeatherWarnings(raw, now);
   const browser = (await importWarningAdapter("../lib/browser-live.ts")).normalizeBrowserWarnings(raw, now);
   for (const adapter of [shared, server, build, browser]) {
@@ -1012,7 +1020,7 @@ test("server and public grid integrations use the newest component timestamp", a
     const chart = new URL(input).searchParams.get("chartType");
     return Response.json({ Rows: rowsByChart[chart] ?? [] });
   };
-  const server = await (await import("../platform/server-entry.js")).fetchGrid(fetcher, now);
+  const server = await (await import("../platform/live-normalize.js")).fetchGrid(fetcher, now);
   const browser = await (await importWarningAdapter("../lib/live-data.ts")).fetchGrid(fetcher, now);
   for (const result of [server, browser]) {
     assert.equal(result.status, "live");
@@ -1116,7 +1124,7 @@ const chunkedBodyResponse = (chunkSizes, { status = 200 } = {}) => {
 };
 
 test("OPW non-OK diagnostics cancel a chunked body as soon as it reaches the cap", async () => {
-  const { acquireRiverRaw } = await import("../platform/server-entry.js");
+  const { acquireRiverRaw } = await import("../platform/api-core.js");
   const oversized = chunkedBodyResponse([16_000, 16_000, 8_000], { status: 503 });
   let calls = 0;
   const fetcher = async () => {
@@ -1132,7 +1140,7 @@ test("OPW non-OK diagnostics cancel a chunked body as soon as it reaches the cap
 });
 
 test("server, public, and scheduled EirGrid readers cancel before consuming later chunks", async () => {
-  const serverApi = await import("../platform/server-entry.js");
+  const serverApi = await import("../platform/live-normalize.js");
   const browserApi = await importWarningAdapter("../lib/live-data.ts");
   const { collectGrid } = await import("../platform/history-sources.js");
   const now = Date.parse("2026-08-05T12:00:00.000Z");
@@ -1166,7 +1174,7 @@ test("server, public, and scheduled EirGrid readers cancel before consuming late
 });
 
 test("out-of-order transit positions never produce a calculated speed", async () => {
-  const { addEstimatedSpeeds } = await import("../platform/cloudflare-entry.js");
+  const { addEstimatedSpeeds } = await import("../platform/live-normalize.js");
   const previous = [{
     id: "vehicle",
     latitude: 53.3,
@@ -1227,7 +1235,7 @@ test("failed NTA refresh relabels an expired snapshot stale and never serves its
 });
 
 test("an empty NTA feed is unavailable and is not cached as live", async () => {
-  const { fetchTransit } = await import("../platform/server-entry.js");
+  const { fetchTransit } = await import("../platform/api-core.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ entity: [] }), {
     status: 200,
@@ -1242,7 +1250,7 @@ test("an empty NTA feed is unavailable and is not cached as live", async () => {
 });
 
 test("a truncated NTA feed stays partial through normalization and the shared cache", async () => {
-  const { fetchTransit } = await import("../platform/server-entry.js");
+  const { fetchTransit } = await import("../platform/api-core.js");
   const { NtaFeedCoordinator } = await import("../platform/cloudflare-entry.js");
   const now = Date.now();
   const entity = (index) => ({
@@ -1269,7 +1277,7 @@ test("a truncated NTA feed stays partial through normalization and the shared ca
   assert.equal((await response.json()).transitStatus, "partial");
 });
 
-test("an explicit transit upstream failure returns an uncacheable unavailable response", async () => {
+test("an explicit transit upstream failure keeps the shared JSON error contract", async () => {
   const api = await import("../platform/server-entry.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("upstream unavailable", { status: 503 });
@@ -1279,10 +1287,10 @@ test("an explicit transit upstream failure returns an uncacheable unavailable re
       { NTA_API_KEY: "test-key" }
     );
     const body = await response.json();
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 503);
+    assert.match(body.error, /temporarily unavailable/);
     assert.equal(response.headers.get("cache-control"), "no-store");
-    assert.equal(body.transitStatus, "unavailable");
-    assert.deepEqual(body.transit, []);
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1520,7 +1528,7 @@ test("public contexts mark successful empty marine and tide payloads unavailable
 });
 
 test("transit feed rejects old provider positions instead of calling them live", async () => {
-  const { fetchTransit } = await import("../platform/server-entry.js");
+  const { fetchTransit } = await import("../platform/api-core.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => Response.json({
     entity: [{

@@ -67,7 +67,7 @@ test("NTA coordinator serves a fresh globally stored snapshot without refetching
 });
 
 test("successive vehicle positions produce a bounded calculated speed", async () => {
-  const { addEstimatedSpeeds } = await import("../platform/cloudflare-entry.js");
+  const { addEstimatedSpeeds } = await import("../platform/live-normalize.js");
   const previous = [{
     id: "moving-bus",
     latitude: 53.3498,
