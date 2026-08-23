@@ -22,7 +22,7 @@ import type {
   TrainPosition
 } from "../lib/types";
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
-import { enrichTransitDestinations, refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
+import { applyTransitDestinations, enrichTransitDestinations, refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
@@ -880,14 +880,20 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     let active = true;
     void enrichTransitDestinations(vehicles).then((enriched) => {
       if (!active) return;
+      // Trips missing from the destinations manifest stay unresolved. The
+      // merge targets whichever array is current, so a transit poll that
+      // committed fresher positions while the dictionary loaded cannot be
+      // rolled back to the captured snapshot.
+      const destinations: Record<string, string> = {};
+      for (const vehicle of enriched) {
+        if (vehicle.tripId && vehicle.destination) destinations[vehicle.tripId] = vehicle.destination;
+      }
       setLiveSnapshot((current) => {
-        // Trips missing from the destinations manifest stay unresolved. Committing
-        // them anyway would hand the effect a fresh array with the same guard true,
-        // looping renders (and manifest refetches) until the next real poll.
-        const unchanged = current.transit.length === enriched.length &&
-          current.transit.every((vehicle, index) => vehicle.destination === enriched[index]?.destination);
+        const merged = applyTransitDestinations(current.transit, destinations);
+        const unchanged = merged.length === current.transit.length &&
+          merged.every((vehicle, index) => vehicle.destination === current.transit[index]?.destination);
         if (unchanged) return current;
-        const next = { ...current, transit: enriched };
+        const next = { ...current, transit: merged };
         liveSnapshotRef.current = next;
         return next;
       });
@@ -903,26 +909,67 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [selected]);
 
   useEffect(() => {
+    // A detail card must describe something still on the map: provider health
+    // alone misses an item that dropped out of its feed or a layer the user
+    // switched off while the card was open.
+    const selectionLayer = (selection: Selection): Layer | null => {
+      switch (selection.type) {
+        case "station": return "weather";
+        case "train": return "trains";
+        case "river": return "rivers";
+        case "buoy": return "sea";
+        case "air": return "air";
+        case "tide": return "tides";
+        case "bathing": return "bathing";
+        case "earthquake": return "earthquakes";
+        case "transit": return "transit";
+      }
+    };
+    const itemPresent = (selection: Selection) => {
+      const id = selection.item.id;
+      switch (selection.type) {
+        case "station": return snapshot.stations.some((item) => item.id === id);
+        case "train": return snapshot.trains.some((item) => item.id === id);
+        case "river": return snapshot.rivers.some((item) => item.id === id);
+        case "buoy": return snapshot.marine.some((item) => item.id === id);
+        case "tide": return snapshot.tides.some((item) => item.id === id);
+        case "bathing": return snapshot.bathingAlerts.some((item) => item.id === id);
+        case "earthquake": return snapshot.earthquakes.some((item) => item.id === id);
+        case "transit": return snapshot.transit.some((item) => item.id === id);
+        // Air readings merge from browser-side state; status covers them.
+        case "air": return true;
+      }
+    };
+    const layerVisible = (selection: Selection) => {
+      if (selection.type === "station") {
+        if (layers.has("weather")) return true;
+        // Wind-only markers exist for stations that report wind.
+        return layers.has("wind") && selection.item.windSpeed !== null;
+      }
+      const layer = selectionLayer(selection);
+      return layer !== null && layers.has(layer);
+    };
     const sourceIsCurrent = (selection: Selection) => {
       if (!snapshotReadable) return false;
-      if (selection.type === "station") return snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
-      if (selection.type === "train") return snapshot.sourceProvenance?.trains.status === "live";
-      if (selection.type === "river") return snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback";
-      if (selection.type === "buoy") return snapshot.contextStatus.marine === "live";
+      if (!layerVisible(selection)) return false;
+      if (selection.type === "station") return itemPresent(selection) && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial");
+      if (selection.type === "train") return itemPresent(selection) && snapshot.sourceProvenance?.trains.status === "live";
+      if (selection.type === "river") return itemPresent(selection) && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback");
+      if (selection.type === "buoy") return itemPresent(selection) && snapshot.contextStatus.marine === "live";
       if (selection.type === "air") return selection.item.source === "measured"
         ? snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback"
         : snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback";
-      if (selection.type === "tide") return snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback";
-      if (selection.type === "bathing") return snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback";
-      if (selection.type === "earthquake") return snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback";
-      return snapshot.transitStatus === "live";
+      if (selection.type === "tide") return itemPresent(selection) && (snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback");
+      if (selection.type === "bathing") return itemPresent(selection) && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback");
+      if (selection.type === "earthquake") return itemPresent(selection) && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback");
+      return itemPresent(selection) && snapshot.transitStatus === "live";
     };
     setSelected((current) => {
       if (!current) return current;
       const currentItems = current.type === "movement-stack" ? current.items : [current];
       return currentItems.every(sourceIsCurrent) ? current : null;
     });
-  }, [snapshot.contextStatus, snapshot.sourceProvenance, snapshot.sourceStatus, snapshot.transitStatus, snapshotReadable]);
+  }, [layers, snapshot.bathingAlerts, snapshot.contextStatus, snapshot.earthquakes, snapshot.marine, snapshot.rivers, snapshot.sourceProvenance, snapshot.sourceStatus, snapshot.stations, snapshot.tides, snapshot.trains, snapshot.transit, snapshot.transitStatus, snapshotReadable]);
 
   const projection = useMemo(
     () => geoMercator()
@@ -1186,19 +1233,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useLayoutEffect(() => {
     const focusedMarker = focusedMarkerRef.current;
-    if (!focusedMarker || !markerIds.includes(focusedMarker.id)) return;
+    if (!focusedMarker) return;
 
     // A station keeps the same logical marker ID when its rendered element
     // changes between the combined weather marker and the wind-only marker.
     // Focus elsewhere clears focusedMarkerRef through the document focusin
     // listener, so only restore focus when React has actually removed the
     // element that held it.
-    if (focusedMarker.element.isConnected) return;
+    if (markerIds.includes(focusedMarker.id)) {
+      if (focusedMarker.element.isConnected) return;
+      const replacement = [...(mapRef.current?.querySelectorAll<SVGGElement>("[data-map-marker]") ?? [])]
+        .find((candidate) => candidate.getAttribute("data-marker-id") === focusedMarker.id);
+      if (!replacement || !replacement.isConnected) return;
+      replacement.focus({ preventScroll: true });
+      return;
+    }
 
-    const replacement = [...(mapRef.current?.querySelectorAll<SVGGElement>("[data-map-marker]") ?? [])]
-      .find((candidate) => candidate.getAttribute("data-marker-id") === focusedMarker.id);
-    if (!replacement || !replacement.isConnected) return;
-    replacement.focus({ preventScroll: true });
+    // When the marker's ID itself leaves the visible set (layer switch,
+    // preset, data expiry) React removes its element and focus silently falls
+    // back to <body> without a focusin event. Park keyboard users on the first
+    // surviving marker instead of stranding them at the top of the page.
+    if (focusedMarker.element.isConnected) {
+      focusedMarkerRef.current = null;
+      return;
+    }
+    const fallback = mapRef.current?.querySelector<SVGGElement>("[data-map-marker]") ?? null;
+    fallback?.focus({ preventScroll: true });
+    focusedMarkerRef.current = null;
   }, [markerIds]);
 
   useEffect(() => {
@@ -2251,10 +2312,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             type="button"
             className="share-button"
             data-share-place-id={selectedPlace.id}
-            aria-label={shareStatus === "copied" ? "Share link copied" : `Share this view for ${selectedPlace.name}`}
+            aria-label={`Share this view for ${selectedPlace.name}`}
             onClick={() => void shareExperience()}
           >
             {shareStatus === "copied" ? "Copied" : "Share"}
+            {/* Single announcement channel on purpose: swapping the accessible
+               name as well made screen readers hear "copied" twice. */}
             <span className="sr-only" role="status" aria-live="polite">
               {shareStatus === "copied" ? "Share link copied to clipboard." : ""}
             </span>

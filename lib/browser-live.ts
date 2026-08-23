@@ -66,6 +66,17 @@ export async function enrichTransitDestinations<T extends { tripId?: string; des
   } catch {
     destinations = {};
   }
+  return applyTransitDestinations(vehicles, destinations);
+}
+
+// Applies a resolved schedule dictionary onto whichever vehicle array is
+// current. Enrichment is asynchronous: by the time it resolves, a newer poll
+// may have replaced the captured array, so callers merge by trip id instead of
+// committing stale positions.
+export function applyTransitDestinations<T extends { tripId?: string; destination?: string }>(
+  vehicles: T[],
+  destinations: Record<string, string>
+): T[] {
   return vehicles.map((vehicle) => ({
     ...vehicle,
     destination: vehicle.tripId && Object.hasOwn(destinations, vehicle.tripId)
@@ -704,9 +715,10 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
     const earthquakeStatus = statusFor("earthquakes", Array.isArray(next.earthquakes));
     const issStatus = statusFor("iss", Boolean(next.issTle && typeof next.issTle === "object"));
     const solarStatus = statusFor("solar", Boolean(incomingSolar), true);
-    const forecastStatus = warningStatus === "live"
-      ? statusFor("forecast", Boolean(incomingForecast), true)
-      : "unavailable";
+    // Warnings and the national forecast are independent upstreams with their
+    // own server-side state; a degraded warnings feed must not discard a
+    // validated forecast.
+    const forecastStatus = statusFor("forecast", Boolean(incomingForecast), true);
     const useIncoming = (status: LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]) =>
       status !== "unavailable" && status !== "credential-required";
     const contextStatus: LiveSnapshot["contextStatus"] = {

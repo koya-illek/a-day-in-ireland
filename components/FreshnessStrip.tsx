@@ -57,7 +57,10 @@ export function FreshnessStrip({
   onRefresh: () => void;
 }) {
   return (
-    <div className="freshness-strip" role="status" aria-label="Data freshness and provider status">
+    // A plain container on purpose: role="status" would be implicitly
+    // aria-atomic, re-announcing this whole strip every time a volatile age or
+    // clock text flips. Only the connection-state words below are announced.
+    <div className="freshness-strip" aria-label="Data freshness and provider status">
       {timeMode === "past" ? (
         <>
           <button type="button" className="refresh-data-button" disabled aria-describedby="connection-summary">Live refresh paused</button>
@@ -83,7 +86,17 @@ export function FreshnessStrip({
             {servicesRefreshing ? "Refreshing…" : "Refresh live data"}
           </button>
           <span id="connection-summary" className={`freshness-chip connection-chip ${serviceDisplayState}`} data-connection-status={connectionStatus} data-service-state={serviceDisplayState}>
-            <i aria-hidden="true" /><b>Connection</b><small>{connectionStatus === "offline" ? `Offline · live refresh unavailable${snapshot.lastSuccessAt ? " · saved snapshot" : ""}` : serviceDisplayState === "connecting" ? "Checking for newer data" : `Connected · ${connectionLabel}`} · checked {formatTime(lastCheckedAt)} · last success {lastSuccessLabel}</small>
+            <i aria-hidden="true" /><b>Connection</b>
+            <small>
+              <span role="status" aria-live="polite">
+                {connectionStatus === "offline"
+                  ? `Offline · live refresh unavailable${snapshot.lastSuccessAt ? " · saved snapshot" : ""}`
+                  : serviceDisplayState === "connecting"
+                    ? "Checking for newer data"
+                    : `Connected · ${connectionLabel}`}
+              </span>
+              {" · checked "}{formatTime(lastCheckedAt)}{" · last success "}{lastSuccessLabel}
+            </small>
           </span>
           <details className="freshness-details">
             <summary>Data details</summary>
