@@ -88,7 +88,9 @@
 }
 
 * { box-sizing: border-box; }
-html { background: var(--deep); scroll-behavior: smooth; }
+/* Anchor targets must clear the sticky topbar (min-height 5rem) at every
+   width, not only on small screens where the rule used to be scoped. */
+html { background: var(--deep); scroll-behavior: smooth; scroll-padding-top: 5.5rem; }
 body {
   margin: 0;
   background: var(--deep);
@@ -1748,7 +1750,6 @@ footer {
 }
 
 @media (max-width: 600px) {
-  html { scroll-padding-top: 4.75rem; }
   .place-context { padding: .95rem; }
   .official-notices { margin-left: 0; margin-right: 0; padding: .8rem; }
   .official-notices-heading h2 { font-size: 1rem; }

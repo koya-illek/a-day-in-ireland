@@ -2453,6 +2453,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         id="live-map"
         className="map-stage"
         ref={mapSectionRef}
+        tabIndex={-1}
         aria-label={`${timeMode === "past" ? "Historical" : "Live"} map of Ireland`}
       >
         <div className="map-explorer-heading">
@@ -3001,7 +3002,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         document.body
       )}
 
-      <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" aria-labelledby="what-matters-heading">
+      <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" tabIndex={-1} aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
           <div>
             <p className="utility-label">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>

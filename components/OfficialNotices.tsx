@@ -56,6 +56,7 @@ export function OfficialNotices({
       id="official-notices"
       className={`official-notices ${compact ? "compact" : ""}`}
       data-scope="across-ireland"
+      tabIndex={-1}
       aria-labelledby="official-notices-heading"
     >
       {compact ? (

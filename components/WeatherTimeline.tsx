@@ -32,7 +32,7 @@ export function WeatherTimeline({
   const rainMax = Math.max(1, ...rainValues);
 
   return (
-    <section id="day-so-far" className="dayline" aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
+    <section id="day-so-far" className="dayline" tabIndex={-1} aria-label={`${timeMode === "past" ? "Selected day through capture" : "Today so far"} across Ireland`}>
       <div className="dayline-heading">
         <div><p className="utility-label">{timeMode === "past" ? "Selected day through capture" : "Today so far"}</p><h2>The shape of the day</h2></div>
         <p>{timeline.length
