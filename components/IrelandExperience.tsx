@@ -576,6 +576,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       envelope: current.envelope,
       error: null
     }));
+    // Dropping the comparison must also drop its in-flight fetch, or a slow
+    // response repopulates the table the user just navigated away from.
+    comparisonRequestRef.current?.abort();
     setHistoryComparison({ status: "idle", envelope: null, error: null });
     setSelected(null);
     setRadarPlaying(false);
@@ -610,6 +613,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   const enterPast = useCallback(async () => {
     setTimeMode("past");
+    comparisonRequestRef.current?.abort();
     setHistoryComparison({ status: "idle", envelope: null, error: null });
     if (historyState.envelope?.resolvedAt) {
       setHistoryState((current) => ({ ...current, status: isUsableHistoryEnvelope(current.envelope) ? "ready" : "gap" }));

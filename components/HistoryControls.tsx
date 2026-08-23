@@ -124,6 +124,13 @@ export function HistoryControls({
   };
 
   const submitScrubber = () => {
+    // An explicit submission supersedes any pending keyboard-submit timer;
+    // its stale closure would otherwise re-request the older instant after
+    // this one.
+    if (scrubberTimerRef.current !== null) {
+      window.clearTimeout(scrubberTimerRef.current);
+      scrubberTimerRef.current = null;
+    }
     if (!Number.isFinite(scrubberSeconds)) return;
     // A tap that never moved the slider would resubmit the displayed instant,
     // and every request closes open detail cards and drops the comparison

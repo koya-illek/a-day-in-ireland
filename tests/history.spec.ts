@@ -208,6 +208,85 @@ test("a failed scrubber point can be retried without moving to another time", as
   expect(selectedCalls).toBe(2);
 });
 
+test("a slow comparison response cannot reopen the table a navigation dropped", async ({ page }) => {
+  await installUnavailableLiveRoutes(page);
+  await installHistoryRoutes(page, async (route) => {
+    const requestedAt = new URL(route.request().url()).searchParams.get("at") ?? selectedAt;
+    if (requestedAt === latestAt) {
+      // Only the comparison fetch targets the latest stored instant; make it
+      // outlast the navigation that should supersede it.
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+    try {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(envelope({
+          requestedAt,
+          resolvedAt: requestedAt,
+          snapshot: { ...storedSnapshot(), generatedAt: requestedAt, lastSuccessAt: requestedAt },
+          previousAt: selectedAt,
+          nextAt: null
+        }))
+      });
+    } catch {
+      // The superseded request is deliberately aborted by the client.
+    }
+  });
+
+  await page.goto(`/?at=${encodeURIComponent(selectedAt)}&place=cork`);
+  await expect(page.locator(".history-result.ready")).toContainText("Showing Tue 4 Aug 2026");
+
+  await page.getByRole("button", { name: "Compare with latest stored" }).click();
+  await expect(page.getByRole("button", { name: /Loading comparison…|Refresh latest stored comparison/ })).toBeVisible();
+
+  // Navigate while the comparison fetch is still in flight; the reset must
+  // also abort it instead of letting the stale response repopulate the table.
+  const scrubber = page.locator(".history-scrubber input[type=range]");
+  await scrubber.fill(String(Math.floor(Date.parse("2026-08-04T17:30:00.000Z") / 1000)));
+  await scrubber.dispatchEvent("pointerup");
+  await expect(page.locator(".history-result.ready")).toContainText("18:30");
+
+  await page.waitForTimeout(1_000);
+  await expect(page.locator(".history-comparison")).toHaveCount(0);
+});
+
+test("a pending keyboard submit cannot override a later pointer submission", async ({ page }) => {
+  await installUnavailableLiveRoutes(page);
+  const requestedTimes: string[] = [];
+  await installHistoryRoutes(page, (route) => {
+    const requestedAt = new URL(route.request().url()).searchParams.get("at")!;
+    requestedTimes.push(requestedAt);
+    return route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(envelope({
+        requestedAt,
+        resolvedAt: requestedAt,
+        snapshot: { ...storedSnapshot(), generatedAt: requestedAt, lastSuccessAt: requestedAt }
+      }))
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Past", exact: true }).click();
+  await expect(page.locator(".history-result.ready")).toContainText("Showing Wed 5 Aug 2026");
+
+  const keyboardInstant = new Date(Date.parse(selectedAt) + 900_000).toISOString();
+  const pointerInstant = new Date(Date.parse(latestAt) - 900_000).toISOString();
+  const scrubber = page.locator(".history-scrubber input[type=range]");
+  await scrubber.focus();
+  await scrubber.fill(String(Math.floor(Date.parse(selectedAt) / 1000)));
+  // Keyup schedules a debounced submit for the keyboard instant.
+  await scrubber.press("ArrowRight");
+  // An explicit pointer submission within the debounce window supersedes it.
+  await scrubber.fill(String(Math.floor(Date.parse(pointerInstant) / 1000)));
+  await scrubber.dispatchEvent("pointerup");
+
+  await page.waitForTimeout(700);
+  const lastRequested = requestedTimes[requestedTimes.length - 1];
+  expect(lastRequested).toBe(pointerInstant);
+  expect(requestedTimes.indexOf(keyboardInstant)).toBeLessThan(requestedTimes.length - 1);
+});
+
 test("daily history is summary-only, preserves gaps, and never falls back to live map evidence", async ({ page }) => {
   const liveCalls = await installUnavailableLiveRoutes(page);
   await installHistoryRoutes(page, (route) => route.fulfill({
