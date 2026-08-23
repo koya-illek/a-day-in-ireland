@@ -21,6 +21,9 @@ import {
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
+// How far back a maintenance tick looks for hours whose rollup is missing or
+// incomplete. Covers deploy restarts and late or failed cron deliveries.
+const MAINTENANCE_LOOKBACK_MS = 48 * HOUR_MS;
 const COLLECTION_LEASE_MS = 20 * MINUTE_MS;
 
 const responseHeaders = {
@@ -328,9 +331,10 @@ export async function captureHistory(env, scheduledTime, loaders) {
 
 export async function maintainHistory(env, scheduledTime) {
   if (!env.HISTORY_DB) return { skipped: true, reason: "missing-binding" };
+  const db = env.HISTORY_DB;
   const hourEnd = hourBucketStart(scheduledTime);
   const hourStart = hourEnd - HOUR_MS;
-  await rollupPeriod(env.HISTORY_DB, {
+  await rollupPeriod(db, {
     fromResolutionMinutes: RAW_RESOLUTION_MINUTES,
     resolutionMinutes: HOUR_RESOLUTION_MINUTES,
     startMs: hourStart,
@@ -339,22 +343,74 @@ export async function maintainHistory(env, scheduledTime) {
     sourceKeys: HISTORY_SOURCE_KEYS,
     emptyPayload: emptyHistoryPayload
   });
-  if (isDublinHour(scheduledTime, 0)) {
-    const day = previousDublinDayBounds(scheduledTime);
-    await rollupPeriod(env.HISTORY_DB, {
-      fromResolutionMinutes: HOUR_RESOLUTION_MINUTES,
-      resolutionMinutes: DAY_RESOLUTION_MINUTES,
-      startMs: day.start,
-      endMs: day.end,
-      expectedSamples: Math.round((day.end - day.start) / HOUR_MS),
-      sourceKeys: HISTORY_SOURCE_KEYS,
-      emptyPayload: emptyHistoryPayload,
-      summaryOnly: true
-    });
-  }
-  if (isDublinHour(scheduledTime, 3)) await pruneHistory(env.HISTORY_DB, scheduledTime);
+  // A single clock-driven rollup used to be the only chance an hour ever got:
+  // one missed or failed tick left that hour without an hourly row forever,
+  // and pruneHistory refuses to delete expired raw rows without a complete
+  // covering hourly row, so those rows leaked past retention indefinitely.
+  // Re-roll any recent bucket that still has raw evidence but no complete
+  // hourly row; rollupPeriod is idempotent (replace on conflict).
+  await repairHourlyRollups(db, scheduledTime);
+  // The daily summary had the same single-shot shape at Dublin midnight. Give
+  // every tick a chance to backfill the previous Dublin day.
+  await ensureDailyRollup(db, scheduledTime);
+  if (isDublinHour(scheduledTime, 3)) await pruneHistory(db, scheduledTime);
   return { skipped: false, hourStart };
 }
+
+const repairHourlyRollups = async (db, scheduledTime) => {
+  const currentHourStart = hourBucketStart(scheduledTime);
+  const buckets = (await db.prepare(`
+    SELECT DISTINCT bucket_start_ms - (bucket_start_ms % ?) AS hour_bucket_ms
+    FROM history_snapshots
+    WHERE resolution_minutes = ? AND bucket_start_ms >= ? AND bucket_start_ms < ?
+    ORDER BY hour_bucket_ms ASC
+  `).bind(HOUR_MS, RAW_RESOLUTION_MINUTES, scheduledTime - MAINTENANCE_LOOKBACK_MS, currentHourStart).all())
+    ?.results ?? [];
+  for (const { hour_bucket_ms } of buckets) {
+    const bucketStartMs = Number(hour_bucket_ms);
+    const existing = await db.prepare(`
+      SELECT expected_samples, collected_samples FROM history_snapshots
+      WHERE resolution_minutes = ? AND bucket_start_ms = ?
+    `).bind(HOUR_RESOLUTION_MINUTES, bucketStartMs).first();
+    if (existing && Number(existing.collected_samples) >= Number(existing.expected_samples)) continue;
+    await rollupPeriod(db, {
+      fromResolutionMinutes: RAW_RESOLUTION_MINUTES,
+      resolutionMinutes: HOUR_RESOLUTION_MINUTES,
+      startMs: bucketStartMs,
+      endMs: bucketStartMs + HOUR_MS,
+      expectedSamples: 4,
+      sourceKeys: HISTORY_SOURCE_KEYS,
+      emptyPayload: emptyHistoryPayload
+    });
+  }
+};
+
+const ensureDailyRollup = async (db, scheduledTime) => {
+  const day = previousDublinDayBounds(scheduledTime);
+  // Days without any hourly evidence (before the collector existed, or a total
+  // outage) have nothing to summarize; writing an empty daily row would invent
+  // a record where history is simply absent.
+  const hourlyEvidence = await db.prepare(`
+    SELECT COUNT(*) AS count FROM history_snapshots
+    WHERE resolution_minutes = ? AND bucket_start_ms >= ? AND bucket_start_ms < ?
+  `).bind(HOUR_RESOLUTION_MINUTES, day.start, day.end).first();
+  if (!hourlyEvidence || Number(hourlyEvidence.count) === 0) return;
+  const existing = await db.prepare(`
+    SELECT expected_samples, collected_samples FROM history_snapshots
+    WHERE resolution_minutes = ? AND bucket_start_ms = ?
+  `).bind(DAY_RESOLUTION_MINUTES, day.start).first();
+  if (existing && Number(existing.collected_samples) >= Number(existing.expected_samples)) return;
+  await rollupPeriod(db, {
+    fromResolutionMinutes: HOUR_RESOLUTION_MINUTES,
+    resolutionMinutes: DAY_RESOLUTION_MINUTES,
+    startMs: day.start,
+    endMs: day.end,
+    expectedSamples: Math.round((day.end - day.start) / HOUR_MS),
+    sourceKeys: HISTORY_SOURCE_KEYS,
+    emptyPayload: emptyHistoryPayload,
+    summaryOnly: true
+  });
+};
 
 export async function handleHistoryRequest(request, env, now = Date.now()) {
   const url = new URL(request.url);
