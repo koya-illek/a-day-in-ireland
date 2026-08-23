@@ -178,7 +178,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
   const caveats = [
     relevantWarnings.length
       ? `${relevantWarnings.length} active activity-relevant Met Éireann notice${relevantWarnings.length === 1 ? "" : "s"} ${relevantWarnings.some((warning) => warningScope(warning, place) === "localized")
-        ? relevantWarnings.length === 1 ? "is localized to named areas" : "are localized to named areas"
+        ? relevantWarnings.length === 1 ? "is localised to named areas" : "are localised to named areas"
         : relevantWarnings.length === 1 ? "applies to this selected scope" : "apply to this selected scope"}; review the official notice above.`
       : null,
     unknownWarnings.length

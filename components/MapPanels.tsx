@@ -421,10 +421,10 @@ export function GridPanel({ grid, className = "", historical = false }: { grid: 
         <>
           <p>Operational grid data is temporarily unavailable.</p>
           <dl>
-            <div><dt>Demand</dt><dd>Unavailable MW</dd></div>
-            <div><dt>Generation</dt><dd>Unavailable MW</dd></div>
-            <div><dt>Wind</dt><dd>Unavailable MW</dd></div>
-            <div><dt>Frequency</dt><dd>Unavailable Hz</dd></div>
+            <div><dt>Demand</dt><dd>Unavailable</dd></div>
+            <div><dt>Generation</dt><dd>Unavailable</dd></div>
+            <div><dt>Wind</dt><dd>Unavailable</dd></div>
+            <div><dt>Frequency</dt><dd>Unavailable</dd></div>
           </dl>
         </>
       )}

@@ -12,8 +12,8 @@ export default function ExperienceError({ error, reset }: { error: Error & { dig
         <p className="utility-label">Something went wrong</p>
         <h1>The map could not finish rendering.</h1>
         <p className="info-introduction">
-          An unexpected client error interrupted the page. No data was lost upstream; live sources and stored history
-          are unaffected.
+          An unexpected client error interrupted the page. The live data feeds and stored history are external to this
+          page, so a rendering fault here does not change what providers have recorded.
         </p>
         <div className="info-content">
           <section>

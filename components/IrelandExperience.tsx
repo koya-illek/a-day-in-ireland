@@ -399,7 +399,7 @@ function projectReadings<T extends { latitude: number; longitude: number }>(
 const ACTIVITY_STATUS_LABELS: Record<ReturnType<typeof getActivityGuidance>[number]["status"], string> = {
   "live-observations": "Live observations",
   "relevant-notice": "Relevant notice",
-  "localized-notice": "Localized notice",
+  "localized-notice": "Localised notice",
   "limited-context": "Limited context",
   "live-coverage": "Live coverage",
   "no-current-signal": "No current signal",
@@ -2672,7 +2672,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 >
                   <circle className="buoy-wave" r={10 + (marineSite.waveHeight ?? 0) * 5} />
                   <circle className="buoy-core" r="3" />
-                  <text x="8" y="4">{marineSite.waveHeight?.toFixed(1) ?? "Unavailable"} m</text>
+                  <text x="8" y="4">{marineSite.waveHeight === null ? "Unavailable" : `${marineSite.waveHeight.toFixed(1)} m`}</text>
                 </MapMarker>
               ) : null;
             })}
@@ -2693,7 +2693,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 >
                   <circle r="11" />
                   <path d="M-7 1Q-3-4 1 1T9 1" />
-                  <text x="13" y="4">{tide.waterLevel?.toFixed(2) ?? "Unavailable"} m</text>
+                  <text x="13" y="4">{tide.waterLevel === null ? "Unavailable" : `${tide.waterLevel.toFixed(2)} m`}</text>
                 </MapMarker>
               ) : null;
             })}
@@ -3043,7 +3043,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`} role="region" aria-label={`${timeMode === "past" ? "Historical" : "Current"} highlighted signals`}>
           {showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
             <button className="signal-item" onClick={() => focusContext("radar")}>
-              <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall?.toFixed(1) ?? "Unavailable"} mm recently observed</small>
+              <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall === null ? "Rainfall unavailable" : `${snapshot.summary.wettest.rainfall.toFixed(1)} mm recently observed`}</small>
             </button>
           )}
           {showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.map((alert) => (

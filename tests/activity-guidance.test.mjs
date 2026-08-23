@@ -218,7 +218,7 @@ test("several relevant notices keep plural verb agreement in caveats", () => {
   ];
   const guidance = getActivityGuidance(baseSnapshot({ warnings }), now);
   const walk = byId(guidance, "outdoor-walk");
-  assert.match(walk.caveat, /2 active activity-relevant Met Éireann notices are localized to named areas; review the official notice above\./);
+  assert.match(walk.caveat, /2 active activity-relevant Met Éireann notices are localised to named areas; review the official notice above\./);
   assert.doesNotMatch(walk.caveat, /notices (is|applies)\b/);
   const coast = byId(guidance, "coast");
   assert.match(coast.caveat, /2 active activity-relevant weather notices are represented for this scope\./);
