@@ -319,8 +319,16 @@ const cloudflareWorker = {
       }
     });
     if (apiResponse) return apiResponse;
-    if (request.method === "GET" || request.method === "HEAD") return env.ASSETS.fetch(request);
-    return methodResponse(request);
+    if (request.method !== "GET" && request.method !== "HEAD") return methodResponse(request);
+    const response = await env.ASSETS.fetch(request);
+    if (response.status !== 404) return response;
+    const url = new URL(request.url);
+    if (url.pathname.includes(".")) return response;
+    // Do not depend on asset-binding not_found_handling for the recovery page.
+    // The explicit fetch also keeps this contract stable when the Worker or
+    // asset configuration is deployed independently.
+    const notFound = await env.ASSETS.fetch(new Request(new URL("/404.html", url), request));
+    return new Response(notFound.body, { status: 404, headers: notFound.headers });
   },
 
   async scheduled(controller, env, ctx) {

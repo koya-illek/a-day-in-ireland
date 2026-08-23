@@ -178,6 +178,7 @@ The product does not replace official warnings, emergency services, transport op
 - Type and lint checks: `npx tsc --noEmit`, `npm run lint`
 - Browser and accessibility tests: `npm run test:e2e`
 - Static build: `npm run build`
+- Built-page metadata, headings, skip links, and external-link safety: `npm run check:html`
 - Asset and request budgets: `npm run check:budgets`
 - Release provenance gate: `npm run check:release`
 - D1 schema: `migrations/0001_history_v1.sql`

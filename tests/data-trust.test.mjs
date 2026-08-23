@@ -13,6 +13,14 @@ import {
   parseEirGridLocalTimestamp,
   parseIrelandLocalTimestamp
 } from "../platform/river-source.js";
+import { providerHttpsUrl } from "../platform/live-normalize.js";
+
+test("provider links accept only absolute HTTPS URLs", () => {
+  assert.equal(providerHttpsUrl("https://example.test/notice.pdf"), "https://example.test/notice.pdf");
+  for (const value of ["http://example.test", "javascript:alert(1)", "data:text/html,unsafe", "/relative"]) {
+    assert.equal(providerHttpsUrl(value), null);
+  }
+});
 
 const importStandaloneTypeScript = async (relativePath) => {
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");

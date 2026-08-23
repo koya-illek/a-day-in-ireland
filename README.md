@@ -70,4 +70,5 @@ npm run dev
 npm test
 npm run test:e2e
 npm run build
+npm run check:html
 ```

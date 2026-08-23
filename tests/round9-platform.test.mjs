@@ -129,8 +129,7 @@ test("hourly repair drains an outage backlog oldest-first with a per-tick cap", 
   assert.deepEqual(hourlyRows(), beforeIdle, "an idle tick must not rewrite completed hours");
 });
 
-test("alternate adapter answers unknown document paths with a true branded 404", async () => {
-  const { default: worker } = await import("../platform/server-entry.js?round9-404");
+test("both adapters answer unknown document paths with a true branded 404", async () => {
   const brandedPage = "<html><body><h1>Not found</h1></body></html>";
   const assets = {
     fetch: async (request) => {
@@ -140,19 +139,22 @@ test("alternate adapter answers unknown document paths with a true branded 404",
       return new Response(null, { status: 404 });
     }
   };
-  const response = await worker.fetch(new Request("https://day.illek.ie/junk-path"), { ASSETS: assets });
-  assert.equal(response.status, 404, "unknown document paths must not soft-200 as index.html");
-  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
-  assert.equal(await response.text(), brandedPage);
+  for (const entry of ["server-entry.js", "cloudflare-entry.js"]) {
+    const { default: worker } = await import(`../platform/${entry}?round9-404`);
+    const response = await worker.fetch(new Request("https://day.illek.ie/junk-path"), { ASSETS: assets });
+    assert.equal(response.status, 404, `${entry} must not soft-200 unknown documents`);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(await response.text(), brandedPage);
 
-  const missingAsset = await worker.fetch(new Request("https://day.illek.ie/nope.js"), { ASSETS: assets });
-  assert.equal(missingAsset.status, 404, "asset misses keep their plain 404");
+    const missingAsset = await worker.fetch(new Request("https://day.illek.ie/nope.js"), { ASSETS: assets });
+    assert.equal(missingAsset.status, 404, `${entry} keeps asset misses as plain 404 responses`);
 
-  // Known pages still resolve through the assets binding untouched.
-  const known = await worker.fetch(new Request("https://day.illek.ie/about"), {
-    ASSETS: { fetch: async () => new Response("<html>about</html>", { status: 200 }) }
-  });
-  assert.equal(known.status, 200);
+    // Known pages still resolve through the assets binding untouched.
+    const known = await worker.fetch(new Request("https://day.illek.ie/about"), {
+      ASSETS: { fetch: async () => new Response("<html>about</html>", { status: 200 }) }
+    });
+    assert.equal(known.status, 200);
+  }
 });
 
 test("alternate adapter health reports the shipped build provenance once per isolate", async () => {

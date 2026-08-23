@@ -489,7 +489,8 @@ test("late history capture excludes post-cutoff bathing updates but keeps active
     incident_end_date: "2026-08-06T12:00:00.000Z",
     last_updated: updatedAt,
     bathing_restriction_type: "Advice",
-    incident_description: `${incidentId} description`
+    incident_description: `${incidentId} description`,
+    bathing_notice_pdf: "javascript:alert(document.domain)"
   });
   const fetcher = async (input) => String(input).includes("/alerts")
     ? Response.json({ list: [
@@ -506,6 +507,7 @@ test("late history capture excludes post-cutoff bathing updates but keeps active
   assert.equal(result.envelope.status, "partial");
   assert.deepEqual(result.envelope.data.map((item) => item.id), ["bathing-before-cutoff"]);
   assert.equal(result.envelope.data[0].endsAt, "2026-08-06T12:00:00.000Z");
+  assert.equal(result.envelope.data[0].noticeUrl, null, "provider links must be absolute HTTPS URLs");
   assert.ok(Date.parse(result.envelope.data[0].startedAt) <= cutoff);
   assert.ok(Date.parse(result.envelope.data[0].updatedAt) <= cutoff);
   assert.equal(result.gaps.length, 1);
@@ -522,9 +524,11 @@ test("earthquake history filters by cutoff before capping and reports truncation
   });
   const postCutoff = Array.from({ length: 30 }, (_, index) => feature(`future-${index}`, cutoff + index + 1));
   const older = feature("valid-before-cutoff", cutoff - 1_000);
+  older.properties.url = "data:text/html,unsafe";
   const filtered = await collectEarthquakes(async () => Response.json({ features: [...postCutoff, older] }), cutoff);
   assert.equal(filtered.envelope.status, "live");
   assert.deepEqual(filtered.envelope.data.map((item) => item.id), ["valid-before-cutoff"]);
+  assert.equal(filtered.envelope.data[0].detailUrl, "", "provider links must be absolute HTTPS URLs");
 
   const valid = Array.from({ length: 31 }, (_, index) => feature(`valid-${index}`, cutoff - index * 1_000));
   const capped = await collectEarthquakes(async () => Response.json({ features: valid }), cutoff);

@@ -3,6 +3,7 @@ import type { AirQualityReading, GridReading, RadarFrame } from "../lib/types";
 export const EIRGRID_BODY_LIMIT: number;
 export const EIRGRID_HISTORY_BODY_LIMIT: number;
 export function numeric(value: unknown): number | null;
+export function providerHttpsUrl(value: unknown): string | null;
 export function haversineKm(
   first: { latitude: number; longitude: number },
   second: { latitude: number; longitude: number }

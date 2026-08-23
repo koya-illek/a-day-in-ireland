@@ -15,6 +15,7 @@ import {
   irishGridToLonLat,
   numeric,
   parseWeatherBuoyRows,
+  providerHttpsUrl,
   tideQueryWindow,
   weatherBuoyQuery,
   EIRGRID_HISTORY_BODY_LIMIT
@@ -477,7 +478,7 @@ export async function collectBathing(fetcher, now, compactLocations = null) {
       startedAt: normalizeProviderTimestamp(alert.incident_start_date) ?? "",
       endsAt: normalizeProviderTimestamp(alert.incident_end_date),
       updatedAt: normalizeProviderTimestamp(alert.last_updated) ?? "",
-      noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
+      noticeUrl: providerHttpsUrl(alert.bathing_notice_pdf)
       }];
     }).sort((a, b) => a.id.localeCompare(b.id));
     const status = archived.length === alerts.length && (!indexState || indexState.status === "current") && !postCutoffUpdates
@@ -518,7 +519,7 @@ export async function collectEarthquakes(fetcher, now) {
       return [longitude, latitude, depthKm, observed].every(Number.isFinite) && observed <= now && observed >= now - 7 * 24 * 60 * 60_000 && magnitude !== null ? [{
         id: String(feature.id), longitude, latitude, depthKm, magnitude,
         place: String(feature.properties?.place ?? "Near Ireland"),
-        observedAt: new Date(observed).toISOString(), detailUrl: String(feature.properties?.url ?? "")
+        observedAt: new Date(observed).toISOString(), detailUrl: providerHttpsUrl(feature.properties?.url) ?? ""
       }] : [];
     }).sort((first, second) =>
       Date.parse(second.observedAt) - Date.parse(first.observedAt) || first.id.localeCompare(second.id)

@@ -24,6 +24,7 @@ export default function InfoPage({
 }) {
   return (
     <main className="info-page">
+      <a className="skip-link" href="#info-content">Skip to page content</a>
       <header className="info-header">
         <Link className="info-brand" href="/">
           <span aria-hidden="true">←</span>
@@ -41,7 +42,7 @@ export default function InfoPage({
           ))}
         </nav>
       </header>
-      <article>
+      <article id="info-content" tabIndex={-1}>
         <p className="utility-label">{sectionLabel}</p>
         <h1>{title}</h1>
         <p className="info-introduction">{introduction}</p>

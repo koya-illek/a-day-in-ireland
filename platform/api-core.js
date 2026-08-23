@@ -24,6 +24,7 @@ import {
   parseCoastalObservatoryRow,
   parseMeasuredAirStations,
   parseWeatherBuoyRows,
+  providerHttpsUrl,
   tideQueryWindow,
   weatherBuoyQuery
 } from "./live-normalize.js";
@@ -479,7 +480,7 @@ export const fetchBathingAlerts = async () => {
       startedAt,
       endsAt,
       updatedAt: String(alert.last_updated ?? ""),
-      noticeUrl: alert.bathing_notice_pdf ? String(alert.bathing_notice_pdf) : null
+      noticeUrl: providerHttpsUrl(alert.bathing_notice_pdf)
     }];
   });
   return {
@@ -666,7 +667,7 @@ const fetchEarthquakes = async () => {
       id: String(feature.id), longitude, latitude, depthKm, magnitude,
       place: String(feature.properties?.place ?? "Near Ireland"),
       observedAt: new Date(Number(feature.properties?.time)).toISOString(),
-      detailUrl: String(feature.properties?.url ?? "")
+      detailUrl: providerHttpsUrl(feature.properties?.url) ?? ""
     }];
   });
 };

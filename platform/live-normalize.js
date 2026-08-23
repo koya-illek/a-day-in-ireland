@@ -12,6 +12,18 @@ export const numeric = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+// Provider payloads can become browser links. Accept only absolute HTTPS
+// URLs at that trust boundary so malformed or compromised feeds cannot emit a
+// javascript:, data:, or relative navigation target.
+export const providerHttpsUrl = (value) => {
+  try {
+    const url = new URL(String(value ?? ""));
+    return url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+};
+
 export const haversineKm = (first, second) => {
   const radians = Math.PI / 180;
   const latitudeDelta = (second.latitude - first.latitude) * radians;

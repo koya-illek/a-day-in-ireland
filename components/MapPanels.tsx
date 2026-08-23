@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { LiveSnapshot } from "../lib/types";
 import { transitPresentation } from "../lib/presentation.js";
+import { providerHttpsUrl } from "../platform/live-normalize.js";
 import {
   type MapSelection,
   type Selection,
@@ -39,6 +40,8 @@ export function DetailCard({
   const [movementKind, setMovementKind] = useState<"all" | "train" | "transit">("all");
   const [movementPage, setMovementPage] = useState(0);
   const transitDetail = type === "transit" ? transitPresentation(item) : null;
+  const bathingNoticeUrl = type === "bathing" ? providerHttpsUrl(item.noticeUrl) : null;
+  const earthquakeDetailUrl = type === "earthquake" ? providerHttpsUrl(item.detailUrl) : null;
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -330,7 +333,7 @@ export function DetailCard({
             <div><dt>County</dt><dd>{item.county}</dd></div>
             <div><dt>Updated</dt><dd>{formatTime(new Date(item.updatedAt))}</dd></div>
           </dl>
-          {item.noticeUrl && <a className="detail-link" href={item.noticeUrl} target="_blank" rel="noreferrer">Open official notice ↗</a>}
+          {bathingNoticeUrl && <a className="detail-link" href={bathingNoticeUrl} target="_blank" rel="noreferrer">Open official notice ↗</a>}
         </>
       )}
       {type === "earthquake" && (
@@ -343,7 +346,7 @@ export function DetailCard({
             <div><dt>Depth</dt><dd>{item.depthKm.toFixed(1)} km</dd></div>
             <div><dt>Detected</dt><dd>{formatTime(new Date(item.observedAt))}</dd></div>
           </dl>
-          {item.detailUrl && <a className="detail-link" href={item.detailUrl} target="_blank" rel="noreferrer">Open USGS event ↗</a>}
+          {earthquakeDetailUrl && <a className="detail-link" href={earthquakeDetailUrl} target="_blank" rel="noreferrer">Open USGS event ↗</a>}
         </>
       )}
       {type === "transit" && (

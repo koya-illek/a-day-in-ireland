@@ -2,13 +2,31 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import InfoPage from "../components/InfoPage";
 
+const notFoundDescription =
+  "The requested A Day in Ireland page does not exist. Return to the live map or project information.";
+
 // Without this the error page inherits the homepage canonical/description and
 // claims to be indexable; unknown URLs must not pose as duplicates of "/".
 // The null canonical suppresses the inherited "/" canonical entirely.
 export const metadata: Metadata = {
   title: "Page not found",
+  description: notFoundDescription,
   robots: { index: false, follow: true },
-  alternates: { canonical: null }
+  alternates: { canonical: null },
+  openGraph: {
+    title: "Page not found · A Day in Ireland",
+    description: notFoundDescription,
+    type: "website",
+    locale: "en_IE",
+    siteName: "A Day in Ireland",
+    images: []
+  },
+  twitter: {
+    card: "summary",
+    title: "Page not found · A Day in Ireland",
+    description: notFoundDescription,
+    images: []
+  }
 };
 
 export default function NotFound() {
