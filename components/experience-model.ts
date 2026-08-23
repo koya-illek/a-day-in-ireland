@@ -354,6 +354,28 @@ export function statusText(status: "live" | "partial" | "stale" | "fallback" | "
   return status === "stale" ? "cached" : status;
 }
 
+// Background radar refreshes replace the frame window every few minutes. A
+// user who deliberately parked on an older frame must keep watching that same
+// wall-clock instant when it survives the refresh, while someone already on
+// the newest image follows the window forward so the default view never
+// silently ages. Only an instant the provider dropped returns the view to the
+// newest frame.
+export const restoredRadarFrameIndex = (
+  previousFrames: ReadonlyArray<{ observedAt: string }>,
+  selectedIndex: number,
+  nextFrames: ReadonlyArray<{ observedAt: string }>
+): number => {
+  if (!nextFrames.length) return 0;
+  const clampedIndex = Math.min(Math.max(selectedIndex, 0), Math.max(0, previousFrames.length - 1));
+  const selectedFrame = previousFrames[clampedIndex];
+  const followedNewest = !selectedFrame || clampedIndex >= previousFrames.length - 1;
+  if (!followedNewest) {
+    const matched = nextFrames.findIndex((frame) => frame.observedAt === selectedFrame.observedAt);
+    if (matched >= 0) return matched;
+  }
+  return nextFrames.length - 1;
+};
+
 export const aqiLabel = (value: number | null) => {
   if (value === null) return "Unavailable";
   if (value <= 20) return "Good";

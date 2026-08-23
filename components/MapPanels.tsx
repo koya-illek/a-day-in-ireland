@@ -122,7 +122,7 @@ export function DetailCard({
           else focusFallback();
         });
       } else {
-        // The opener is already gone — its item expired underneath the open
+        // The opener is already gone: its item expired underneath the open
         // dialog, so restoring focus to it would strand keyboard users on
         // <body>. The fallback parks them on a surviving map marker instead.
         focusFallback();

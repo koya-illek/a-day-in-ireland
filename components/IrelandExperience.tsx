@@ -77,6 +77,7 @@ import {
   movementItemIdentity,
   movementMarkerId,
   pluralise,
+  restoredRadarFrameIndex,
   weatherNarrative
 } from "./experience-model";
 import {
@@ -475,6 +476,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [showAllNotables, setShowAllNotables] = useState(false);
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string; focus?: ContextFocus } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
+  const radarFrameIndexRef = useRef(radarFrameIndex);
+  useEffect(() => {
+    radarFrameIndexRef.current = radarFrameIndex;
+  }, [radarFrameIndex]);
   const [radarPlaying, setRadarPlaying] = useState(false);
   const [radarTileState, setRadarTileState] = useState<{
     frameKey: string;
@@ -786,6 +791,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }));
     };
     const updateCurrentContexts = async () => {
+      const previousRadar = liveSnapshotRef.current.radar;
+      const selectedRadarFrameIndex = radarFrameIndexRef.current;
       const next = await refreshCurrentContexts(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
@@ -807,7 +814,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         contextProvenance: next.contextProvenance,
         warnings: next.warnings
       }));
-      if (active) setRadarFrameIndex(Math.max(0, next.radar.length - 1));
+      if (active) setRadarFrameIndex(restoredRadarFrameIndex(previousRadar, selectedRadarFrameIndex, next.radar));
     };
     const updateTransit = async () => {
       const next = await refreshTransit(liveSnapshotRef.current);

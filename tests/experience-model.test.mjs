@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const { irelandClockParts, irelandEditorialMoment, formatTime } = await (async () => {
+const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex } = await (async () => {
   const source = await readFile(new URL("../components/experience-model.ts", import.meta.url), "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
@@ -39,4 +39,16 @@ test("Irish midnight is 00:00 rather than 24:00", () => {
   assert.equal(midnight.clock, "00:00");
   assert.equal(formatTime(new Date("2026-08-14T00:00:00+01:00")), "00:00");
   assert.equal(midnight.weekday, "Friday");
+});
+
+test("radar refresh keeps the parked frame by wall-clock instant, not raw position", () => {
+  const previousFrames = ["10:00", "10:05", "10:10", "10:15", "10:20"].map((time) => ({ observedAt: `2026-08-05T${time}:00Z` }));
+  // The window slides: two new frames arrive at the end and the oldest drops off.
+  const nextFrames = ["10:05", "10:10", "10:15", "10:20", "10:25", "10:30"].map((time) => ({ observedAt: `2026-08-05T${time}:00Z` }));
+
+  assert.equal(restoredRadarFrameIndex(previousFrames, 2, nextFrames), 1, "a parked older frame follows its instant through the slide");
+  assert.equal(restoredRadarFrameIndex(previousFrames, previousFrames.length - 1, nextFrames), nextFrames.length - 1, "riding the newest frame follows the window forward");
+  assert.equal(restoredRadarFrameIndex(previousFrames, 0, nextFrames), nextFrames.length - 1, "an instant the provider dropped falls back to the newest frame");
+  assert.equal(restoredRadarFrameIndex([], 0, nextFrames), nextFrames.length - 1, "no previous frames lands on the newest frame");
+  assert.equal(restoredRadarFrameIndex(previousFrames, 2, []), 0, "an empty refreshed window is clamped safely");
 });
