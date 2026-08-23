@@ -5,6 +5,7 @@ import {
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -1058,6 +1059,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     width: mapDimensions.width,
     height: mapDimensions.height
   }), [mapDimensions.height, mapDimensions.width, mapView]);
+  const deferredMapViewport = useDeferredValue(mapViewport);
   const isDenseView = (activePreset === "all" || activePreset === "water" || layers.size >= 8) && mapView.scale < 2.4;
   const sourceAirQuality = useMemo(() => {
     if (!snapshotReadable) return [];
@@ -1087,10 +1089,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (station) => `station:${station.id}`,
       (station) => (station.rainfall ?? 0) > 0 ? 20 : 0
     ),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? (activePreset === "all" ? 38 : 30) : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, activePreset, isDenseView, layers, mapViewport, projection, snapshot.sourceStatus, snapshot.stations, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, activePreset, deferredMapViewport, isDenseView, layers, projection, snapshot.sourceStatus, snapshot.stations, snapshotReadable]);
   const displayedRivers = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback")
@@ -1099,10 +1101,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       projection,
       (river) => `river:${river.id}`
     ),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? (activePreset === "all" ? 42 : 32) : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, activePreset, isDenseView, mapViewport, projection, snapshot.rivers, snapshot.sourceProvenance?.rivers.status, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, activePreset, deferredMapViewport, isDenseView, projection, snapshot.rivers, snapshot.sourceProvenance?.rivers.status, snapshotReadable]);
   const displayedMarine = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && snapshot.contextStatus.marine === "live" ? snapshot.marine : [],
@@ -1110,10 +1112,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (reading) => `buoy:${reading.id}`,
       (reading) => reading.kind === "weather-buoy" ? 10 : 0
     ),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? 40 : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.contextStatus.marine, snapshot.marine, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, isDenseView, projection, snapshot.contextStatus.marine, snapshot.marine, snapshotReadable]);
   const displayedTides = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && (snapshot.contextStatus.tides === "live" || snapshot.contextStatus.tides === "fallback") ? snapshot.tides : [],
@@ -1121,10 +1123,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (tide) => `tide:${tide.id}`,
       (tide) => tide.surge !== null && Math.abs(tide.surge) >= .2 ? 80 : 20
     ),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? 38 : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.contextStatus.tides, snapshot.tides, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, isDenseView, projection, snapshot.contextStatus.tides, snapshot.tides, snapshotReadable]);
   const displayedBathingAlerts = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback") ? snapshot.bathingAlerts : [],
@@ -1132,10 +1134,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (alert) => `bathing:${alert.id}`,
       () => 100
     ),
-    mapViewport,
+    deferredMapViewport,
     0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, mapViewport, projection, snapshot.bathingAlerts, snapshot.contextStatus.bathing, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, projection, snapshot.bathingAlerts, snapshot.contextStatus.bathing, snapshotReadable]);
   const bathingMarkerPoints = useMemo(() => {
     const groups = new Map<string, Array<{ id: string; x: number; y: number }>>();
     for (const alert of displayedBathingAlerts) {
@@ -1172,10 +1174,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [displayedBathingAlerts, mapDimensions.height, mapDimensions.width, mapView.scale, projection]);
   const displayedAirQuality = useMemo(() => selectDeclutteredPoints(
     projectReadings(sourceAirQuality, projection, (reading) => `air:${reading.id}`, (reading) => reading.source === "measured" ? 60 : 10),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? 40 : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, sourceAirQuality]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, isDenseView, projection, sourceAirQuality]);
   const displayedEarthquakes = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback") ? snapshot.earthquakes : [],
@@ -1183,10 +1185,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (reading) => `earthquake:${reading.id}`,
       (reading) => reading.magnitude * 10
     ),
-    mapViewport,
+    deferredMapViewport,
     isDenseView ? 40 : 0,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.contextStatus.earthquakes, snapshot.earthquakes, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, isDenseView, projection, snapshot.contextStatus.earthquakes, snapshot.earthquakes, snapshotReadable]);
   // Deduplicated once per data change instead of twice per clock tick: every
   // second the component re-renders, and the marker count below and the
   // movement stacks above consume the same arrays.
@@ -1241,7 +1243,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         : 44;
     return clusterProjectedPoints(
       movementPoints,
-      mapViewport,
+      deferredMapViewport,
       clusterRadius + (activePreset === "all" ? 8 : 0),
       focusedMovementIdentity
     ).map((cluster) => {
@@ -1254,7 +1256,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         items
       };
     });
-  }, [activeMarkerId, activePreset, mapDimensions.width, mapViewport, movementPoints]);
+  }, [activeMarkerId, activePreset, deferredMapViewport, mapDimensions.width, movementPoints]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
 
