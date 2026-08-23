@@ -33,8 +33,30 @@ const roadsGzipBytes = roads ? gzipSync(readFileSync(roads), { level: 9 }).lengt
 const indexHtmlPath = join(root, "index.html");
 if (!existsSync(indexHtmlPath)) throw new Error("dist/client/index.html is missing; run npm run build first");
 const indexHtml = readFileSync(indexHtmlPath, "utf8");
+const assetPath = (url) => join(root, decodeURIComponent(new URL(url, "https://day.illek.ie").pathname.slice(1)));
+const initialScriptTags = [...indexHtml.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)];
+const initialJavascript = initialScriptTags
+  .filter(([tag]) => !/\bnomodule\b/i.test(tag))
+  .map(([, url]) => assetPath(url));
+const initialStylesheets = [...indexHtml.matchAll(/<link\b[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"[^>]*>/gi)]
+  .map(([, url]) => assetPath(url));
+for (const path of [...initialJavascript, ...initialStylesheets]) {
+  if (!existsSync(path)) throw new Error(`Initial asset is missing: ${path}`);
+}
+const totalBytes = (paths) => paths.reduce((total, path) => total + bytes(path), 0);
+const totalGzipBytes = (paths) => paths.reduce(
+  (total, path) => total + gzipSync(readFileSync(path), { level: 9 }).length,
+  0
+);
+const initialJavascriptBytes = totalBytes(initialJavascript);
+const initialJavascriptGzipBytes = totalGzipBytes(initialJavascript);
+const initialStylesheetBytes = totalBytes(initialStylesheets);
+const initialStylesheetGzipBytes = totalGzipBytes(initialStylesheets);
+const initialPageJavascript = initialJavascript.find((path) => /\/chunks\/app\/page-[^/]+\.js$/.test(path));
+if (!initialPageJavascript) throw new Error("The landing page JavaScript chunk is missing");
+const initialPageJavascriptBytes = bytes(initialPageJavascript);
 const initialRequests =
-  (indexHtml.match(/<script\b[^>]*\bsrc=/g)?.length ?? 0) +
+  initialJavascript.length +
   (indexHtml.match(/<link\b[^>]*\brel="stylesheet"/g)?.length ?? 0) +
   (indexHtml.match(/<link\b[^>]*\brel="preload"/g)?.length ?? 0);
 
@@ -44,6 +66,11 @@ const budgets = {
   transitMetadataBytes: 4_000_000,
   transitMetadataGzipBytes: 500_000,
   roadGeometryGzipBytes: 150_000,
+  initialJavascriptBytes: 650_000,
+  initialJavascriptGzipBytes: 197_000,
+  initialPageJavascriptBytes: 235_000,
+  initialStylesheetBytes: 125_000,
+  initialStylesheetGzipBytes: 25_000,
   initialRequestBudget: 24
 };
 const failures = [];
@@ -52,6 +79,11 @@ if (largestHtml > budgets.largestHtmlBytes) failures.push(`largest HTML document
 if (transitBytes > budgets.transitMetadataBytes) failures.push(`transit metadata is ${transitBytes} bytes`);
 if (transitGzipBytes > budgets.transitMetadataGzipBytes) failures.push(`gzip transit metadata is ${transitGzipBytes} bytes`);
 if (roadsGzipBytes > budgets.roadGeometryGzipBytes) failures.push(`gzip road geometry is ${roadsGzipBytes} bytes`);
+if (initialJavascriptBytes > budgets.initialJavascriptBytes) failures.push(`initial JavaScript is ${initialJavascriptBytes} bytes`);
+if (initialJavascriptGzipBytes > budgets.initialJavascriptGzipBytes) failures.push(`gzip initial JavaScript is ${initialJavascriptGzipBytes} bytes`);
+if (initialPageJavascriptBytes > budgets.initialPageJavascriptBytes) failures.push(`landing page JavaScript is ${initialPageJavascriptBytes} bytes`);
+if (initialStylesheetBytes > budgets.initialStylesheetBytes) failures.push(`initial stylesheets are ${initialStylesheetBytes} bytes`);
+if (initialStylesheetGzipBytes > budgets.initialStylesheetGzipBytes) failures.push(`gzip initial stylesheets are ${initialStylesheetGzipBytes} bytes`);
 if (initialRequests > budgets.initialRequestBudget) failures.push(`landing document declares ${initialRequests} initial requests, over the budget of ${budgets.initialRequestBudget}`);
 if (failures.length) throw new Error(`Performance budget exceeded: ${failures.join("; ")}`);
 
@@ -64,6 +96,11 @@ console.log(JSON.stringify({
     transitBytes,
     transitGzipBytes,
     roadGeometryGzipBytes: roadsGzipBytes,
+    initialJavascriptBytes,
+    initialJavascriptGzipBytes,
+    initialPageJavascriptBytes,
+    initialStylesheetBytes,
+    initialStylesheetGzipBytes,
     initialRequests
   }
 }, null, 2));

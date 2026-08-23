@@ -12,6 +12,7 @@ import {
   useState
 } from "react";
 import { createPortal } from "react-dom";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
@@ -93,7 +94,6 @@ import {
   type RadarTileStatus,
   type RadarTileStatusReporter
 } from "./MapLayers";
-import { AuroraPanel, DetailCard, GridPanel, IssPanel } from "./MapPanels";
 import { HistoryControls, historyResolutionLabel } from "./HistoryControls";
 import { ExplorePanel } from "./ExplorePanel";
 import { OfficialNotices } from "./OfficialNotices";
@@ -104,6 +104,22 @@ import { PlaceContext } from "./PlaceContext";
 import { FreshnessStrip } from "./FreshnessStrip";
 import { constrainMapView, useMapGestures } from "./use-map-gestures";
 
+const DeferredDetailCard = dynamic(
+  () => import("./MapPanels").then(({ DetailCard }) => DetailCard),
+  { loading: () => <p className="station-card" role="status">Loading details…</p> }
+);
+const DeferredGridPanel = dynamic(
+  () => import("./MapPanels").then(({ GridPanel }) => GridPanel),
+  { loading: () => <p className="map-data-panel" role="status">Loading grid context…</p> }
+);
+const DeferredAuroraPanel = dynamic(
+  () => import("./MapPanels").then(({ AuroraPanel }) => AuroraPanel),
+  { loading: () => <p className="map-data-panel" role="status">Loading aurora context…</p> }
+);
+const DeferredIssPanel = dynamic(
+  () => import("./MapPanels").then(({ IssPanel }) => IssPanel),
+  { loading: () => <p className="map-data-panel" role="status">Loading ISS context…</p> }
+);
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
 
@@ -1182,7 +1198,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       ? deduplicateMovementRecords(snapshot.transit)
       : []
   }), [snapshot.sourceProvenance?.trains.status, snapshot.transitStatus, snapshot.trains, snapshot.transit, snapshotReadable, timeMode]);
-  const movementStacks = useMemo<MovementStack[]>(() => {
+  const movementPoints = useMemo<ProjectedPoint<MovementSelection>[]>(() => {
     const points: ProjectedPoint<MovementSelection>[] = [];
 
     if (timeMode !== "past" && snapshotReadable && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live") {
@@ -1212,6 +1228,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         });
       }
     }
+    return points;
+  }, [deduplicatedMovement, layers, projection, snapshot.sourceProvenance?.trains.status, snapshot.transitStatus, snapshotReadable, timeMode]);
+  const movementStacks = useMemo<MovementStack[]>(() => {
     const focusedMovementIdentity = activeMarkerId?.startsWith("movement:")
       ? activeMarkerId.slice("movement:".length)
       : null;
@@ -1221,7 +1240,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         ? 54
         : 44;
     return clusterProjectedPoints(
-      points,
+      movementPoints,
       mapViewport,
       clusterRadius + (activePreset === "all" ? 8 : 0),
       focusedMovementIdentity
@@ -1235,7 +1254,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         items
       };
     });
-  }, [activeMarkerId, activePreset, deduplicatedMovement, layers, mapDimensions.width, mapViewport, projection, snapshot.sourceProvenance?.trains.status, snapshot.transitStatus, snapshotReadable, timeMode]);
+  }, [activeMarkerId, activePreset, mapDimensions.width, mapViewport, movementPoints]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
 
@@ -2866,9 +2885,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           >
             <summary>Whole-island context · {[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length} panel{[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length === 1 ? "" : "s"}</summary>
             <div className="map-context-grid">
-              {layers.has("grid") && <GridPanel historical={timeMode === "past"} grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} />}
-              {layers.has("aurora") && <AuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} />}
-              {layers.has("iss") && <IssPanel historical={timeMode === "past"} iss={online && (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") ? snapshot.iss : null} />}
+              {layers.has("grid") && <DeferredGridPanel historical={timeMode === "past"} grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} />}
+              {layers.has("aurora") && <DeferredAuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} />}
+              {layers.has("iss") && <DeferredIssPanel historical={timeMode === "past"} iss={online && (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") ? snapshot.iss : null} />}
             </div>
           </details>
         )}
@@ -2963,7 +2982,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="detail-modal-layer" onClick={(event) => {
           if (event.target === event.currentTarget) setSelected(null);
         }}>
-          <DetailCard
+          <DeferredDetailCard
             selected={selected}
             historical={timeMode === "past"}
             onClose={() => setSelected(null)}
