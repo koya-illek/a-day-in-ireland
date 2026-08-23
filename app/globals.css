@@ -171,14 +171,6 @@ button { color: inherit; }
 .theme-button span { font-size: 1rem; line-height: 0; }
 .theme-button:hover, .theme-button:focus-visible { border-color: var(--amber); color: var(--amber); }
 .panel-button { color: var(--deep); font-weight: 600}
-.hero-copy {
-  left: clamp(1.2rem, 6vw, 6rem);
-  max-width: 36rem;
-  position: absolute;
-  top: clamp(7.5rem, 18vh, 12rem);
-  z-index: 8;
-  pointer-events: none;
-}
 .utility-label {
   color: var(--amber);
   font-size: .68rem;
@@ -186,24 +178,6 @@ button { color: inherit; }
   letter-spacing: .15em;
   margin: 0 0 .75rem;
   text-transform: uppercase;
-}
-.hero-copy h1 {
-  font-family: "Newsreader", Georgia, serif;
-  font-size: clamp(3rem, 6.5vw, 6.8rem);
-  font-weight: 400;
-  letter-spacing: -.055em;
-  line-height: .88;
-  margin: 0;
-  max-width: 9ch;
-  text-wrap: balance;
-}
-.hero-copy > p:not(.utility-label) {
-  color: #c7d1c5;
-  font-family: "Newsreader", serif;
-  font-size: clamp(1rem, 1.5vw, 1.25rem);
-  line-height: 1.45;
-  margin: 1.25rem 0;
-  max-width: 33rem;
 }
 .moment-facts { display: flex; flex-wrap: wrap; gap: .6rem; }
 .moment-facts span {
@@ -637,9 +611,6 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 
 @media (max-width: 780px) {
       .icon-button { display: none; }
-  .hero-copy { left: 1.15rem; right: 1.15rem; top: 7.5rem; }
-  .hero-copy h1 { font-size: clamp(3.3rem, 15vw, 5.3rem); max-width: 8ch; }
-  .hero-copy > p:not(.utility-label) { font-size: 1rem; max-width: 25rem; }
   .moment-facts { gap: .35rem; }
   .map-stage { height: 54rem; min-height: 54rem; }
   .ireland-map { bottom: -1.5rem; height: 45rem; min-width: 45rem; right: -8.5rem; top: auto; width: 45rem; }
@@ -1050,22 +1021,6 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   z-index: 12;
   pointer-events: none;
 }
-.desktop-context-stack {
-  display: grid;
-  gap: .6rem;
-  position: absolute;
-  right: 1rem;
-  top: 4rem;
-  width: min(21rem, calc(100% - 2rem));
-  z-index: 12;
-}
-.desktop-context-stack .map-data-panel {
-  position: relative;
-  right: auto;
-  top: auto;
-  width: 100%;
-  z-index: auto;
-}
 .map-data-panel h2 { font-size: 1.15rem; margin: 0 0 .8rem; }
 .map-data-panel dl { display: grid; gap: .4rem; grid-template-columns: 1fr 1fr; margin: .8rem 0 0; }
 .map-data-panel dl div { background: #101d33; border: 1px solid var(--line); padding: .5rem; }
@@ -1256,47 +1211,6 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   border-radius: .4rem;
   margin-top: 1rem;
   padding: 1.35rem}
-.context-actions {
-  display: grid;
-  gap: .7rem;
-  grid-template-columns: repeat(4, 1fr);
-  margin: .7rem auto 0;
-  max-width: 96rem;
-  padding: 0 clamp(1rem, 5vw, 5rem);
-}
-.context-actions button {
-  align-items: center;
-  background: #0d192b;
-  border: 1px solid var(--line);
-  border-radius: .4rem;
-  color: var(--ink);
-  cursor: pointer;
-  display: grid;
-  gap: .18rem .7rem;
-  grid-template-columns: auto 1fr auto;
-  padding: .9rem;
-  text-align: left;
-}
-.context-actions button:hover, .context-actions button:focus-visible {
-  background: #112039;
-  border-color: rgba(109, 151, 178, .46);
-}
-.context-actions span {
-  align-items: center;
-  background: rgba(109, 151, 178, .1);
-  border: 1px solid rgba(109, 151, 178, .24);
-  border-radius: .3rem;
-  color: var(--accent-gold);
-  display: flex;
-  font-size: .9rem;
-  grid-row: 1 / 3;
-  height: 2.2rem;
-  justify-content: center;
-  width: 2.2rem;
-}
-.context-actions b { font-size: .72rem; }
-.context-actions small { color: var(--muted); font: .55rem ui-monospace, monospace; grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.context-actions i { color: var(--green); font: normal .55rem ui-monospace, monospace; grid-column: 3; grid-row: 1 / 3; white-space: nowrap; }
 .dayline-heading {
   align-items: start;
   border-bottom: 1px solid var(--line);
@@ -1373,8 +1287,6 @@ footer {
   .island-pulse { grid-template-columns: repeat(3, 1fr); }
   .pulse-intro { grid-column: 1 / -1; min-height: 0; }
   .pulse-intro h2 { max-width: none; }
-  .context-actions { padding-left: 1rem; padding-right: 1rem; }
-  .context-actions { grid-template-columns: repeat(2, 1fr); }
   .notable-now { grid-template-columns: 1fr; margin-left: 1rem; margin-right: 1rem; max-width: none; }
 }
 
@@ -1433,11 +1345,9 @@ footer {
   .map-notice { left: .55rem; max-width: calc(100% - 1.1rem); padding: .55rem .7rem; top: .55rem; }
   .map-notice > span { margin-bottom: .2rem; }
   .map-notice p { display: none; }
-  .context-actions { grid-template-columns: 1fr; padding-left: .7rem; padding-right: .7rem; }
   .notable-now { margin-left: .7rem; margin-right: .7rem; padding: .9rem; }
   .notable-signals { grid-template-columns: 1fr; }
   .radar-control { bottom: 2.3rem; left: .55rem; width: calc(100% - 1.1rem); }
-  .desktop-context-panel, .desktop-context-stack { display: none; }
   .mobile-context-panel {
     display: block;
     left: auto;
@@ -1469,7 +1379,7 @@ footer {
   .section-rail { padding: .5rem; }
   .map-explorer-heading > div > p:last-child { font-size: .82rem; line-height: 1.5; }
   .map-caption, .place-context p, .freshness-strip, .official-notices p, .forecast-strip p { font-size: .8rem; line-height: 1.5; }
-  .map-presets button, .history-mode-toggle button, .context-actions button { min-height: 44px; }
+  
   .workspace-heading, .map-stage, .place-context, .freshness-strip, .official-notices, .what-matters-now, .dayline { border-radius: 1rem; }
   .what-matters-grid .pulse-card small { font-size: .82rem; line-height: 1.5; }
   .dayline-heading > p { font-size: .8rem; line-height: 1.45; }
@@ -2445,8 +2355,6 @@ footer {
 .preset-scroll-hint,
 .freshness-chip b,
 .place-observations dt,
-.context-actions small,
-.context-actions i,
 .dayline-heading > p,
 .layer-group-controls small,
 .layer-list small,
@@ -2586,24 +2494,6 @@ footer {
   font-family: ui-monospace, monospace;
   margin: .35rem .55rem 0}
 
-.custom-view-state,
-.map-custom-view {
-  background: rgba(149, 171, 116, .09);
-  border-left: 3px solid var(--green);
-  color: #dffef3;
-  font: 700 .8125rem/1.35 ui-monospace, monospace;
-  margin: .7rem 0 0;
-  padding: .55rem .7rem;
-}
-
-.map-custom-view {
-  align-items: center;
-  border-left: 0;
-  border-radius: 999px;
-  display: flex;
-  margin: 0;
-  white-space: nowrap;
-}
 
 .freshness-strip .refresh-data-button:disabled {
   color: var(--muted);
@@ -2848,7 +2738,6 @@ footer {
   .section-rail nav::-webkit-scrollbar-thumb { background: var(--green); }
   .section-rail nav::-webkit-scrollbar-track { background: #101d33; }
   .preset-scroll-hint { display: block; }
-  .custom-view-state { margin: .45rem .55rem 0; }
 }
 
 @media (max-width: 600px) {
@@ -4618,7 +4507,6 @@ html[data-theme="light"] :where(
   .map-presets button,
   .map-navigation button,
   .layer-list > button,
-  .context-actions button,
   .panel-presets button,
   .freshness-chip,
   .source-directory a
@@ -4774,6 +4662,31 @@ html[data-theme="light"] .history-retry {
   color: #5d4520;
 }
 html[data-theme="light"] .history-result a { color: #0b4a56; }
+
+/* Third pass over pale text literals that survived the two surface sweeps:
+   their containers now flip light, so the dark-theme literals fail contrast
+   (measured 1.02:1 to 2.86:1) until remapped here. */
+html[data-theme="light"] .place-picker h2 { color: var(--ink); }
+html[data-theme="light"] .warning-strip.red {
+  background: rgba(167, 93, 67, .12);
+  border-color: rgba(139, 57, 42, .45);
+  border-left-color: var(--warning-strong);
+  color: #5d2018;
+}
+html[data-theme="light"] .warning-actions a,
+html[data-theme="light"] .warning-actions summary { color: #223041; }
+html[data-theme="light"] :is(.history-picker label, .history-scrubber, .history-ambiguity label, .timeline-data-list > summary) { color: #263d35; }
+html[data-theme="light"] .history-period-summary dd { color: #223041; }
+html[data-theme="light"] .guidance-card.relevant-notice .guidance-status { color: #8b392a; }
+html[data-theme="light"] .guidance-card.limited-context .guidance-status,
+html[data-theme="light"] .guidance-card.no-current-signal .guidance-status,
+html[data-theme="light"] .guidance-card.live-coverage .guidance-status,
+html[data-theme="light"] .guidance-card.connecting .guidance-status { color: #34527a; }
+html[data-theme="light"] .place-limits { color: var(--muted); }
+html[data-theme="light"] footer nav a { color: var(--green); }
+html[data-theme="light"] footer nav a:hover,
+html[data-theme="light"] footer nav a:focus-visible { color: #173229; }
+html[data-theme="light"] .detail-emblem.warning { color: var(--warning-strong); }
 
 /* Cluster-count digits sit on circle fills that darken in this theme. */
 html[data-theme="light"] .movement-stack-marker text,
