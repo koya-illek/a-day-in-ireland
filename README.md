@@ -43,6 +43,8 @@ The checked-in Worker candidate is configured for Workers Paid, with one direct 
 
 The Worker serves the exported frontend directly from its static asset binding on `day.illek.ie`.
 
+Both hosting adapters share one Worker API core (`platform/api-core.js`): provider acquisition, the context refresh state machine, cache tiers, error contracts, and API dispatch are defined exactly once, so endpoint behaviour cannot drift between the Cloudflare production adapter and the alternate hosting adapter.
+
 `/api/health` reports the deployed build's provenance (commit, build time, config and data hashes) by reading `build-provenance.json`, which every build writes into the served assets. Missing or unreadable provenance degrades to `unknown`; it never fails the endpoint.
 
 The build generates a hash-based script CSP: after the static export lands in `dist/client`, `scripts/write-csp-headers.mjs` replaces `script-src 'unsafe-inline'` with sha256 hashes of every inline script found in the exported documents. `public/_headers` stays valid on its own if that step is skipped.

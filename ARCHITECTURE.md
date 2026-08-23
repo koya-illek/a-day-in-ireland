@@ -55,6 +55,7 @@ flowchart LR
 | Browser data client | Refreshes browser-compatible weather and monitored-air sources, merges responses, retains valid last-good evidence, enriches transit destinations, and handles offline state | `lib/browser-live.ts`, `lib/live-data.ts`, `lib/data-state.ts` |
 | Experience model | Controls layers, place context, map projections, selections, movement clustering, history mode, accessibility, and presentation semantics | `components/IrelandExperience.tsx`, `components/experience-model.ts` |
 | Cloudflare Worker | Serves static assets and API routes, enforces method boundaries, merges provider results, dispatches history, and handles scheduled capture | `platform/cloudflare-entry.js`, `platform/server-entry.js` |
+| Shared Worker API core | One implementation of provider acquisition, context refresh state, HTTP contract, and `/api/*` dispatch for every hosting adapter; entrypoints contribute only bindings and static serving | `platform/api-core.js` |
 | Source adapters | Normalize bounded provider payloads into typed internal evidence | `platform/history-sources.js`, `platform/live-normalize.js`, `platform/sky-source.js`, `platform/river-source.js` |
 | NTA coordinator | Globally coalesces credentialed GTFS-Realtime vehicle refreshes and protects the provider token budget | Durable Object `NtaFeedCoordinator` |
 | River coordinator | Coordinates direct OPW retrieval and Cloudflare Browser Rendering fallback | Durable Object `RiverFeedCoordinator` |
@@ -164,6 +165,8 @@ Presentation helpers turn that typed evidence into user-facing language without 
 ## Deployment topology
 
 Production uses one Worker custom domain at `day.illek.ie`. The Worker serves `dist/client`, routes APIs, binds `HISTORY_DB`, `NTA_FEED`, `RIVER_FEED`, and `BROWSER`, and runs the history Cron every 15 minutes. The configuration allows 1,000 ms CPU and 100 subrequests. `workers.dev`, preview URLs, and Pages are disabled.
+
+Both hosting adapters (Cloudflare production and the alternate OpenAI hosting target) delegate to the same shared API core, so endpoint semantics, cache tiers, error contracts, and method boundaries cannot drift between targets. The Cloudflare adapter adds Durable Object coordinators, D1 history, build provenance, and the scheduled tick; the alternate adapter wires direct provider loaders and an SPA fallback for documents.
 
 ## Non-goals
 
