@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
-import { importBrowserLive, importLibData, importStandaloneTypeScript } from "./import-ts.mjs";
+import { importBrowserLive, importStandaloneTypeScript } from "./import-ts.mjs";
 
 import {
   isIrelandCoordinate,
@@ -889,9 +889,8 @@ test("all warning adapters preserve Met Éireann metadata and decode entities", 
   }];
   const shared = normalizeOfficialWeatherWarnings(raw, now);
   const server = (await import("../platform/api-core.js")).normalizeWeatherWarnings(raw, now);
-  const build = (await importLibData()).normalizeWeatherWarnings(raw, now);
   const browser = (await importBrowserLive()).normalizeBrowserWarnings(raw, now);
-  for (const adapter of [shared, server, build, browser]) {
+  for (const adapter of [shared, server, browser]) {
     assert.equal(adapter.length, 1);
     assert.equal(adapter[0].id, "7");
     assert.equal(adapter[0].capId, "cap-rain-1");
@@ -980,7 +979,7 @@ test("EirGrid scans the full byte-bounded row set instead of assuming metric ord
   assert.equal(latestEirGridValue(rows, "SYSTEM_DEMAND", now)?.value, 4321);
 });
 
-test("server and public grid integrations use the newest component timestamp", async () => {
+test("the server grid integration uses the newest component timestamp", async () => {
   const now = Date.parse("2026-08-02T12:30:00.000Z");
   const rowsByChart = {
     demand: [{ FieldName: "SYSTEM_DEMAND", Value: "4200", EffectiveTime: "02-Aug-2026 13:00:00" }],
@@ -997,16 +996,12 @@ test("server and public grid integrations use the newest component timestamp", a
     const chart = new URL(input).searchParams.get("chartType");
     return Response.json({ Rows: rowsByChart[chart] ?? [] });
   };
-  const server = await (await import("../platform/live-normalize.js")).fetchGrid(fetcher, now);
-  const browser = await (await importLibData()).fetchGrid(fetcher, now);
-  for (const result of [server, browser]) {
-    assert.equal(result.status, "live");
-    assert.equal(result.reading.observedAt, "2026-08-02T12:10:00.000Z");
-    assert.equal(result.reading.demandMW, 4200);
-    assert.equal(result.reading.generationMW, 4300);
-    assert.equal(result.reading.carbonIntensity, 250);
-  }
-  assert.deepEqual(browser, server);
+  const result = await (await import("../platform/live-normalize.js")).fetchGrid(fetcher, now);
+  assert.equal(result.status, "live");
+  assert.equal(result.reading.observedAt, "2026-08-02T12:10:00.000Z");
+  assert.equal(result.reading.demandMW, 4200);
+  assert.equal(result.reading.generationMW, 4300);
+  assert.equal(result.reading.carbonIntensity, 250);
 });
 
 test("Met Éireann CSV fallback does not invent fetch-time freshness", async () => {
@@ -1116,9 +1111,8 @@ test("OPW non-OK diagnostics cancel a chunked body as soon as it reaches the cap
   assert.equal(oversized.state.cancelled, true);
 });
 
-test("server, public, and scheduled EirGrid readers cancel before consuming later chunks", async () => {
+test("server and scheduled EirGrid readers cancel before consuming later chunks", async () => {
   const serverApi = await import("../platform/live-normalize.js");
-  const browserApi = await importLibData();
   const { collectGrid } = await import("../platform/history-sources.js");
   const now = Date.parse("2026-08-05T12:00:00.000Z");
 
@@ -1128,16 +1122,6 @@ test("server, public, and scheduled EirGrid readers cancel before consuming late
     /eirgrid-demand-body-too-large/
   );
   assert.deepEqual(serverBody.state, { chunksRead: 2, cancelled: true });
-
-  const browserBodies = [];
-  const browserResult = await browserApi.fetchGrid(async () => {
-    const body = chunkedBodyResponse([128_000, 128_000, 64]);
-    browserBodies.push(body);
-    return body.response;
-  }, now);
-  assert.deepEqual(browserResult, { reading: null, status: "unavailable" });
-  assert.equal(browserBodies.length, 6);
-  assert.ok(browserBodies.every((body) => body.state.chunksRead === 2 && body.state.cancelled));
 
   const scheduledBodies = [];
   const scheduledResult = await collectGrid(async () => {

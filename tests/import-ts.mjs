@@ -35,6 +35,3 @@ const remappedLibUrl = async (relativePath) => {
 
 export const importBrowserLive = async () =>
   import(await remappedLibUrl("../lib/browser-live.ts"));
-
-export const importLibData = async () =>
-  import(await remappedLibUrl("../lib/live-data.ts"));
