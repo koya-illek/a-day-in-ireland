@@ -752,7 +752,16 @@ export async function refreshCurrentContexts(previous: LiveSnapshot): Promise<Li
       ],
       aurora: useIncoming(auroraStatus) ? next.aurora! : retained.aurora,
       tides: useIncoming(tidesStatus) ? next.tides! : retained.tides,
-      bathingAlerts: useIncoming(bathingStatus) ? mergeBathingAlerts(incomingBathingAlerts, retained.bathingAlerts) : retained.bathingAlerts,
+      // A fully live EPA response is authoritative, including its empty
+      // all-clear state: merging retained ids back would resurrect lifted
+      // advisories for up to two days. The merge-back only protects against
+      // degraded tiers (partial/stale/fallback) where the provider list may
+      // genuinely be incomplete.
+      bathingAlerts: useIncoming(bathingStatus)
+        ? bathingStatus === "live"
+          ? incomingBathingAlerts
+          : mergeBathingAlerts(incomingBathingAlerts, retained.bathingAlerts)
+        : retained.bathingAlerts,
       iss: useIncoming(issStatus) && next.issTle ? predictIss(next.issTle.line1, next.issTle.line2) : retained.iss,
       issTle: useIncoming(issStatus) && next.issTle ? next.issTle : retained.issTle,
       satellite: useIncoming(satelliteStatus) ? next.satellite! : retained.satellite,

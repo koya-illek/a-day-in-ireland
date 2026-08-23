@@ -290,6 +290,70 @@ test("last-good retention is age bounded and is always relabelled cached rather 
   assert.equal(retainLastGoodTransit(previous, now + 31 * 60_000).transitStatus, "unavailable");
 });
 
+const bathingRefreshFixtureAlert = () => {
+  const now = Date.now();
+  return {
+    id: "beach-retained",
+    name: "Retained Beach",
+    county: "Clare",
+    latitude: 52.7,
+    longitude: -9.2,
+    restriction: "Advice not to swim",
+    description: "Advisory issued earlier today",
+    startedAt: new Date(now - 60 * 60_000).toISOString(),
+    updatedAt: new Date(now - 60 * 60_000).toISOString(),
+    endsAt: new Date(now + 24 * 60 * 60_000).toISOString(),
+    noticeUrl: null
+  };
+};
+
+const refreshContextsWithBathing = async ({ status, alerts, retainedAlert }) => {
+  const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
+  const { refreshCurrentContexts } = await importWarningAdapter("../lib/browser-live.ts");
+  const now = Date.now();
+  const previous = createInitialSnapshot(new Date(now).toISOString());
+  previous.bathingAlerts = [retainedAlert ?? bathingRefreshFixtureAlert()];
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = {
+    location: { hostname: "localhost" },
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout
+  };
+  globalThis.fetch = async () => Response.json({
+    generatedAt: new Date(now).toISOString(),
+    marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [],
+    bathingAlerts: alerts,
+    warnings: [], warningsStatus: "unavailable", satellite: null, earthquakes: [], issTle: null,
+    contextStatus: {
+      marine: "unavailable", radar: "unavailable", grid: "unavailable", measuredAir: "unavailable",
+      modelledAir: "unavailable", aurora: "unavailable", tides: "unavailable", bathing: status,
+      satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "unavailable"
+    }
+  });
+  try {
+    return await refreshCurrentContexts(previous);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+};
+
+test("a live all-clear drops retained bathing advisories instead of resurrecting them", async () => {
+  const refreshed = await refreshContextsWithBathing({ status: "live", alerts: [] });
+  assert.equal(refreshed.contextStatus.bathing, "live");
+  assert.deepEqual(refreshed.bathingAlerts, []);
+});
+
+test("degraded bathing tiers keep previously seen advisories until the provider confirms removal", async () => {
+  for (const status of ["partial", "stale", "fallback"]) {
+    const retained = bathingRefreshFixtureAlert();
+    const refreshed = await refreshContextsWithBathing({ status, alerts: [], retainedAlert: retained });
+    assert.equal(refreshed.contextStatus.bathing, status);
+    assert.deepEqual(refreshed.bathingAlerts, [retained], status);
+  }
+});
+
 test("browser context refresh preserves partial/stale warnings truth and valid live-empty truth", async () => {
   const { createInitialSnapshot } = await importStandaloneTypeScript("../lib/initial-snapshot.ts");
   const { refreshCurrentContexts } = await importWarningAdapter("../lib/browser-live.ts");
