@@ -1,12 +1,11 @@
-import type { Metadata } from "next";
 import InfoPage from "../../components/InfoPage";
+import { infoPageMetadata } from "../../lib/info-metadata";
 
-export const metadata: Metadata = {
+export const metadata = infoPageMetadata({
   title: "Privacy",
   description: "The privacy approach used by A Day in Ireland.",
-  alternates: { canonical: "/privacy" },
-  openGraph: { url: "/privacy", title: "Privacy · A Day in Ireland", description: "The privacy approach used by A Day in Ireland." }
-};
+  path: "/privacy"
+});
 
 export default function PrivacyPage() {
   return (

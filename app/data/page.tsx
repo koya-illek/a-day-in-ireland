@@ -1,12 +1,11 @@
-import type { Metadata } from "next";
 import InfoPage from "../../components/InfoPage";
+import { infoPageMetadata } from "../../lib/info-metadata";
 
-export const metadata: Metadata = {
+export const metadata = infoPageMetadata({
   title: "Data & methodology",
   description: "Sources, update intervals and interpretation used by A Day in Ireland.",
-  alternates: { canonical: "/data" },
-  openGraph: { url: "/data", title: "Data & methodology · A Day in Ireland", description: "Sources, update intervals and interpretation used by A Day in Ireland." }
-};
+  path: "/data"
+});
 
 const sources = [
   ["Met Éireann", "Weather observations, official warnings and five-minute rain radar", "https://www.met.ie/about-us/specialised-services/open-data"],

@@ -4,9 +4,11 @@ import InfoPage from "../components/InfoPage";
 
 // Without this the error page inherits the homepage canonical/description and
 // claims to be indexable; unknown URLs must not pose as duplicates of "/".
+// The null canonical suppresses the inherited "/" canonical entirely.
 export const metadata: Metadata = {
   title: "Page not found",
-  robots: { index: false, follow: true }
+  robots: { index: false, follow: true },
+  alternates: { canonical: null }
 };
 
 export default function NotFound() {
