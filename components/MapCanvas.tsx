@@ -51,7 +51,7 @@ export function MapCanvas({
         viewBox="0 0 1000 900"
         role="group"
         aria-labelledby="map-title map-description"
-        aria-describedby="map-keyboard-instructions map-marker-announcement"
+        aria-describedby="map-keyboard-instructions"
         onClickCapture={onClickCapture}
         onClick={onClick}
         onPointerDown={onPointerDown}

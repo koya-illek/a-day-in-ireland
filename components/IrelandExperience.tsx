@@ -2192,6 +2192,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       detail: `${notices[focus].title} cannot be refreshed while offline. Last successful refresh ${lastSuccessLabel}; saved values are not presented as current map signals.`,
       focus
     });
+    setMapFeedback(online
+      ? `${notices[focus].title} view focused. ${notices[focus].detail}`
+      : `Offline. ${notices[focus].title} cannot be refreshed while offline.`);
     setRadarPlaying(false);
     if (focus === "radar") setRadarFrameIndex(0);
     window.requestAnimationFrame(() => {
