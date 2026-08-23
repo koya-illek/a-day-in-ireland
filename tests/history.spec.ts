@@ -202,6 +202,8 @@ test("a failed scrubber point can be retried without moving to another time", as
   await scrubber.fill(String(Math.floor(Date.parse(selectedAt) / 1000)));
   await scrubber.dispatchEvent("pointerup");
   await expect(page.locator(".history-result.error")).toContainText("temporary history failure");
+  // A failed load must be reported as a failure, not as a missing record.
+  await expect(page.locator(".connection-chip")).toContainText("Stored conditions could not be loaded");
 
   await scrubber.dispatchEvent("pointerup");
   await expect(page.locator(".history-result.ready")).toContainText("Showing Tue 4 Aug 2026");

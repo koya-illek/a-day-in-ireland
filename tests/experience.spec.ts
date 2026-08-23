@@ -528,6 +528,52 @@ test("the live map leads into selected-place and across-Ireland evidence", async
   expect(readingOrder).toBe(true);
 });
 
+test("a nearby station without a temperature renders an honest unavailable value", async ({ page }) => {
+  const observation = metObservationTime(5);
+  await page.route("https://prodapi.metweb.ie/observations/*/today", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify([{
+      name: "Cork Airport", ...observation,
+      temperature: "", rainfall: "0.2", windSpeed: "9",
+      cardinalWindDirection: "W", weatherDescription: "Mild"
+    }])
+  }));
+  await page.route("https://www.met.ie/latest-reports/observations/download", (route) => route.fulfill({
+    contentType: "text/csv",
+    body: "Name,Temperature,Description,Wind,Unused,Direction,Unused,Rain,Unused\n"
+  }));
+  await page.route("**/api/living", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ trains: [], rivers: [], sourceStatus: { trains: "unavailable", rivers: "unavailable" } })
+  }));
+  await page.route("**/api/transit", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({ transit: [], transitStatus: "unavailable" })
+  }));
+  await page.route("**/api/contexts", (route) => route.fulfill({
+    contentType: "application/json",
+    body: JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      marine: [], radar: [], grid: null, airQuality: [], aurora: null, tides: [],
+      bathingAlerts: [], warnings: [], warningsStatus: "live", issTle: null,
+      satellite: null, earthquakes: [],
+      contextStatus: {
+        marine: "unavailable", radar: "unavailable", grid: "unavailable", measuredAir: "unavailable",
+        modelledAir: "unavailable", aurora: "unavailable", tides: "unavailable", bathing: "unavailable",
+        satellite: "unavailable", earthquakes: "unavailable", iss: "unavailable", warnings: "live"
+      },
+      contextProvenance: {}
+    })
+  }));
+
+  await page.goto("/?place=cork");
+  const temperatureRow = page.locator(".place-observations dl > div").first();
+  await expect(temperatureRow).toContainText("Temperature");
+  // The missing reading must read as unavailable without inventing a unit.
+  await expect(temperatureRow).toContainText("Unavailable");
+  await expect(temperatureRow).not.toContainText("Unavailable°");
+});
+
 test("default island context stays compact until a place is selected", async ({ page }) => {
   await installMapMarkerFixtures(page);
   await page.goto("/");

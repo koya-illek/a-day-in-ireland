@@ -177,7 +177,9 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
   ].filter((part): part is string => part !== null);
   const caveats = [
     relevantWarnings.length
-      ? `${relevantWarnings.length} active activity-relevant Met Éireann notice${relevantWarnings.length === 1 ? "" : "s"} ${relevantWarnings.some((warning) => warningScope(warning, place) === "localized") ? "is localized to named areas" : "applies to this selected scope"}; review the official notice above.`
+      ? `${relevantWarnings.length} active activity-relevant Met Éireann notice${relevantWarnings.length === 1 ? "" : "s"} ${relevantWarnings.some((warning) => warningScope(warning, place) === "localized")
+        ? relevantWarnings.length === 1 ? "is localized to named areas" : "are localized to named areas"
+        : relevantWarnings.length === 1 ? "applies to this selected scope" : "apply to this selected scope"}; review the official notice above.`
       : null,
     unknownWarnings.length
       ? `${unknownWarnings.length} active official notice${unknownWarnings.length === 1 ? " is" : "s are"} displayed separately; ${unknownWarnings.length === 1 ? "its category does" : "their categories do"} not change this observation state.`
@@ -250,7 +252,7 @@ function describeCoast(snapshot: LiveSnapshot, now: number, place: GuidancePlace
       : null,
     tideMeasurement ? "The tide difference is a measurement, not a safety threshold or hazard classification." : null,
     relevantWarnings.length
-      ? `${relevantWarnings.length} active activity-relevant weather notice${relevantWarnings.length === 1 ? "" : "s"} is represented for this scope.`
+      ? `${relevantWarnings.length} active activity-relevant weather notice${relevantWarnings.length === 1 ? " is represented" : "s are represented"} for this scope.`
       : null,
     snapshot.contextStatus.bathing !== "live" && snapshot.contextStatus.bathing !== "fallback"
       ? "The bathing-alert feed is unavailable, so current restrictions cannot be assessed."

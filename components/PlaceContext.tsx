@@ -117,7 +117,7 @@ export function PlaceContext({
             <dl>
               <div>
                 <dt>Temperature</dt>
-                <dd><span className="place-observation-value">{localStation?.item.temperature ?? "Unavailable"}°</span>
+                <dd><span className="place-observation-value">{localStation?.item.temperature == null ? "Unavailable" : `${localStation.item.temperature}°`}</span>
                 <small>{localStation
                   ? formatLocalObservation("Met Éireann", localStation.item, localStation.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} weather observations…` : timeMode === "past" ? weatherGap ?? `No point weather observation was retained within ${NEARBY_RADIUS_KM.weather} km for this historical record.` : !online ? "Offline; saved weather is not used as a current nearby condition." : weatherAvailable ? selectedPlaceIsEphemeral ? "No current weather observation is available." : `No nearby weather observation within ${NEARBY_RADIUS_KM.weather} km.` : "Weather observations are unavailable; nearby conditions cannot be assessed."}</small>
