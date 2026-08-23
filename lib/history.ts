@@ -215,6 +215,20 @@ export function normalizeHistoryRange(value: unknown): HistoryRange {
   return normalizeRange(value);
 }
 
+// Every consumer of a resolved snapshot dereferences these collections
+// directly (92 call sites across the components), so an envelope from a
+// degraded or drifted edge cache that omits any of them must not reach
+// rendering. Such snapshots degrade to absent, with an explicit gap, keeping
+// the product's rule that missing data is reported rather than invented.
+const SNAPSHOT_COLLECTION_FIELDS = [
+  "stations", "warnings", "marine", "trains", "rivers", "radar",
+  "airQuality", "tides", "bathingAlerts", "earthquakes"
+] as const;
+
+const snapshotIsStructurallySound = (value: Record<string, unknown>): boolean =>
+  SNAPSHOT_COLLECTION_FIELDS.every((key) => Array.isArray(value[key])) &&
+  typeof value.contextStatus === "object" && value.contextStatus !== null;
+
 export function normalizeHistoryEnvelope(value: unknown, fallbackRequestedAt: string): HistoryEnvelope {
   if (!value || typeof value !== "object") throw new Error("History response is not an object");
   const record = value as Record<string, unknown>;
@@ -231,12 +245,22 @@ export function normalizeHistoryEnvelope(value: unknown, fallbackRequestedAt: st
       : {};
   const rail = summaryPart(movement.rail, ["running", "total"]);
   const transit = transitSummary(movement.transit);
-  const snapshot = record.snapshot && typeof record.snapshot === "object"
-    ? record.snapshot as LiveSnapshot
+  const rawSnapshot = record.snapshot && typeof record.snapshot === "object"
+    ? record.snapshot as Record<string, unknown>
     : null;
+  const snapshotIsSound = rawSnapshot !== null && snapshotIsStructurallySound(rawSnapshot);
+  const snapshot = snapshotIsSound ? rawSnapshot as LiveSnapshot : null;
   const gaps = Array.isArray(record.gaps)
     ? record.gaps.map(normalizeGap).filter((gap): gap is HistoryGap => gap !== null)
     : [];
+  if (rawSnapshot !== null && !snapshotIsSound) {
+    gaps.push({
+      source: "history",
+      scope: "envelope",
+      reason: "snapshot-shape-unsupported",
+      detail: "The stored snapshot was missing expected collections, so it is shown as absent rather than partially rendered."
+    });
+  }
   return {
     ...range,
     schemaVersion: finiteNonNegative(record.schemaVersion) ?? 1,

@@ -139,6 +139,38 @@ test("history accepts backend transit total/byRoute aliases without inventing mi
   assert.equal(blankStrings.movementSummary.transit, null);
 });
 
+test("a snapshot missing expected collections degrades to absent with an explicit gap", async () => {
+  const history = await importHistory();
+  const base = {
+    schemaVersion: 1,
+    requestedAt: "2026-08-04T17:45:00Z",
+    resolvedAt: "2026-08-04T17:45:00Z",
+    resolutionMinutes: 15,
+    movementSummary: { rail: null, transit: null },
+    gaps: []
+  };
+  const unsound = {
+    stations: [], warnings: [], marine: [], trains: [], rivers: [],
+    radar: [], airQuality: [], tides: [], bathingAlerts: [],
+    // earthquakes dropped: contract drift from a degraded edge response
+    contextStatus: {}
+  };
+  const degraded = history.normalizeHistoryEnvelope({ ...base, snapshot: unsound }, base.requestedAt);
+  assert.equal(degraded.snapshot, null);
+  assert.equal(degraded.gaps.some((gap) => gap.reason === "snapshot-shape-unsupported"), true);
+
+  const sound = history.normalizeHistoryEnvelope({
+    ...base,
+    snapshot: {
+      ...unsound,
+      earthquakes: [],
+      contextStatus: { warnings: "unavailable" }
+    }
+  }, base.requestedAt);
+  assert.notEqual(sound.snapshot, null);
+  assert.equal(sound.gaps.length, 0);
+});
+
 test("only daily summaries may be usable without a detailed snapshot", async () => {
   const history = await importHistory();
   const base = {
