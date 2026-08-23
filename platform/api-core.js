@@ -834,8 +834,9 @@ export const CONTEXT_SOURCE_POLICIES = Object.freeze({
   aurora: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 60 * 60_000, circuitBaseMs: 60_000 },
   tides: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
   bathingAlerts: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
-  // Satellite discovery costs up to 8 subrequests per miss, so concurrent
-  // cold contexts must share one in-flight refresh like every other source.
+  // Satellite discovery costs up to 13 subrequests per miss (one domains
+  // fetch plus six lookback days × two probe tiles), so concurrent cold
+  // contexts must share one in-flight refresh like every other source.
   satellite: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
   earthquakes: { ttlMs: 15 * 60_000, jitterMs: 45_000, staleIfErrorMs: 2 * 60 * 60_000, circuitBaseMs: 60_000 },
   issTle: { ttlMs: 6 * 60 * 60_000, jitterMs: 15 * 60_000, staleIfErrorMs: 24 * 60 * 60_000, circuitBaseMs: 5 * 60_000 },
