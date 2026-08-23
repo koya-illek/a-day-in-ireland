@@ -20,12 +20,14 @@ export function DetailCard({
   onClose,
   onStackChange,
   openerRef,
+  onFocusFallback,
   historical = false
 }: {
   selected: MapSelection;
   onClose: () => void;
   onStackChange: (index: number) => void;
   openerRef: { current: SVGElement | null };
+  onFocusFallback?: () => void;
   historical?: boolean;
 }) {
   const stack = selected.type === "movement-stack" ? selected : null;
@@ -41,6 +43,8 @@ export function DetailCard({
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const onFocusFallbackRef = useRef(onFocusFallback);
+  onFocusFallbackRef.current = onFocusFallback;
 
   const movementMatches = useMemo(() => {
     if (!stack) return [];
@@ -111,10 +115,17 @@ export function DetailCard({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.documentElement.style.overflow = previousOverflow;
+      const focusFallback = () => onFocusFallbackRef.current?.();
       if (previouslyFocused?.isConnected) {
         window.requestAnimationFrame(() => {
           if (previouslyFocused.isConnected) previouslyFocused.focus();
+          else focusFallback();
         });
+      } else {
+        // The opener is already gone — its item expired underneath the open
+        // dialog, so restoring focus to it would strand keyboard users on
+        // <body>. The fallback parks them on a surviving map marker instead.
+        focusFallback();
       }
     };
   }, [openerRef]);

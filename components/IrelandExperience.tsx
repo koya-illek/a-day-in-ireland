@@ -496,6 +496,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [mapFeedback, setMapFeedback] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState(() => new Date(initialSnapshot.generatedAt));
   const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
+  // When a detail dialog closes and its opening marker no longer exists (the
+  // item expired underneath it), park keyboard focus on a surviving marker
+  // instead of letting it fall to <body>. Deferred past the commit so the
+  // dialog teardown and inert removal have settled.
+  const parkMapFocusAfterDetailClose = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      mapRef.current?.querySelector<SVGGElement>("[data-map-marker]")?.focus({ preventScroll: true });
+    });
+  }, []);
   const liveSnapshotRef = useRef(initialSnapshot);
   const refreshAllRef = useRef<() => Promise<void>>(async () => undefined);
   const lastRefreshAllAtRef = useRef(0);
@@ -2897,6 +2906,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             historical={timeMode === "past"}
             onClose={() => setSelected(null)}
             openerRef={markerOpenerRef}
+            onFocusFallback={parkMapFocusAfterDetailClose}
             onStackChange={(index) => {
               setSelected((current) => current?.type === "movement-stack"
                 ? { ...current, index }
