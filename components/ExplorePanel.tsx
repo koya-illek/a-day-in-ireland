@@ -97,7 +97,14 @@ export function ExplorePanel({
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      if (opener?.isConnected) opener.focus();
+      if (opener?.isConnected) {
+        // Deferred like DetailCard: closing also removes the page-inert
+        // attribute in the same commit, and a synchronous focus() into the
+        // still-inert page would be silently dropped by the browser.
+        window.requestAnimationFrame(() => {
+          if (opener.isConnected) opener.focus();
+        });
+      }
       document.body.style.overflow = "";
     };
   }, [onOpenChange, open, openerRef]);

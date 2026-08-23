@@ -889,37 +889,41 @@ test("weather and wind share one accessible station entry while wind-only remain
 test("station identity and focus survive weather and wind representation changes", async ({ page }) => {
   await installMapMarkerFixtures(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  const explore = page.getByRole("button", { name: "Explore", exact: true });
   const weatherLayer = page.locator(".explore-panel").getByRole("button", { name: /Weather stations/ });
   const finner = page.locator("[data-marker-id='station:finner']");
+
+  // Park focus on the station first so its identity owns the roving tab stop.
   await finner.focus();
+  await expect(finner).toBeFocused();
 
-  const toggleWithoutMovingFocus = () => weatherLayer.evaluate((button) => {
-    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
-
-  await toggleWithoutMovingFocus();
+  // The drawer inerts the page behind it, so representation switches happen
+  // through the drawer; the map keeps the station's identity throughout.
+  await explore.click();
+  await weatherLayer.click();
   const windFinner = page.locator(".wind-marker[data-marker-id='station:finner']");
   await expect(windFinner).toBeVisible();
   await expect(page.locator(".station-marker")).toHaveCount(0);
-  await expect(windFinner).toBeFocused();
-  await expect(windFinner).toHaveAttribute("tabindex", "0");
 
-  await toggleWithoutMovingFocus();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".explore-panel.is-open")).toHaveCount(0);
+  await expect(explore).toBeFocused();
+  await expect(windFinner).toHaveAttribute("tabindex", "0");
+  await expect(windFinner).toHaveAccessibleName(/wind 12 kilometres per hour from E/);
+  await windFinner.focus();
+  await expect(windFinner).toBeFocused();
+
+  await explore.click();
+  await weatherLayer.click();
   const weatherFinner = page.locator(".station-marker[data-marker-id='station:finner']");
   await expect(weatherFinner).toBeVisible();
-  await expect(weatherFinner).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".explore-panel.is-open")).toHaveCount(0);
+  await expect(explore).toBeFocused();
   await expect(weatherFinner).toHaveAttribute("tabindex", "0");
-
-  await weatherLayer.focus();
-  await weatherLayer.click();
-  await expect(weatherLayer).toBeFocused();
-  await expect(page.locator("[data-map-marker]:focus")).toHaveCount(0);
-  await weatherLayer.click();
-  await expect(weatherLayer).toBeFocused();
-  await expect(page.locator("[data-map-marker]:focus")).toHaveCount(0);
-
   await weatherFinner.focus();
+  await expect(weatherFinner).toBeFocused();
+
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Close map details" })).toBeFocused();
   await page.getByRole("button", { name: "Close map details" }).click();
@@ -1182,7 +1186,7 @@ test("a slower context refresh cannot erase a newer public transport refresh", a
 
 test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#connection-summary")).toContainText(/Connected|Checking for newer data/);
+  await expect(page.locator("#connection-summary")).toContainText(/Online|Checking for newer data/);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "What matters now." })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Ireland, at a glance|Signals that matter|What the live data shows/ })).toHaveCount(0);
@@ -3042,7 +3046,7 @@ test("success then 503 then offline never claims erased data was retained", asyn
   await page.goto("/");
   const connection = page.locator("#connection-summary");
   const retry = page.locator(".refresh-data-button");
-  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(connection).toContainText(/Online|Checking for newer data/);
   await expect(page.locator(".station-marker")).toHaveCount(9);
   await expect(retry).toBeEnabled();
   await expect(page.locator(".live-state [role='status'][aria-live='polite']")).toHaveCount(1);
@@ -3061,6 +3065,6 @@ test("success then 503 then offline never claims erased data was retained", asyn
   await expect(connection).not.toContainText(/showing|last received|retained/i);
   await expect(retry).toBeDisabled();
   await context.setOffline(false);
-  await expect(connection).toContainText(/Connected|Checking for newer data/);
+  await expect(connection).toContainText(/Online|Checking for newer data/);
   await expect(retry).toBeEnabled();
 });
