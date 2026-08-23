@@ -341,16 +341,19 @@ const validObservedAt = (value) => {
   return Number.isFinite(timestamp) ? { observedAt, timestamp } : null;
 };
 
+// The provider can repeat a station across pages or refreshes; keep one row
+// per station id, newest observation first. Distinct stations must never be
+// merged: collapsing by geographic proximity silently dropped real gauges in
+// dense catchments such as the Dublin and Cork river clusters.
 const deduplicate = (readings) => {
-  const cells = new Map();
+  const byId = new Map();
   for (const reading of readings) {
-    const key = `${Math.round(reading.longitude * 4)}:${Math.round(reading.latitude * 5)}`;
-    const current = cells.get(key);
+    const current = byId.get(reading.id);
     if (!current || new Date(reading.observedAt) > new Date(current.observedAt)) {
-      cells.set(key, reading);
+      byId.set(reading.id, reading);
     }
   }
-  return [...cells.values()];
+  return [...byId.values()];
 };
 
 export const normalizeRiverReadings = (readings, now = Date.now()) => {

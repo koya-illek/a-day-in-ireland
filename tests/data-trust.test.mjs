@@ -993,6 +993,19 @@ test("river normalization rejects malformed and out-of-Ireland coordinates befor
   assert.deepEqual(readings.map((reading) => reading.id), ["valid"]);
 });
 
+test("river dedupe keeps distinct nearby gauges and collapses only repeated station ids", () => {
+  const now = Date.parse("2026-08-02T12:00:00.000Z");
+  // Two real stations ~1.3 km apart share one former spatial-dedupe cell.
+  const readings = normalizeRiverReadings([
+    { id: "1500", name: "Gauge A", latitude: 53.34, longitude: -6.26, level: 1.1, observedAt: "2026-08-02T11:30:00Z" },
+    { id: "1501", name: "Gauge B", latitude: 53.352, longitude: -6.272, level: 0.8, observedAt: "2026-08-02T11:30:00Z" },
+    { id: "1500", name: "Gauge A", latitude: 53.34, longitude: -6.26, level: 1.4, observedAt: "2026-08-02T11:45:00Z" }
+  ], now);
+
+  assert.deepEqual(readings.map((reading) => reading.id), ["1500", "1501"]);
+  assert.equal(readings.find((reading) => reading.id === "1500").level, 1.4, "a repeated station keeps its newest observation");
+});
+
 test("river normalization does not silently truncate valid unique gauges", () => {
   const now = Date.parse("2026-08-02T12:00:00.000Z");
   const readings = [];
