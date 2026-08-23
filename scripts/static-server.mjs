@@ -84,6 +84,9 @@ createServer(async (request, response) => {
     // paths get the branded page with a true 404 status, never a soft 200.
     const notFoundFile = join(root, "404.html");
     if (existsSync(notFoundFile)) {
+      // The 404 document carries the "/404" header rules (its per-page CSP);
+      // the miss path itself matched none.
+      for (const [name, value] of headersForPath("/404")) response.setHeader(name, value);
       response.setHeader("Content-Type", types[".html"]);
       response.writeHead(404);
       const stream = createReadStream(notFoundFile);

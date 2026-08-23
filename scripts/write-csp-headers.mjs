@@ -69,7 +69,9 @@ export const collectDocumentHashes = (root) => {
 
 const pathsForDocument = (file) => {
   if (file === "index.html") return ["/", "/index.html"];
-  if (file === "404.html") return ["/404.html"];
+  // The branded 404 document is served from asset misses at the bare "/404"
+  // path by every adapter, and directly at "/404.html"; both need the policy.
+  if (file === "404.html") return ["/404", "/404.html"];
   if (file.endsWith("/index.html")) {
     const directory = file.slice(0, -"/index.html".length);
     return [`/${directory}/`, `/${directory}/index.html`];
