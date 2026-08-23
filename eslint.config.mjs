@@ -2,7 +2,7 @@ import { FlatCompat } from "@eslint/eslintrc";
 
 const compat = new FlatCompat({ baseDirectory: import.meta.dirname });
 const config = [
-  { ignores: [".next/**", ".open-next/**", "out/**", "dist/**", "test-results/**", "playwright-report/**", "next-env.d.ts"] },
+  { ignores: [".next/**", ".open-next/**", "out/**", "dist/**", ".wrangler/**", "test-results/**", "playwright-report/**", "next-env.d.ts"] },
   ...compat.extends("next/core-web-vitals", "next/typescript")
 ];
 

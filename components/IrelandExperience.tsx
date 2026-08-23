@@ -1229,7 +1229,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         items
       };
     });
-  }, [activeMarkerId, activePreset, deduplicatedMovement, layers, mapDimensions.width, mapViewport, projection, snapshotReadable, timeMode]);
+  }, [activeMarkerId, activePreset, deduplicatedMovement, layers, mapDimensions.width, mapViewport, projection, snapshot.sourceProvenance?.trains.status, snapshot.transitStatus, snapshotReadable, timeMode]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
 
