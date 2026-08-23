@@ -512,6 +512,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [activeSection, setActiveSection] = useState<ExperienceSection>("map");
   const [viewHydrated, setViewHydrated] = useState(false);
   const viewHydrationStartedRef = useRef(false);
+  // A hash deep link (#lat=…&lng=…&zoom=…) must be centred against the final
+  // projection, whose scale depends on the measured viewport width.
+  const pendingHashViewRef = useRef<{ latitude: number; longitude: number; zoom: number } | null>(null);
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
   const [mapDimensions, setMapDimensions] = useState({ width: 1000, height: 900 });
@@ -1950,14 +1953,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       const hashLng = Number(hashParams.get("lng"));
       const hashZoom = Number(hashParams.get("zoom"));
       if (Number.isFinite(hashLat) && Number.isFinite(hashLng) && Number.isFinite(hashZoom) && hashZoom > 1 && hashZoom <= 4) {
-        const point = projection([hashLng, hashLat]);
-        if (point) {
-          setMapView(constrainMapView(
-            hashZoom,
-            500 - (500 - point[0]) * hashZoom,
-            450 - (450 - point[1]) * hashZoom
-          ));
-        }
+        // The projection scale depends on the measured viewport width, which
+        // is not settled during hydration. Record the target and let the
+        // projection effect centre it once the final scale is known.
+        pendingHashViewRef.current = { latitude: hashLat, longitude: hashLng, zoom: hashZoom };
       }
     }
     if (parsedView.at) {
@@ -1968,6 +1967,33 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     }
     setViewHydrated(true);
   }, [loadHistoryAt, projection, setMapView]);
+
+  // Centre a pending hash deep link against the current projection. The first
+  // application necessarily uses the hydration-default projection; the target
+  // stays pending until the projection changes identity after ResizeObserver
+  // measurement (a different width bucket, or simply a fresh instance), then
+  // recentres once and clears. When the measured width matches the default
+  // exactly, no change ever fires and the first application is already right.
+  const hashViewAppliedProjectionRef = useRef<unknown>(null);
+  useEffect(() => {
+    const pending = pendingHashViewRef.current;
+    if (!pending) return;
+    const applied = hashViewAppliedProjectionRef.current;
+    if (applied !== null && applied === projection) return;
+    const point = projection([pending.longitude, pending.latitude]);
+    if (!point) return;
+    setMapView(constrainMapView(
+      pending.zoom,
+      500 - (500 - point[0]) * pending.zoom,
+      450 - (450 - point[1]) * pending.zoom
+    ));
+    if (applied === null) {
+      hashViewAppliedProjectionRef.current = projection;
+    } else {
+      pendingHashViewRef.current = null;
+      hashViewAppliedProjectionRef.current = null;
+    }
+  }, [projection, setMapView]);
 
   useEffect(() => {
     if (!viewHydrated) return;

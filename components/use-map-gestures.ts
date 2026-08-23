@@ -57,10 +57,19 @@ export function useMapGestures(mapRef: RefObject<SVGSVGElement | null>) {
     if (!points.length) return null;
     const center = points.reduce((sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }), { x: 0, y: 0 });
     center.x /= points.length;
-    return {
-      center,
-      distance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0
-    };
+    // The pinch baseline is the widest pointer pair, not insertion order:
+    // lifting one finger of three must not swap which pair is measured and
+    // snap the scale mid-gesture.
+    let distance = 0;
+    for (let first = 1; first < points.length; first += 1) {
+      for (let second = 0; second < first; second += 1) {
+        distance = Math.max(distance, Math.hypot(
+          points[first].x - points[second].x,
+          points[first].y - points[second].y
+        ));
+      }
+    }
+    return { center, distance };
   }, []);
 
   const handleMapPointerDown = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
