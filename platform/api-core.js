@@ -28,6 +28,8 @@ import {
   tideQueryWindow,
   weatherBuoyQuery
 } from "./live-normalize.js";
+import { OPENAPI_PATH, openApiResponse } from "./openapi.js";
+import { handleMcpRequest, MCP_PATHS } from "./mcp-core.js";
 
 // One shared Worker API core serves both deployment targets: the Cloudflare
 // production adapter (platform/cloudflare-entry.js) and the alternate hosting
@@ -1193,10 +1195,31 @@ export const healthResponse = (env, provenance = null) => {
 // method boundary first; unknown API paths answer as JSON with the shared
 // error contract, never as an asset 404 or an HTML SPA fallback that would
 // soft-200 an API surface. Returns undefined for non-API paths so each
-// adapter applies its own static-serving behaviour.
+// adapter applies its own static-serving behaviour. /mcp joins the API
+// namespace before the GET-only gate because its transport is POST-based.
+
+// MCP tools deliberately consume the adapter-wired route handlers rather than
+// duplicating acquisition logic, so agents receive exactly what the site's own
+// frontend polls — same coordinators, same cache tiers, same honesty fields.
+const mcpSourcesFromAdapters = (env, adapters) => ({
+  living: () => adapters.living
+    ? adapters.living(env)
+    : Promise.reject(new Error("Living layers are not wired on this deployment.")),
+  transit: () => transitApiRoute(env),
+  contexts: () => contextsApiRoute(env),
+  historySnapshot: (at) => adapters.history
+    ? adapters.history(new Request(`https://mcp.internal/api/history?at=${encodeURIComponent(at)}`), env)
+    : Promise.reject(new Error("History storage is not wired on this deployment.")),
+  historyRange: () => adapters.history
+    ? adapters.history(new Request("https://mcp.internal/api/history/range"), env)
+    : Promise.reject(new Error("History storage is not wired on this deployment."))
+});
+
 export const handleApiRequest = async (request, env, adapters) => {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith("/api/")) return undefined;
+  const isMcpPath = MCP_PATHS.includes(url.pathname);
+  if (!url.pathname.startsWith("/api/") && !isMcpPath) return undefined;
+  if (isMcpPath) return handleMcpRequest(request, mcpSourcesFromAdapters(env, adapters));
   if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
     return methodResponse(request);
   }
@@ -1204,6 +1227,8 @@ export const handleApiRequest = async (request, env, adapters) => {
   switch (url.pathname) {
     case "/api/health":
       return adapters.health ? adapters.health(env) : healthResponse(env);
+    case OPENAPI_PATH:
+      return openApiResponse();
     case "/api/living":
       try {
         return await adapters.living(env);
