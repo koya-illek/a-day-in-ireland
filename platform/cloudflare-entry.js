@@ -60,30 +60,64 @@ const methodResponse = (request) => {
   return new Response("Method not allowed", { status: 405, headers });
 };
 
-const healthResponse = (env) => Response.json({
-  status: "ok",
-  service: "a-day-in-ireland",
-  runtime: "cloudflare-worker",
-  build: {
-    commitSha: env.BUILD_COMMIT_SHA ?? "unknown",
-    builtAt: env.BUILD_TIMESTAMP ?? "unknown",
-    configSha256: env.BUILD_CONFIG_SHA256 ?? "unknown",
-    transitDataSha256: env.BUILD_DATA_SHA256 ?? "unknown",
-    deploymentId: env.DEPLOYMENT_ID ?? "unknown"
-  },
-  storage: {
-    historyDb: Boolean(env.HISTORY_DB),
-    ntaCoordinator: Boolean(env.NTA_FEED),
-    riverCoordinator: Boolean(env.RIVER_FEED)
+// Build provenance ships with the static assets (written by
+// scripts/write-build-provenance.mjs on every build). Reading it through the
+// assets binding keeps health reporting truthful; no deploy path provides the
+// BUILD_* vars this endpoint once relied on. Memoised per isolate, with a
+// short retry window after failed reads so a transient asset hiccup can heal.
+const PROVENANCE_RETRY_MS = 5 * 60_000;
+let provenanceCache = null;
+const loadBuildProvenance = async (env) => {
+  const now = Date.now();
+  if (provenanceCache && (provenanceCache.value || now - provenanceCache.at < PROVENANCE_RETRY_MS)) {
+    return provenanceCache.value;
   }
-}, {
-  headers: {
-    "cache-control": "no-store",
-    "access-control-allow-origin": "*",
-    "content-type": "application/json; charset=utf-8",
-    "x-robots-tag": "noindex, nofollow"
+  let value = null;
+  try {
+    if (env?.ASSETS) {
+      const response = await env.ASSETS.fetch(new Request("https://assets.local/build-provenance.json"));
+      if (response.ok) {
+        const parsed = await response.json();
+        if (parsed && typeof parsed === "object") value = parsed;
+      }
+    }
+  } catch (error) {
+    console.error("Build provenance was unreadable", error);
   }
-});
+  provenanceCache = { at: now, value };
+  return value;
+};
+
+const healthResponse = async (env) => {
+  const provenance = await loadBuildProvenance(env);
+  const fileDeploymentId = typeof provenance?.deploymentId === "string" && provenance.deploymentId !== "not-deployed"
+    ? provenance.deploymentId
+    : null;
+  return Response.json({
+    status: "ok",
+    service: "a-day-in-ireland",
+    runtime: "cloudflare-worker",
+    build: {
+      commitSha: env.BUILD_COMMIT_SHA ?? provenance?.source?.commitSha ?? "unknown",
+      builtAt: env.BUILD_TIMESTAMP ?? provenance?.builtAt ?? "unknown",
+      configSha256: env.BUILD_CONFIG_SHA256 ?? provenance?.source?.configSha256 ?? "unknown",
+      transitDataSha256: env.BUILD_DATA_SHA256 ?? provenance?.generatedData?.sha256 ?? "unknown",
+      deploymentId: env.DEPLOYMENT_ID ?? fileDeploymentId ?? "unknown"
+    },
+    storage: {
+      historyDb: Boolean(env.HISTORY_DB),
+      ntaCoordinator: Boolean(env.NTA_FEED),
+      riverCoordinator: Boolean(env.RIVER_FEED)
+    }
+  }, {
+    headers: {
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "content-type": "application/json; charset=utf-8",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  });
+};
 
 const captureCutoff = (url, fallback = Date.now()) => {
   const raw = url.searchParams.get("captureBucketStartMs");
