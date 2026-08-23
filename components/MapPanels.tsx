@@ -384,9 +384,9 @@ export function DetailCard({
   );
 }
 
-export function GridPanel({ grid, className = "", historical = false }: { grid: LiveSnapshot["grid"]; className?: string; historical?: boolean }) {
+export function GridPanel({ grid, historical = false }: { grid: LiveSnapshot["grid"]; historical?: boolean }) {
   return (
-    <aside className={`map-data-panel grid-panel ${className}`} aria-label={`All-island electricity grid ${historical ? "at the selected time" : "now"}`}>
+    <aside className="map-data-panel grid-panel" aria-label={`All-island electricity grid ${historical ? "at the selected time" : "now"}`}>
       <p className="utility-label">EirGrid · operational data</p>
       <h2>{historical ? "The grid then" : "The grid now"}</h2>
       {grid ? (
@@ -432,9 +432,9 @@ export function GridPanel({ grid, className = "", historical = false }: { grid: 
   );
 }
 
-export function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["aurora"]; className?: string }) {
+export function AuroraPanel({ aurora }: { aurora: LiveSnapshot["aurora"] }) {
   return (
-    <aside className={`map-data-panel aurora-panel ${className}`} aria-label="Aurora probability over Ireland">
+    <aside className="map-data-panel aurora-panel" aria-label="Aurora probability over Ireland">
       <p className="utility-label">NOAA OVATION · forecast</p>
       <h2>Aurora over Ireland</h2>
       {aurora ? (
@@ -456,11 +456,11 @@ export function AuroraPanel({ aurora, className = "" }: { aurora: LiveSnapshot["
   );
 }
 
-export function IssPanel({ iss, className = "", historical = false }: { iss: LiveSnapshot["iss"]; className?: string; historical?: boolean }) {
+export function IssPanel({ iss, historical = false }: { iss: LiveSnapshot["iss"]; historical?: boolean }) {
   const next = iss?.passes[0] ?? null;
   const visible = iss?.passes.find((pass) => pass.visible) ?? null;
   return (
-    <aside className={`map-data-panel iss-panel ${className}`} aria-label="International Space Station over Ireland">
+    <aside className="map-data-panel iss-panel" aria-label="International Space Station over Ireland">
       <p className="utility-label">CelesTrak · calculated locally</p>
       <h2>ISS over Ireland{historical ? " at capture" : ""}</h2>
       {iss ? (

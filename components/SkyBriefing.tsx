@@ -1,14 +1,6 @@
 import type { LiveSnapshot } from "../lib/types";
 import { selectForecastPeriod } from "../platform/sky-source.js";
-
-const formatTime = (date: Date) => Number.isFinite(date.getTime())
-  ? new Intl.DateTimeFormat("en-IE", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-      timeZone: "Europe/Dublin"
-    }).format(date)
-  : "Unavailable";
+import { formatTime } from "./experience-model";
 
 const skyEventDefinitions = [
   ["First light", "firstLight"],

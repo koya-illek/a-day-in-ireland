@@ -432,7 +432,7 @@ button { color: inherit; }
 .layer-list > button.active .layer-toggle { border-color: var(--amber); }
 .layer-list > button.active .layer-toggle::after { background: var(--amber); transform: translateX(.8rem); }
 .source-note { border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; line-height: 1.55; margin-top: 2rem; padding-top: 1.5rem; }
-.source-note a { color: var(--ink); display: block; margin-top: .35rem; width: fit-content; }
+.source-note a { align-items: center; color: var(--ink); display: flex; margin-top: .35rem; min-height: 2.75rem; width: fit-content; }
 footer {
   border-top: 1px solid var(--line);
   color: var(--muted);
@@ -870,7 +870,12 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .map-notice strong { display: block; font-size: .82rem; padding-right: 1.25rem; }
 .map-notice p { color: var(--muted); font-size: .65rem; line-height: 1.45; margin: .25rem 0 0; }
 .map-caption { z-index: 10}
-.map-caption a { color: inherit; }
+.map-caption a {
+  align-items: center;
+  color: inherit;
+  display: inline-flex;
+  min-height: 2.75rem;
+}
 .compass { border-radius: .35rem}
 .station-card {
   background: rgba(9, 23, 41, .96);
@@ -991,7 +996,15 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   padding: .65rem .8rem;
   text-align: center;
 }
-.detail-link { color: var(--green); display: inline-block; font: 600 .62rem ui-monospace, monospace; margin-top: .8rem; }
+.detail-link {
+  align-items: center;
+  color: var(--green);
+  display: inline-flex;
+  font: 600 .62rem ui-monospace, monospace;
+  margin-top: .8rem;
+  min-height: 2.75rem;
+  padding: .55rem 0;
+}
 .detail-emblem.warning { color: #ff9194; } .dayline { max-width: 96rem; }
 .pulse-card {
   background: #101b2e;

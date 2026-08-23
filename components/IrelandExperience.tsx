@@ -1579,6 +1579,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     (showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
     (showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake ? 1 : 0) +
     (showIssNotable && issNotableCurrent && visibleIssPass ? 1 : 0);
+  const contextPanelCount =
+    (layers.has("grid") ? 1 : 0) + (layers.has("aurora") ? 1 : 0) + (layers.has("iss") ? 1 : 0);
   // Radar whose tiles are still settling is not a failed source: naming it
   // "unavailable" contradicted the map's own loading and partial-coverage
   // notices, so while tiles load the assessment simply omits it, and only
@@ -2913,9 +2915,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         {(layers.has("grid") || layers.has("aurora") || layers.has("iss")) && (
           <details
             className="map-context-disclosure"
-            open={activePreset === "custom" && [layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length === 1 ? true : undefined}
+            open={activePreset === "custom" && contextPanelCount === 1 ? true : undefined}
           >
-            <summary>Whole-island context · {[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length} panel{[layers.has("grid"), layers.has("aurora"), layers.has("iss")].filter(Boolean).length === 1 ? "" : "s"}</summary>
+            <summary>Whole-island context · {contextPanelCount} panel{contextPanelCount === 1 ? "" : "s"}</summary>
             <div className="map-context-grid">
               {layers.has("grid") && <DeferredGridPanel historical={timeMode === "past"} grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} />}
               {layers.has("aurora") && <DeferredAuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} />}
