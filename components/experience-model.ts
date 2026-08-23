@@ -173,6 +173,13 @@ export function weatherNarrative(snapshot: LiveSnapshot) {
   const currentWeather = snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial";
   const warm = snapshot.summary.warmest;
   const rain = snapshot.summary.wettest;
+  // A station without a temperature reading is stated in words; appending the
+  // degree sign outside the null check used to render a literal "Unavailable°".
+  const warmSentence = warm
+    ? warm.temperature === null || warm.temperature === undefined
+      ? `${warm.name} has no current temperature reading.`
+      : `${warm.name} is ${warm.temperature}°.`
+    : "The warmest station is unavailable.";
   return !currentWeather
     ? snapshot.sourceStatus === "stale"
       ? "The most recent weather snapshot is cached, so current national conditions are not stated."
@@ -180,8 +187,8 @@ export function weatherNarrative(snapshot: LiveSnapshot) {
     : !warm && !rain
     ? "Current weather observations are unavailable."
     : rain && (rain.rainfall ?? 0) > 0
-    ? `Rain is being observed around ${rain.name}. ${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "Unavailable"}°.`
-    : `${warm?.name ?? "The warmest station"} is ${warm?.temperature ?? "Unavailable"}°, and none of the reporting stations have measured rain.`;
+    ? `Rain is being observed around ${rain.name}. ${warmSentence}`
+    : `${warmSentence} None of the reporting stations have measured rain.`;
 }
 
 export function buildHeroSentences(options: {

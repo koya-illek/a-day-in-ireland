@@ -217,7 +217,7 @@ export function DetailCard({
         <>
           <p className="utility-label">Met Éireann station</p>
           <h2 id="map-detail-title">{item.name}</h2>
-          <div className="station-temperature">{item.temperature ?? "Unavailable"}°</div>
+          <div className="station-temperature">{item.temperature == null ? "Unavailable" : `${item.temperature}°`}</div>
           <p>{item.description}</p>
           <dl>
             <div><dt>Rain</dt><dd>{item.rainfall ?? "Unavailable"} mm</dd></div>

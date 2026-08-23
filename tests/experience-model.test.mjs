@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex } = await (async () => {
+const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex, weatherNarrative } = await (async () => {
   const source = await readFile(new URL("../components/experience-model.ts", import.meta.url), "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
@@ -51,4 +51,41 @@ test("radar refresh keeps the parked frame by wall-clock instant, not raw positi
   assert.equal(restoredRadarFrameIndex(previousFrames, 0, nextFrames), nextFrames.length - 1, "an instant the provider dropped falls back to the newest frame");
   assert.equal(restoredRadarFrameIndex([], 0, nextFrames), nextFrames.length - 1, "no previous frames lands on the newest frame");
   assert.equal(restoredRadarFrameIndex(previousFrames, 2, []), 0, "an empty refreshed window is clamped safely");
+});
+
+const narrativeSnapshot = (summary) => ({
+  sourceStatus: "live",
+  summary: { warmest: null, wettest: null, ...summary }
+});
+
+test("the weather narrative never appends a degree sign to a missing temperature", () => {
+  const warm = { name: "Shannon Airport", temperature: 18.3 };
+  assert.equal(
+    weatherNarrative(narrativeSnapshot({ warmest: warm })),
+    "Shannon Airport is 18.3°. None of the reporting stations have measured rain."
+  );
+  // A station whose row lacks a temperature is described in words; the old
+  // string appended the unit outside the null check and read "Unavailable°".
+  assert.equal(
+    weatherNarrative(narrativeSnapshot({ warmest: { name: "Shannon Airport", temperature: null } })),
+    "Shannon Airport has no current temperature reading. None of the reporting stations have measured rain."
+  );
+  assert.equal(
+    weatherNarrative(narrativeSnapshot({})),
+    "Current weather observations are unavailable."
+  );
+});
+
+test("the weather narrative keeps the rain lead when only rainfall is known", () => {
+  const snapshot = narrativeSnapshot({
+    wettest: { name: "Valentia Observatory", rainfall: 2.4 },
+    warmest: { name: "Shannon Airport", temperature: null }
+  });
+  const narrative = weatherNarrative(snapshot);
+  assert.match(narrative, /^Rain is being observed around Valentia Observatory\. /);
+  assert.doesNotMatch(narrative, /Unavailable°/);
+  assert.equal(
+    weatherNarrative(narrativeSnapshot({ wettest: { name: "Malin Head", rainfall: 1 } })),
+    "Rain is being observed around Malin Head. The warmest station is unavailable."
+  );
 });

@@ -10,7 +10,7 @@ import {
   readBoundedJsonResponse,
   readBoundedTextResponse
 } from "./river-source.js";
-import { fetchMetForecast, fetchSolarDay } from "./sky-source.js";
+import { dublinDateKey, fetchMetForecast, fetchSolarDay } from "./sky-source.js";
 import {
   classifyTideTrend,
   COASTAL_MARINE_SOURCES,
@@ -753,7 +753,8 @@ export const fetchTransit = async (env, fetcher = fetch, captureNow = Date.now()
     : { vehicles, status: "live" };
 };
 
-const fetchAurora = async () => {
+// Exported for tests, which pin the Kp auxiliary-feed degradation contract.
+export const fetchAurora = async () => {
   const [auroraResponse, kpResponse] = await Promise.all([
     fetch("https://services.swpc.noaa.gov/json/ovation_aurora_latest.json", {
       cf: { cacheEverything: true, cacheTtl: 900 }
@@ -769,9 +770,16 @@ const fetchAurora = async () => {
     .map((point) => Number(point[2])).filter(Number.isFinite);
   if (!probabilities.length) return null;
   let kpIndex = null;
+  // The Kp feed is auxiliary context for a reading we already hold. A
+  // malformed or non-array body degrades to "no Kp index" instead of
+  // discarding valid aurora probabilities and tripping the circuit breaker.
   if (kpResponse.ok) {
-    const rows = (await readBoundedJsonResponse(kpResponse, "noaa-kp", 128_000)).body;
-    kpIndex = numeric(rows.at(-1)?.estimated_kp);
+    try {
+      const rows = (await readBoundedJsonResponse(kpResponse, "noaa-kp", 128_000)).body;
+      kpIndex = numeric(Array.isArray(rows) ? rows.at(-1)?.estimated_kp : null);
+    } catch (error) {
+      console.error("NOAA Kp feed was unreadable; aurora probabilities remain retained", error);
+    }
   }
   return {
     observedAt: String(body["Observation Time"] ?? ""),
@@ -898,7 +906,11 @@ const refreshContextSource = async (name, definition, now = Date.now()) => {
     inFlight: null
   };
   contextSourceCache.set(name, state);
-  if (state.value !== undefined && now >= state.lastSuccessAt && now < state.expiresAt) {
+  // A per-source freshness predicate lets day-keyed sources (solar) refuse a
+  // cached value whose calendar day has rolled over even while the TTL is
+  // still running; the normal refresh path then replaces it.
+  if (state.value !== undefined && now >= state.lastSuccessAt && now < state.expiresAt &&
+      (!definition.stillFresh || definition.stillFresh(state.value, now))) {
     return { value: state.value, status: state.status, metadata: sourceMetadata(state, state.status, now) };
   }
   if (state.circuitOpenUntil > now) return staleSource(state, definition, now, "source-circuit-open");
@@ -943,7 +955,9 @@ const refreshContextSource = async (name, definition, now = Date.now()) => {
   }
 };
 
-const contextDefinitions = (env, now) => ({
+// Exported for tests, which pin the per-source freshness predicates (such as
+// the solar day rollover).
+export const contextDefinitions = (env, now) => ({
   marine: {
     load: fetchMarine,
     empty: () => ({ readings: [], status: "unavailable" }),
@@ -1007,7 +1021,12 @@ const contextDefinitions = (env, now) => ({
   solar: {
     load: () => fetchSolarDay({ now }),
     empty: () => ({ reading: null, status: "unavailable" }),
-    status: (value) => value?.status ?? "unavailable"
+    status: (value) => value?.status ?? "unavailable",
+    // The reading is keyed to one Dublin day. A refresh initiated before
+    // midnight used to keep serving yesterday's sunrise and sunset for up to
+    // the TTL plus jitter past midnight; refuse cached values whose day has
+    // rolled over so the next refresh resolves today.
+    stillFresh: (value, at) => value?.reading?.date === dublinDateKey(at)
   },
   forecast: {
     load: () => fetchMetForecast({ now }),
@@ -1111,6 +1130,37 @@ export const contextsApiRoute = async (env) => {
 // ---------------------------------------------------------------------------
 // Health and central dispatch
 // ---------------------------------------------------------------------------
+
+// Build provenance ships with the static assets (written by
+// scripts/write-build-provenance.mjs on every build). Reading it through the
+// assets binding keeps health reporting truthful on every adapter; no deploy
+// path provides BUILD_* vars. Each adapter creates its own loader so memo
+// state never leaks across hosting targets, with a short retry window after
+// failed reads so a transient asset hiccup can heal.
+const PROVENANCE_RETRY_MS = 5 * 60_000;
+export const createProvenanceLoader = () => {
+  let cache = null;
+  return async (env) => {
+    const now = Date.now();
+    if (cache && (cache.value || now - cache.at < PROVENANCE_RETRY_MS)) {
+      return cache.value;
+    }
+    let value = null;
+    try {
+      if (env?.ASSETS) {
+        const response = await env.ASSETS.fetch(new Request("https://assets.local/build-provenance.json"));
+        if (response.ok) {
+          const parsed = await response.json();
+          if (parsed && typeof parsed === "object") value = parsed;
+        }
+      }
+    } catch (error) {
+      console.error("Build provenance was unreadable", error);
+    }
+    cache = { at: now, value };
+    return value;
+  };
+};
 
 export const healthResponse = (env, provenance = null) => {
   // The provenance file records local builds as "not-deployed"; surfacing that

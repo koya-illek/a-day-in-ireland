@@ -357,22 +357,40 @@ export async function maintainHistory(env, scheduledTime) {
   return { skipped: false, hourStart };
 }
 
+// How many incomplete hourly buckets one maintenance tick may re-roll. The
+// Worker subrequest budget is 100 and a tick also captures, rolls the current
+// hour, backfills the daily summary and occasionally prunes; capping repairs
+// keeps a long outage backlog from pushing a single tick over that ceiling.
+// Later ticks drain whatever remains (the loop is idempotent).
+const HOURLY_REPAIR_LIMIT_PER_TICK = 12;
+
 const repairHourlyRollups = async (db, scheduledTime) => {
   const currentHourStart = hourBucketStart(scheduledTime);
+  // One joined pass returns exactly the hours whose covering rollup is missing
+  // or still incomplete. Auditing every raw bucket with its own query used to
+  // cost up to 49 subrequests per tick even when nothing needed repairing.
   const buckets = (await db.prepare(`
-    SELECT DISTINCT bucket_start_ms - (bucket_start_ms % ?) AS hour_bucket_ms
-    FROM history_snapshots
-    WHERE resolution_minutes = ? AND bucket_start_ms >= ? AND bucket_start_ms < ?
-    ORDER BY hour_bucket_ms ASC
-  `).bind(HOUR_MS, RAW_RESOLUTION_MINUTES, scheduledTime - MAINTENANCE_LOOKBACK_MS, currentHourStart).all())
-    ?.results ?? [];
+    SELECT incomplete.hour_bucket_ms AS hour_bucket_ms FROM (
+      SELECT DISTINCT bucket_start_ms - (bucket_start_ms % ?) AS hour_bucket_ms
+      FROM history_snapshots
+      WHERE resolution_minutes = ? AND bucket_start_ms >= ? AND bucket_start_ms < ?
+    ) AS incomplete
+    LEFT JOIN history_snapshots hourly
+      ON hourly.resolution_minutes = ? AND hourly.bucket_start_ms = incomplete.hour_bucket_ms
+    WHERE hourly.bucket_start_ms IS NULL
+       OR hourly.collected_samples < hourly.expected_samples
+    ORDER BY incomplete.hour_bucket_ms ASC
+    LIMIT ?
+  `).bind(
+    HOUR_MS,
+    RAW_RESOLUTION_MINUTES,
+    scheduledTime - MAINTENANCE_LOOKBACK_MS,
+    currentHourStart,
+    HOUR_RESOLUTION_MINUTES,
+    HOURLY_REPAIR_LIMIT_PER_TICK
+  ).all())?.results ?? [];
   for (const { hour_bucket_ms } of buckets) {
     const bucketStartMs = Number(hour_bucket_ms);
-    const existing = await db.prepare(`
-      SELECT expected_samples, collected_samples FROM history_snapshots
-      WHERE resolution_minutes = ? AND bucket_start_ms = ?
-    `).bind(HOUR_RESOLUTION_MINUTES, bucketStartMs).first();
-    if (existing && Number(existing.collected_samples) >= Number(existing.expected_samples)) continue;
     await rollupPeriod(db, {
       fromResolutionMinutes: RAW_RESOLUTION_MINUTES,
       resolutionMinutes: HOUR_RESOLUTION_MINUTES,

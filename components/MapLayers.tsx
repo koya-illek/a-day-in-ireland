@@ -124,7 +124,7 @@ export function StationMarker({
       {wet && <circle className="rain-ring" r="17" />}
       <circle className="station-halo" r="11" />
       <circle className="station-core" r="4" />
-      <text aria-hidden="true" x="10" y="-7">{station.temperature ?? "Unavailable"}°</text>
+      <text aria-hidden="true" x="10" y="-7">{station.temperature == null ? "Unavailable" : `${station.temperature}°`}</text>
     </MapMarker>
   );
 }
@@ -145,6 +145,51 @@ export type RadarTileStatusReporter = (
 export const createRadarTileStatusRecord = (): Record<string, RadarTileStatus> => Object.fromEntries(
   IRELAND_RADAR_TILES.map(([x, y]) => [`${x}-${y}`, "loading" as const])
 );
+
+// Producing one tile costs a network round trip plus decode, canvas masking
+// and re-encode. Radar replay re-shows the same few frames every ~850 ms, so
+// finished results are kept in a small ref-counted cache: tiles currently
+// displayed hold a reference and are never evicted, while unreferenced tiles
+// expire oldest-first once the cache exceeds its bound. Seven retained frames
+// across four tiles fit comfortably, so a full replay loop does no repeated
+// bitmap work after its first pass.
+type ProcessedTile = { url: string; refs: number };
+const PROCESSED_TILE_CACHE_LIMIT = 32;
+const processedTileCache = new Map<string, ProcessedTile>();
+
+const acquireProcessedTile = (href: string) => {
+  const cached = processedTileCache.get(href);
+  if (!cached) return null;
+  processedTileCache.delete(href);
+  processedTileCache.set(href, cached);
+  cached.refs += 1;
+  return cached.url;
+};
+
+const rememberProcessedTile = (href: string, url: string) => {
+  const existing = processedTileCache.get(href);
+  if (existing) {
+    existing.refs += 1;
+    return;
+  }
+  processedTileCache.set(href, { url, refs: 1 });
+  while (processedTileCache.size > PROCESSED_TILE_CACHE_LIMIT) {
+    let evicted = false;
+    for (const [key, entry] of processedTileCache) {
+      if (entry.refs > 0) continue;
+      URL.revokeObjectURL(entry.url);
+      processedTileCache.delete(key);
+      evicted = true;
+      break;
+    }
+    if (!evicted) break;
+  }
+};
+
+const releaseProcessedTile = (href: string) => {
+  const entry = processedTileCache.get(href);
+  if (entry) entry.refs = Math.max(0, entry.refs - 1);
+};
 
 function RadarTileImage({
   href,
@@ -172,10 +217,17 @@ function RadarTileImage({
 
   useEffect(() => {
     const controller = new AbortController();
-    let objectUrl: string | null = null;
     setTile({ href: null, status: "loading" });
-    onStatus(frameKey, tileKey, "loading");
 
+    const cachedUrl = acquireProcessedTile(href);
+    if (cachedUrl) {
+      setTile({ href: cachedUrl, status: "ready" });
+      onStatus(frameKey, tileKey, "ready");
+      return () => releaseProcessedTile(href);
+    }
+
+    onStatus(frameKey, tileKey, "loading");
+    let prepared = false;
     const prepare = async () => {
       try {
         const response = await fetch(href, {
@@ -202,12 +254,13 @@ function RadarTileImage({
           context.putImageData(image, 0, 0);
           const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
           if (!blob) throw new Error("Radar tile could not be encoded");
-          objectUrl = URL.createObjectURL(blob);
-          if (controller.signal.aborted) {
-            URL.revokeObjectURL(objectUrl);
-            objectUrl = null;
-            return;
-          }
+          const objectUrl = URL.createObjectURL(blob);
+          // The cache owns one reference from production; this instance holds
+          // the other until its cleanup runs. An abort after completion still
+          // leaves a valid cached copy for the next replay pass.
+          rememberProcessedTile(href, objectUrl);
+          prepared = true;
+          if (controller.signal.aborted) return;
           setTile({ href: objectUrl, status: "ready" });
           onStatus(frameKey, tileKey, "ready");
         } finally {
@@ -223,7 +276,7 @@ function RadarTileImage({
     void prepare();
     return () => {
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (prepared) releaseProcessedTile(href);
     };
   }, [frameKey, href, onStatus, tileKey]);
 

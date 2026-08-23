@@ -939,10 +939,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useEffect(() => {
     const experience = experienceRef.current;
-    if (!experience || !selected) return;
+    if (!experience) return;
+    // The detail card and the explore drawer are both modal surfaces. While
+    // either is open, everything behind it is inert so pointer and
+    // screen-reader browse mode cannot reach hidden content.
+    if (!selected && !panelOpen) return;
     experience.setAttribute("inert", "");
     return () => experience.removeAttribute("inert");
-  }, [selected]);
+  }, [selected, panelOpen]);
 
   useEffect(() => {
     // A detail card must describe something still on the map: provider health
@@ -1161,12 +1165,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     isDenseView ? 40 : 0,
     activeMarkerId
   ).map(({ item }) => item), [activeMarkerId, isDenseView, mapViewport, projection, snapshot.contextStatus.earthquakes, snapshot.earthquakes, snapshotReadable]);
+  // Deduplicated once per data change instead of twice per clock tick: every
+  // second the component re-renders, and the marker count below and the
+  // movement stacks above consume the same arrays.
+  const deduplicatedMovement = useMemo(() => ({
+    trains: timeMode !== "past" && snapshotReadable && snapshot.sourceProvenance?.trains.status === "live"
+      ? deduplicateMovementRecords(snapshot.trains)
+      : [],
+    transit: timeMode !== "past" && snapshotReadable && snapshot.transitStatus === "live"
+      ? deduplicateMovementRecords(snapshot.transit)
+      : []
+  }), [snapshot.sourceProvenance?.trains.status, snapshot.transitStatus, snapshot.trains, snapshot.transit, snapshotReadable, timeMode]);
   const movementStacks = useMemo<MovementStack[]>(() => {
     const points: ProjectedPoint<MovementSelection>[] = [];
 
     if (timeMode !== "past" && snapshotReadable && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live") {
-      const orderedTrains = deduplicateMovementRecords(snapshot.trains);
-      for (const train of orderedTrains) {
+      for (const train of deduplicatedMovement.trains) {
         const point = projection([train.longitude, train.latitude]);
         if (point) {
           points.push({
@@ -1180,7 +1194,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       }
     }
     if (timeMode !== "past" && snapshotReadable && layers.has("transit") && snapshot.transitStatus === "live") {
-      for (const vehicle of deduplicateMovementRecords(snapshot.transit)) {
+      for (const vehicle of deduplicatedMovement.transit) {
         const point = projection([vehicle.longitude, vehicle.latitude]);
         if (!point) continue;
         points.push({
@@ -1215,7 +1229,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         items
       };
     });
-  }, [activeMarkerId, activePreset, layers, mapDimensions.width, mapViewport, projection, snapshot.sourceProvenance?.trains.status, snapshot.trains, snapshot.transit, snapshot.transitStatus, snapshotReadable, timeMode]);
+  }, [activeMarkerId, activePreset, deduplicatedMovement, layers, mapDimensions.width, mapViewport, projection, snapshotReadable, timeMode]);
   const markerIds = useMemo(() => {
     const ids: string[] = [];
 
@@ -1255,8 +1269,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     (snapshotReadable && layers.has("bathing") && (snapshot.contextStatus.bathing === "live" || snapshot.contextStatus.bathing === "fallback") ? snapshot.bathingAlerts.length : 0) +
     (snapshotReadable && (snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial") && (layers.has("weather") || layers.has("wind")) ? snapshot.stations.filter((station) => layers.has("weather") || station.windSpeed !== null).length : 0) +
     (layers.has("air") ? sourceAirQuality.length : 0) +
-    (timeMode !== "past" && snapshotReadable && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live" ? deduplicateMovementRecords(snapshot.trains).length : 0) +
-    (timeMode !== "past" && snapshotReadable && layers.has("transit") && snapshot.transitStatus === "live" ? deduplicateMovementRecords(snapshot.transit).length : 0) +
+    (timeMode !== "past" && snapshotReadable && layers.has("trains") && snapshot.sourceProvenance?.trains.status === "live" ? deduplicatedMovement.trains.length : 0) +
+    (timeMode !== "past" && snapshotReadable && layers.has("transit") && snapshot.transitStatus === "live" ? deduplicatedMovement.transit.length : 0) +
     (snapshotReadable && layers.has("earthquakes") && (snapshot.contextStatus.earthquakes === "live" || snapshot.contextStatus.earthquakes === "fallback") ? snapshot.earthquakes.length : 0);
   const visibleLayerGroups = LAYER_GROUPS;
   const activeLegendGroups = useMemo(() => visibleLayerGroups.map((group) => ({
@@ -1535,10 +1549,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     (showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 ? 1 : 0) +
     (showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake ? 1 : 0) +
     (showIssNotable && issNotableCurrent && visibleIssPass ? 1 : 0);
-  const assessmentSnapshot = radarLayerActive && radarPresentationState !== "live"
+  // Radar whose tiles are still settling is not a failed source: naming it
+  // "unavailable" contradicted the map's own loading and partial-coverage
+  // notices, so while tiles load the assessment simply omits it, and only
+  // genuinely unusable presentation states are forced to unavailable.
+  const radarAssessmentLayers = radarLayerActive && radarPresentationState === "loading"
+    ? (() => {
+        const next = new Set(layers);
+        next.delete("radar");
+        return next;
+      })()
+    : layers;
+  const assessmentSnapshot = radarLayerActive && radarPresentationState !== "live" && radarPresentationState !== "loading"
     ? { ...snapshot, contextStatus: { ...snapshot.contextStatus, radar: "unavailable" as const } }
     : snapshot;
-  const assessedSources = getSelectedSourceAssessment(assessmentSnapshot, layers, now.getTime());
+  const assessedSources = getSelectedSourceAssessment(assessmentSnapshot, radarAssessmentLayers, now.getTime());
   const selectedSourceAssessment = timeMode === "past" && !online
     ? {
         assessedSourceCount: 0,
@@ -2290,7 +2315,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     });
   }, []);
 
+  // The explore drawer renders outside <main> so the modal-inert effect can
+  // hide the page behind it without also inerting the drawer itself.
   return (
+    <>
     <main
       ref={experienceRef}
       className={`experience ${isNight ? "is-night" : ""} ${timeMode === "past" ? "is-history" : "is-now"}`}
@@ -3100,21 +3128,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         onSelect={setTimelineSelection}
       />
 
-      <ExplorePanel
-        open={panelOpen}
-        onOpenChange={setExplorePanelOpen}
-        openerRef={panelOpenerRef}
-        timeMode={timeMode}
-        activePreset={activePreset}
-        layers={layers}
-        layerGroups={LAYER_GROUPS}
-        onShowPreset={showPreset}
-        onToggleLayer={toggleLayer}
-        snapshot={snapshot}
-        historyEnvelope={historyState.envelope}
-        historyGaps={historyGaps}
-      />
-
       <footer>
         <div>
           <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
@@ -3128,5 +3141,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; Sunrise-Sunset.org solar events; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>
       </footer>
     </main>
+
+    <ExplorePanel
+      open={panelOpen}
+      onOpenChange={setExplorePanelOpen}
+      openerRef={panelOpenerRef}
+      timeMode={timeMode}
+      activePreset={activePreset}
+      layers={layers}
+      layerGroups={LAYER_GROUPS}
+      onShowPreset={showPreset}
+      onToggleLayer={toggleLayer}
+      snapshot={snapshot}
+      historyEnvelope={historyState.envelope}
+      historyGaps={historyGaps}
+    />
+    </>
   );
 }

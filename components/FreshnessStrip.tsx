@@ -93,7 +93,7 @@ export function FreshnessStrip({
                   ? `Offline · live refresh unavailable${snapshot.lastSuccessAt ? " · saved snapshot" : ""}`
                   : serviceDisplayState === "connecting"
                     ? "Checking for newer data"
-                    : `Connected · ${connectionLabel}`}
+                    : connectionLabel}
               </span>
               {" · checked "}{formatTime(lastCheckedAt)}{" · last success "}{lastSuccessLabel}
             </small>

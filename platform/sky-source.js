@@ -33,7 +33,7 @@ const dateKey = (value) => {
     date.getUTCDate() === Number(match[3]) ? match[0] : null;
 };
 
-const dublinDateKey = (timestamp) => {
+export const dublinDateKey = (timestamp) => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
     timeZone: IRELAND_TIME_ZONE,
     year: "numeric", month: "2-digit", day: "2-digit"

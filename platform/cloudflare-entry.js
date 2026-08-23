@@ -1,5 +1,6 @@
 import {
   apiErrorResponse,
+  createProvenanceLoader,
   dedupedFetchTrains,
   fetchRiversResult,
   fetchTransit,
@@ -178,33 +179,7 @@ const captureCutoff = (url, fallback = Date.now()) => {
   return value;
 };
 
-// Build provenance ships with the static assets (written by
-// scripts/write-build-provenance.mjs on every build). Reading it through the
-// assets binding keeps health reporting truthful; no deploy path provides the
-// BUILD_* vars this endpoint once relied on. Memoised per isolate, with a
-// short retry window after failed reads so a transient asset hiccup can heal.
-const PROVENANCE_RETRY_MS = 5 * 60_000;
-let provenanceCache = null;
-const loadBuildProvenance = async (env) => {
-  const now = Date.now();
-  if (provenanceCache && (provenanceCache.value || now - provenanceCache.at < PROVENANCE_RETRY_MS)) {
-    return provenanceCache.value;
-  }
-  let value = null;
-  try {
-    if (env?.ASSETS) {
-      const response = await env.ASSETS.fetch(new Request("https://assets.local/build-provenance.json"));
-      if (response.ok) {
-        const parsed = await response.json();
-        if (parsed && typeof parsed === "object") value = parsed;
-      }
-    }
-  } catch (error) {
-    console.error("Build provenance was unreadable", error);
-  }
-  provenanceCache = { at: now, value };
-  return value;
-};
+const loadBuildProvenance = createProvenanceLoader();
 
 // Historical rail retention is disabled unless reuse permission is explicitly
 // recorded in configuration. Avoid even calling the Irish Rail upstream during
