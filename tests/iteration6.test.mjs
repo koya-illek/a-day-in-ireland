@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const { inlineScriptHashes, rewriteScriptSrc } = await import(
+const { inlineScriptHashes, renderHeadersWithPerPageCsp } = await import(
   new URL("../scripts/write-csp-headers.mjs", import.meta.url).href
 );
 
@@ -157,23 +157,33 @@ test("inline script hashing tolerates uppercase tags and hashes empty bodies lik
   ]);
 });
 
-test("script-src rewrite swaps unsafe-inline for the hash list", () => {
+test("per-page CSP removes the global policy and gives each document only its own hashes", () => {
   const headers = "/*\n  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'\n  X-Frame-Options: DENY\n";
-  const updated = rewriteScriptSrc(headers, ["'sha256-AAA='", "'sha256-BBB='"]);
-  const scriptDirective = updated.match(/script-src[^;]*/i)?.[0] ?? "";
-  assert.match(scriptDirective, /'self' 'sha256-AAA=' 'sha256-BBB=' https:\/\/static\.cloudflareinsights\.com/);
-  assert.ok(!scriptDirective.includes("'unsafe-inline'"), "script-src must not keep unsafe-inline");
-  assert.match(updated, /style-src 'self' 'unsafe-inline'/);
+  const updated = renderHeadersWithPerPageCsp(headers, [
+    { file: "index.html", hashes: ["'sha256-HOME='"] },
+    { file: "about.html", hashes: ["'sha256-ABOUT='", "'sha256-EXTRA='"] }
+  ]);
+  const globalBlock = updated.split("\n\n")[0] ?? "";
+  assert.ok(!globalBlock.includes("Content-Security-Policy"), "the global /* block must not keep a CSP");
+  assert.match(globalBlock, /X-Frame-Options: DENY/);
+
+  const homeBlock = updated.match(/^\/\n  Content-Security-Policy:[^\n]*$/m)?.[0] ?? "";
+  assert.match(homeBlock, /script-src 'self' 'sha256-HOME=' https:\/\/static\.cloudflareinsights\.com/);
+  const homeScript = homeBlock.match(/script-src[^;]*/i)?.[0] ?? "";
+  assert.ok(!homeScript.includes("'unsafe-inline'"), "page script-src must not keep unsafe-inline");
+
+  const aboutBlock = updated.match(/^\/about\n  Content-Security-Policy:[^\n]*$/m)?.[0] ?? "";
+  assert.match(aboutBlock, /'sha256-ABOUT=' 'sha256-EXTRA='/);
+  assert.ok(!aboutBlock.includes("'sha256-HOME='"), "pages must not inherit hashes from other documents");
 });
 
-test("script-src rewrite leaves style-src untouched and is idempotent", () => {
+test("per-page CSP leaves style-src untouched, is deterministic, and rejects overlong lines", () => {
   const headers = "/*\n  Content-Security-Policy: script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'\n";
-  const once = rewriteScriptSrc(headers, ["'sha256-AAA='"]);
-  assert.match(once, /style-src 'self' 'unsafe-inline'/);
-  const twice = rewriteScriptSrc(once, ["'sha256-AAA='"]);
-  assert.equal(once, twice);
-  // No unsafe-inline left: nothing may change.
-  assert.equal(rewriteScriptSrc(headers.replace("'unsafe-inline'", ""), ["'sha256-AAA='"]), headers.replace("'unsafe-inline'", ""));
-  // No hashes: never rewrite.
-  assert.equal(rewriteScriptSrc(headers, []), headers);
+  const documents = [{ file: "index.html", hashes: ["'sha256-AAA='"] }];
+  assert.equal(renderHeadersWithPerPageCsp(headers, documents), renderHeadersWithPerPageCsp(headers, documents));
+  assert.match(renderHeadersWithPerPageCsp(headers, documents), /style-src 'self' 'unsafe-inline'/);
+  assert.throws(
+    () => renderHeadersWithPerPageCsp(headers, [{ file: "index.html", hashes: [`'sha256-${"A".repeat(2200)}'`] }]),
+    /line limit is 2000/
+  );
 });
