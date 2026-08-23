@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+
+const { inlineScriptHashes, rewriteScriptSrc } = await import(
+  new URL("../scripts/write-csp-headers.mjs", import.meta.url).href
+);
 
 const importRoadGeometry = async () => {
   const source = await readFile(new URL("../lib/road-geometry.ts", import.meta.url), "utf8");
@@ -119,4 +124,56 @@ test("health answers without an ASSETS binding instead of crashing", async () =>
   const body = await response.json();
   assert.equal(body.status, "ok");
   assert.equal(body.build.commitSha, "unknown");
+});
+
+const expectedHash = (content) =>
+  `'sha256-${createHash("sha256").update(content).digest("base64")}'`;
+
+test("inline script hashes cover every non-src script body exactly once", () => {
+  const html = [
+    "<html><head>",
+    "<script src=\"/app.js\"></script>",
+    "<script>theme();</script>",
+    "<script type=\"application/ld+json\">{\"a\":1}</script>",
+    "</head><body>",
+    "<script>theme();</script>",
+    "<script>flight(\"\\u003C/script>\");</script>",
+    "</body></html>"
+  ].join("");
+  const hashes = inlineScriptHashes(html);
+  assert.deepEqual(hashes, [
+    expectedHash("theme();"),
+    expectedHash("{\"a\":1}"),
+    expectedHash("flight(\"\\u003C/script>\");")
+  ]);
+});
+
+test("inline script hashing tolerates uppercase tags and hashes empty bodies like browsers do", () => {
+  const html = "<body><SCRIPT >first()</SCRIPT ><script></script><script>   </script></body>";
+  assert.deepEqual(inlineScriptHashes(html), [
+    expectedHash("first()"),
+    expectedHash(""),
+    expectedHash("   ")
+  ]);
+});
+
+test("script-src rewrite swaps unsafe-inline for the hash list", () => {
+  const headers = "/*\n  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'\n  X-Frame-Options: DENY\n";
+  const updated = rewriteScriptSrc(headers, ["'sha256-AAA='", "'sha256-BBB='"]);
+  const scriptDirective = updated.match(/script-src[^;]*/i)?.[0] ?? "";
+  assert.match(scriptDirective, /'self' 'sha256-AAA=' 'sha256-BBB=' https:\/\/static\.cloudflareinsights\.com/);
+  assert.ok(!scriptDirective.includes("'unsafe-inline'"), "script-src must not keep unsafe-inline");
+  assert.match(updated, /style-src 'self' 'unsafe-inline'/);
+});
+
+test("script-src rewrite leaves style-src untouched and is idempotent", () => {
+  const headers = "/*\n  Content-Security-Policy: script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'\n";
+  const once = rewriteScriptSrc(headers, ["'sha256-AAA='"]);
+  assert.match(once, /style-src 'self' 'unsafe-inline'/);
+  const twice = rewriteScriptSrc(once, ["'sha256-AAA='"]);
+  assert.equal(once, twice);
+  // No unsafe-inline left: nothing may change.
+  assert.equal(rewriteScriptSrc(headers.replace("'unsafe-inline'", ""), ["'sha256-AAA='"]), headers.replace("'unsafe-inline'", ""));
+  // No hashes: never rewrite.
+  assert.equal(rewriteScriptSrc(headers, []), headers);
 });
