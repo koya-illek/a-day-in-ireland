@@ -134,7 +134,8 @@ test("both adapters answer unknown document paths with a true branded 404", asyn
   const assets = {
     fetch: async (request) => {
       const path = new URL(request.url).pathname;
-      if (path === "/404.html") return new Response(brandedPage, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+      if (path === "/404") return new Response(brandedPage, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+      if (path === "/404.html") return new Response(null, { status: 307, headers: { location: "/404" } });
       if (path === "/index.html") throw new Error("the SPA fallback must not be consulted");
       return new Response(null, { status: 404 });
     }
@@ -144,6 +145,7 @@ test("both adapters answer unknown document paths with a true branded 404", asyn
     const response = await worker.fetch(new Request("https://day.illek.ie/junk-path"), { ASSETS: assets });
     assert.equal(response.status, 404, `${entry} must not soft-200 unknown documents`);
     assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(response.headers.get("location"), null, `${entry} must not leak an asset redirect on a true 404`);
     assert.equal(await response.text(), brandedPage);
 
     const missingAsset = await worker.fetch(new Request("https://day.illek.ie/nope.js"), { ASSETS: assets });

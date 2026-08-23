@@ -45,7 +45,7 @@ const worker = {
     // A soft-200 index.html fallback would let crawlers index arbitrary junk
     // paths as duplicates of home and break parity with production and the
     // local static server.
-    const notFound = await env.ASSETS.fetch(new Request(new URL("/404.html", url), request));
+    const notFound = await env.ASSETS.fetch(new Request(new URL("/404", url), request));
     return new Response(notFound.body, { status: 404, headers: notFound.headers });
   }
 };

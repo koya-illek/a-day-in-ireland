@@ -327,7 +327,7 @@ const cloudflareWorker = {
     // Do not depend on asset-binding not_found_handling for the recovery page.
     // The explicit fetch also keeps this contract stable when the Worker or
     // asset configuration is deployed independently.
-    const notFound = await env.ASSETS.fetch(new Request(new URL("/404.html", url), request));
+    const notFound = await env.ASSETS.fetch(new Request(new URL("/404", url), request));
     return new Response(notFound.body, { status: 404, headers: notFound.headers });
   },
 
