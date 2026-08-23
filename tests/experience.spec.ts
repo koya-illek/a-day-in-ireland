@@ -370,7 +370,7 @@ test("boot refresh uses canonical weather stations and one contexts request", as
   // Hold observation responses until the connecting-state assertions have
   // run. A fixed delay raced the polling assertions on loaded machines and
   // the page could reach its live state before the first check sampled it.
-  let releaseObservations: (() => void) | null = null;
+  let releaseObservations: (() => void) | undefined;
   const observationsReleased = new Promise<void>((resolve) => { releaseObservations = resolve; });
 
   await page.route("https://prodapi.metweb.ie/observations/*/today", async (route) => {
