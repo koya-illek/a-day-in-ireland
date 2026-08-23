@@ -43,6 +43,12 @@ The checked-in Worker candidate is configured for Workers Paid, with one direct 
 
 The Worker serves the exported frontend directly from its static asset binding on `day.illek.ie`.
 
+`/api/health` reports the deployed build's provenance (commit, build time, config and data hashes) by reading `build-provenance.json`, which every build writes into the served assets. Missing or unreadable provenance degrades to `unknown`; it never fails the endpoint.
+
+The build generates a hash-based script CSP: after the static export lands in `dist/client`, `scripts/write-csp-headers.mjs` replaces `script-src 'unsafe-inline'` with sha256 hashes of every inline script found in the exported documents. `public/_headers` stays valid on its own if that step is skipped.
+
+Decorative road geometry is not part of the JavaScript bundle or the pre-rendered HTML. The map fetches `/map/major-roads.json` once after mount; the URL carries a content-hash version query computed at configure time, and the asset is cached immutably.
+
 The `/api/living` response includes `sourceStatus` and `sourceProvenance` for rail and river feeds. River provenance distinguishes direct OPW data, the Cloudflare Browser Run fallback, the configured bridge fallback (only when `RIVER_BRIDGE_URL` is set), cached stale data, and an unavailable source.
 
 ```bash

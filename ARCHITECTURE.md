@@ -59,7 +59,7 @@ flowchart LR
 | NTA coordinator | Globally coalesces credentialed GTFS-Realtime vehicle refreshes and protects the provider token budget | Durable Object `NtaFeedCoordinator` |
 | River coordinator | Coordinates direct OPW retrieval and Cloudflare Browser Rendering fallback | Durable Object `RiverFeedCoordinator` |
 | History store | Writes compact snapshots and summaries and reads historical ranges | `platform/history-store.js`, `platform/history.js`, D1 `HISTORY_DB` |
-| Build pipeline | Generates static export, source provenance, content-hashed transit data, and performance-budget checks | `scripts/` |
+| Build pipeline | Generates static export, source provenance, content-hashed transit data, hash-based inline script CSP, and performance-budget checks | `scripts/` |
 
 ## Live data flow
 
@@ -86,7 +86,7 @@ flowchart LR
 
 | Interface | Purpose |
 | --- | --- |
-| `GET /api/health` | Cheap runtime and binding liveness without provider fan-out |
+| `GET /api/health` | Cheap runtime, binding liveness, and deployed-build provenance read from the served assets; no provider fan-out |
 | `GET /api/living` | Current rail and river evidence with provenance |
 | `GET /api/contexts` | Weather, water, energy, air, bathing, earth, sky, and related context |
 | `GET /api/transit` | Coordinated NTA live vehicle positions |
