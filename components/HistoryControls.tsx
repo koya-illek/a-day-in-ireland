@@ -124,7 +124,11 @@ export function HistoryControls({
   };
 
   const submitScrubber = () => {
-    if (!Number.isFinite(scrubberSeconds) || submittedScrubberRef.current === scrubberSeconds) return;
+    if (!Number.isFinite(scrubberSeconds)) return;
+    // A tap that never moved the slider would resubmit the displayed instant,
+    // and every request closes open detail cards and drops the comparison
+    // table even when the answer cannot change.
+    if (submittedScrubberRef.current === scrubberSeconds || scrubberSeconds === selectedSeconds) return;
     submittedScrubberRef.current = scrubberSeconds;
     onRequest(new Date(scrubberSeconds * 1000).toISOString());
   };

@@ -121,7 +121,7 @@ export function ExplorePanel({
         inert={!open}
       >
         <div className="panel-heading">
-          <div><p className="utility-label">Explore the moment</p><h2>Live layers</h2></div>
+          <div><p className="utility-label">Explore the moment</p><h2>{timeMode === "past" ? "Stored layers" : "Live layers"}</h2></div>
           <button ref={closeRef} onClick={() => onOpenChange(false)} aria-label="Close explore panel">×</button>
         </div>
         <div className="panel-layer-state" role="status">
