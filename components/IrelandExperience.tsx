@@ -15,7 +15,6 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
 import islandBoundary from "../public/map/island.json";
-import majorRoads from "../public/map/major-roads.json";
 import type {
   AirQualityReading,
   LiveSnapshot,
@@ -39,6 +38,7 @@ import {
   type ProjectedPoint
 } from "../lib/map-density";
 import { WEATHER_OBSERVATION_MAX_AGE_MS } from "../lib/weather-stations";
+import { parseRoadFeatures, roadAssetUrl, type RoadFeature } from "../lib/road-geometry";
 import {
   canonicalHistoryAt,
   fetchHistoryRange,
@@ -498,6 +498,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
   const [mapDimensions, setMapDimensions] = useState({ width: 1000, height: 900 });
+  // Decorative road geometry ships as an immutable static asset instead of
+  // riding in the JavaScript bundle and the pre-rendered HTML. A failed load
+  // simply leaves the roads out; no data layer depends on them.
+  const [roadFeatures, setRoadFeatures] = useState<RoadFeature[] | null>(null);
   const [mapFeedback, setMapFeedback] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState(() => new Date(initialSnapshot.generatedAt));
   const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
@@ -709,6 +713,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       window.removeEventListener("online", updateConnectionStatus);
       window.removeEventListener("offline", updateConnectionStatus);
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(roadAssetUrl(process.env.NEXT_PUBLIC_ROADS_ASSET_VERSION))
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        const features = parseRoadFeatures(payload);
+        if (!cancelled && features) setRoadFeatures(features);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -999,13 +1015,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     return [path(islandBoundary.features[0] as never) ?? ""];
   }, [projection]);
   const roadPaths = useMemo(() => {
+    if (!roadFeatures) return [];
     const path = geoPath(projection);
-    return majorRoads.features.map((road) => ({
+    return roadFeatures.map((road) => ({
       path: path(road as never) ?? "",
-      roadClass: road.properties.class,
-      ref: road.properties.ref
+      roadClass: road.properties?.class ?? "",
+      ref: road.properties?.ref ?? ""
     }));
-  }, [projection]);
+  }, [projection, roadFeatures]);
   const mapViewport = useMemo<MapViewport>(() => ({
     ...mapView,
     width: mapDimensions.width,

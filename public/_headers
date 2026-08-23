@@ -10,6 +10,9 @@
 /social/*
   Cache-Control: public, max-age=604800
 
+/map/major-roads.json
+  Cache-Control: public, max-age=31536000, immutable
+
 /data/transit-destinations.manifest.json
   Cache-Control: public, max-age=300, must-revalidate
 

@@ -1854,9 +1854,11 @@ test("duplicate trains with invalid timestamps remain deterministic and show una
 test("Stitch map workspace uses an island-only coastline and visible roads", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".island-shape path")).toHaveCount(1);
+  // Road geometry arrives from an immutable static asset after mount, so the
+  // visibility assertion retries until it lands before counting.
+  await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
   const roadCount = await page.locator(".road-network path").count();
   expect(roadCount).toBeGreaterThan(50);
-  await expect(page.locator(".road-network path.motorway").first()).toBeVisible();
   if (test.info().project.name === "desktop") {
     const dataDetails = page.locator("details.freshness-details");
     await dataDetails.locator("summary").click();
