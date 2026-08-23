@@ -3,7 +3,7 @@ import { infoPageMetadata } from "../../lib/info-metadata";
 
 export const metadata = infoPageMetadata({
   title: "Privacy",
-  description: "The privacy approach used by A Day in Ireland.",
+  description: "How A Day in Ireland handles privacy: no accounts, no tracking and no personal profiles.",
   path: "/privacy"
 });
 

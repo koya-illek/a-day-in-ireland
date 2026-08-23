@@ -83,7 +83,9 @@ test("keyboard focus moves to a surviving marker when its marker leaves the visi
 
   // Switch presets programmatically so keyboard focus stays parked on the
   // marker while React swaps the rendered marker set underneath it.
-  await page.locator(".map-presets button", { hasText: "Weather" }).evaluate((element) => element.click());
+  await page.locator(".map-presets button", { hasText: "Weather" }).evaluate((element) => {
+    (element as HTMLElement).click();
+  });
 
   await expect(page.locator("[data-map-marker][data-marker-id='river:iteration4-river']")).toHaveCount(0);
   // The focused marker's id left the visible set; focus must not strand on body.
