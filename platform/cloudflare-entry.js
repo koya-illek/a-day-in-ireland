@@ -432,8 +432,13 @@ const cloudflareWorker = {
       }
     }
     if (url.pathname === "/api/transit") {
-      const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
-      return noIndexResponse(coordinator.fetch("https://internal/transit"));
+      try {
+        const coordinator = env.NTA_FEED.getByName("all-island-vehicles");
+        return await noIndexResponse(coordinator.fetch("https://internal/transit"));
+      } catch (error) {
+        console.error("Transit request failed", error);
+        return apiErrorResponse("Live transport positions are temporarily unavailable.");
+      }
     }
     if (url.pathname === "/api/living") {
       try {
@@ -444,7 +449,12 @@ const cloudflareWorker = {
       }
     }
     if (url.pathname === "/api/contexts") {
-      return noIndexResponse(apiWorker.fetch(request, env));
+      try {
+        return await noIndexResponse(apiWorker.fetch(request, env));
+      } catch (error) {
+        console.error("Current contexts failed", error);
+        return apiErrorResponse("Current island contexts are temporarily unavailable.");
+      }
     }
     if (request.method === "GET" || request.method === "HEAD") return staticResponse(request, env);
     return methodResponse(request);

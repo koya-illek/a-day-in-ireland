@@ -1128,6 +1128,20 @@ const worker = {
       }
     }
     if (url.pathname === "/api/transit") return transitContext(env);
+    // Unknown API paths must answer as JSON with the shared error contract,
+    // never as an asset 404, a crash on a missing ASSETS binding, or an HTML
+    // SPA fallback that would soft-200 an API surface.
+    if (url.pathname.startsWith("/api/")) {
+      return new Response(JSON.stringify({ error: "Not found." }), {
+        status: 404,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-store",
+          "access-control-allow-origin": "*",
+          "x-robots-tag": "noindex, nofollow"
+        }
+      });
+    }
     if (request.method !== "GET" && request.method !== "HEAD") return methodResponse(request);
     const response = await env.ASSETS.fetch(request);
     if (response.status !== 404) return response;
