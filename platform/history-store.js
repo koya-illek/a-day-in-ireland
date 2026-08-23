@@ -540,33 +540,18 @@ export async function rollupPeriod(db, {
 }
 
 export async function pruneHistory(db, now = Date.now()) {
-  const rawCutoff = now - RAW_RETENTION_MS;
-  const hourCutoff = now - HOUR_RETENTION_MS;
-  await db.prepare(`
-    DELETE FROM history_snapshots AS raw
-    WHERE raw.resolution_minutes = 15 AND raw.bucket_start_ms < ?
-      AND EXISTS (
-        SELECT 1 FROM history_snapshots AS hourly
-        WHERE hourly.resolution_minutes = 60
-          AND hourly.bucket_start_ms = raw.bucket_start_ms - (raw.bucket_start_ms % ?)
-          AND hourly.expected_samples > 0
-          AND hourly.collected_samples >= hourly.expected_samples
-          AND hourly.collected_at_ms >= raw.collected_at_ms
-      )
-  `).bind(rawCutoff, HOUR_MS).run();
-  await db.prepare(`
-    DELETE FROM history_snapshots AS hourly
-    WHERE hourly.resolution_minutes = 60 AND hourly.bucket_start_ms < ?
-      AND EXISTS (
-        SELECT 1 FROM history_snapshots AS daily
-        WHERE daily.resolution_minutes = 1440
-          AND daily.bucket_start_ms <= hourly.bucket_start_ms
-          AND daily.period_end_ms > hourly.bucket_start_ms
-          AND daily.expected_samples > 0
-          AND daily.collected_samples >= daily.expected_samples
-          AND daily.collected_at_ms >= hourly.collected_at_ms
-      )
-  `).bind(hourCutoff).run();
+  // Retention windows are far wider than every aggregation path's reach
+  // (hourly repairs look back 48 hours; the daily backfill only ever sees the
+  // previous Dublin day). Once a row is past its published window nothing can
+  // aggregate it again and eligibility rules already refuse to serve it, so
+  // retention is enforced unconditionally. The former guards — requiring a
+  // complete covering rollup collected after each finer row — could never be
+  // satisfied by a partially-collected outage hour, so those rows leaked past
+  // their windows forever.
+  await db.prepare("DELETE FROM history_snapshots WHERE resolution_minutes = ? AND bucket_start_ms < ?")
+    .bind(RAW_RESOLUTION_MINUTES, now - RAW_RETENTION_MS).run();
+  await db.prepare("DELETE FROM history_snapshots WHERE resolution_minutes = ? AND bucket_start_ms < ?")
+    .bind(HOUR_RESOLUTION_MINUTES, now - HOUR_RETENTION_MS).run();
   await db.prepare("DELETE FROM history_collection_runs WHERE bucket_start_ms < ?")
     .bind(now - 90 * DAY_MS).run();
 }

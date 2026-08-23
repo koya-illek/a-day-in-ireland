@@ -209,33 +209,34 @@ test("migration v1 alone supports direct capture, hourly and daily maintenance, 
     await writeSnapshot(db, row);
   };
   const pruneAt = Date.parse("2026-08-06T03:15:00.000Z");
-  const rolledRaw = Date.parse("2026-06-01T12:15:00.000Z");
-  const rolledRawHour = Date.parse("2026-06-01T12:00:00.000Z");
-  const unrolledRaw = Date.parse("2026-06-02T12:15:00.000Z");
-  const rolledHour = Date.parse("2025-07-01T12:00:00.000Z");
-  const unrolledHour = Date.parse("2025-07-03T12:00:00.000Z");
+  const expiredRaw = Date.parse("2026-06-01T12:15:00.000Z");
+  const liveRawHour = Date.parse("2026-08-05T12:00:00.000Z");
+  const expiredHour = Date.parse("2025-07-01T12:00:00.000Z");
+  const liveHour = Date.parse("2026-07-01T12:00:00.000Z");
   const coveringDay = Date.parse("2025-07-01T00:00:00.000Z");
-  await insertFixture(15, rolledRaw, rolledRaw + 15 * 60_000, "rolled-raw");
-  await insertFixture(60, rolledRawHour, rolledRawHour + 60 * 60_000, "rolled-raw-hour");
-  await insertFixture(15, unrolledRaw, unrolledRaw + 15 * 60_000, "unrolled-raw");
-  await insertFixture(60, rolledHour, rolledHour + 60 * 60_000, "rolled-hour");
-  await insertFixture(60, unrolledHour, unrolledHour + 60 * 60_000, "unrolled-hour");
+  // Rows past their published window are pruned even when no coarser rollup
+  // ever covered them (an outage hour can never become complete).
+  await insertFixture(15, expiredRaw, expiredRaw + 15 * 60_000, "expired-unrolled-raw");
+  // Rows inside their windows are never pruned.
+  await insertFixture(60, liveRawHour, liveRawHour + 60 * 60_000, "live-hourly-recent");
+  await insertFixture(60, expiredHour, expiredHour + 60 * 60_000, "expired-hourly-covered");
+  await insertFixture(60, liveHour, liveHour + 60 * 60_000, "live-hourly-within-year");
   await insertFixture(1440, coveringDay, coveringDay + 24 * 60 * 60_000, "covering-day");
   await pruneHistory(db, pruneAt);
   const retainedFixtureTimes = new Set(db.sqlite.prepare(`SELECT resolution_minutes, bucket_start_ms
     FROM history_snapshots`).all().map((row) => `${row.resolution_minutes}:${row.bucket_start_ms}`));
-  assert.equal(retainedFixtureTimes.has(`15:${rolledRaw}`), false, "rolled expired raw data is pruned");
-  assert.equal(retainedFixtureTimes.has(`15:${unrolledRaw}`), true, "unrolled expired raw data is preserved");
-  assert.equal(retainedFixtureTimes.has(`60:${rolledHour}`), false, "rolled expired hourly data is pruned");
-  assert.equal(retainedFixtureTimes.has(`60:${unrolledHour}`), true, "unrolled expired hourly data is preserved");
-  assert.equal(retainedFixtureTimes.has(`60:${rolledRawHour}`), true, "coarser raw coverage is preserved");
-  assert.equal(retainedFixtureTimes.has(`1440:${coveringDay}`), true, "daily coverage is preserved");
+  assert.equal(retainedFixtureTimes.has(`15:${expiredRaw}`), false, "raw data is pruned at its retention window even without rollup coverage");
+  assert.equal(retainedFixtureTimes.has(`60:${expiredHour}`), false, "hourly data is pruned at its retention window even before its covering daily row");
+  assert.equal(retainedFixtureTimes.has(`60:${liveRawHour}`), true, "recent hourly coverage is preserved");
+  assert.equal(retainedFixtureTimes.has(`60:${liveHour}`), true, "hourly data within its window is preserved");
+  assert.equal(retainedFixtureTimes.has(`1440:${coveringDay}`), true, "daily summaries are retained indefinitely");
 });
 
-test("pruning requires a complete rollup collected after every finer snapshot", async (t) => {
+test("pruning enforces the published windows through the real maintenance path after an outage hour", async (t) => {
   const db = new TestD1Database();
   t.after(() => db.close());
   db.exec(await readFile(new URL("../migrations/0001_history_v1.sql", import.meta.url), "utf8"));
+  const { maintainHistory } = await import("../platform/history.js");
 
   const insert = async ({ resolutionMinutes, bucketStartMs, periodEndMs, collectedAtMs, expectedSamples, collectedSamples }) => {
     await writeSnapshot(db, await encodeSnapshotRow({
@@ -252,43 +253,44 @@ test("pruning requires a complete rollup collected after every finer snapshot", 
     }));
   };
 
-  const hour = 60 * 60_000;
-  const day = 24 * hour;
-  const incompleteRaw = Date.parse("2027-06-01T12:15:00.000Z");
-  const staleRaw = Date.parse("2027-06-02T12:15:00.000Z");
-  const coveredRaw = Date.parse("2027-06-03T12:15:00.000Z");
-  for (const [raw, rawCollectedAt, hourlyCollectedAt, hourlySamples] of [
-    [incompleteRaw, 100, 200, 1],
-    [staleRaw, 300, 200, 4],
-    [coveredRaw, 200, 300, 4]
-  ]) {
-    const hourStart = raw - (raw % hour);
-    await insert({ resolutionMinutes: 15, bucketStartMs: raw, periodEndMs: raw + 15 * 60_000, collectedAtMs: rawCollectedAt, expectedSamples: 1, collectedSamples: 1 });
-    await insert({ resolutionMinutes: 60, bucketStartMs: hourStart, periodEndMs: hourStart + hour, collectedAtMs: hourlyCollectedAt, expectedSamples: 4, collectedSamples: hourlySamples });
-  }
+  // An outage hour from over a year ago: only two of four raw snapshots
+  // arrived, so the hourly rollup stayed incomplete forever and the daily
+  // summary froze before the last repair bumped the hourly row.
+  const outageRawA = Date.parse("2025-06-01T12:00:00.000Z");
+  const outageRawB = Date.parse("2025-06-01T12:30:00.000Z");
+  const outageHour = Date.parse("2025-06-01T12:00:00.000Z");
+  // Dublin-day bounds for 2025-06-01 (IST = UTC+1).
+  const outageDay = Date.parse("2025-05-31T23:00:00.000Z");
+  await insert({ resolutionMinutes: 15, bucketStartMs: outageRawA, periodEndMs: outageRawA + 15 * 60_000, collectedAtMs: outageRawA, expectedSamples: 1, collectedSamples: 1 });
+  await insert({ resolutionMinutes: 15, bucketStartMs: outageRawB, periodEndMs: outageRawB + 15 * 60_000, collectedAtMs: outageRawB, expectedSamples: 1, collectedSamples: 1 });
+  await insert({ resolutionMinutes: 1440, bucketStartMs: outageDay, periodEndMs: outageDay + 24 * 3_600_000, collectedAtMs: Date.parse("2025-06-01T23:45:00.000Z"), expectedSamples: 24, collectedSamples: 24 });
+  // A maintenance tick repairs the incomplete hour (48 h lookback), bumping
+  // its collected_at past the frozen daily row — the state that permanently
+  // inverted the former prune predicates.
+  await maintainHistory({ HISTORY_DB: db }, outageHour + 25 * 3_600_000);
+  const repaired = db.sqlite.prepare(`
+    SELECT collected_at_ms, collected_samples FROM history_snapshots
+    WHERE resolution_minutes = 60 AND bucket_start_ms = ?
+  `).get(outageHour);
+  assert.ok(repaired, "repair must have produced an hourly row for the outage hour");
+  assert.equal(Number(repaired.collected_samples), 2);
+  const dailyCollectedAt = Number(db.sqlite.prepare(`
+    SELECT collected_at_ms FROM history_snapshots WHERE resolution_minutes = 1440
+  `).get().collected_at_ms);
+  assert.ok(Number(repaired.collected_at_ms) > dailyCollectedAt, "fixture must reproduce the collected_at inversion");
 
-  const incompleteHour = Date.parse("2026-07-01T12:00:00.000Z");
-  const staleHour = Date.parse("2026-07-02T12:00:00.000Z");
-  const coveredHour = Date.parse("2026-07-03T12:00:00.000Z");
-  for (const [hourStart, hourlyCollectedAt, dailyCollectedAt, dailySamples] of [
-    [incompleteHour, 100, 200, 23],
-    [staleHour, 300, 200, 24],
-    [coveredHour, 200, 300, 24]
-  ]) {
-    const dayStart = Date.parse(new Date(hourStart).toISOString().slice(0, 10) + "T00:00:00.000Z");
-    await insert({ resolutionMinutes: 60, bucketStartMs: hourStart, periodEndMs: hourStart + hour, collectedAtMs: hourlyCollectedAt, expectedSamples: 4, collectedSamples: 4 });
-    await insert({ resolutionMinutes: 1440, bucketStartMs: dayStart, periodEndMs: dayStart + day, collectedAtMs: dailyCollectedAt, expectedSamples: 24, collectedSamples: dailySamples });
-  }
-
-  await pruneHistory(db, Date.parse("2027-08-06T03:15:00.000Z"));
+  // A recent incomplete hour must survive; everything past its window must go.
+  const recentRaw = Date.parse("2026-08-05T12:00:00.000Z");
+  await insert({ resolutionMinutes: 15, bucketStartMs: recentRaw, periodEndMs: recentRaw + 15 * 60_000, collectedAtMs: recentRaw, expectedSamples: 1, collectedSamples: 1 });
+  // 02:15Z is 03:15 in Dublin in August — the pruning hour.
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-06T02:15:00.000Z"));
   const retained = new Set(db.sqlite.prepare("SELECT resolution_minutes, bucket_start_ms FROM history_snapshots")
     .all().map((row) => `${row.resolution_minutes}:${row.bucket_start_ms}`));
-  assert.equal(retained.has(`15:${incompleteRaw}`), true, "an incomplete hourly rollup cannot prune raw evidence");
-  assert.equal(retained.has(`15:${staleRaw}`), true, "an hourly rollup older than its raw input cannot prune it");
-  assert.equal(retained.has(`15:${coveredRaw}`), false, "a complete newer hourly rollup may prune raw evidence");
-  assert.equal(retained.has(`60:${incompleteHour}`), true, "an incomplete daily rollup cannot prune hourly evidence");
-  assert.equal(retained.has(`60:${staleHour}`), true, "a daily rollup older than its hourly input cannot prune it");
-  assert.equal(retained.has(`60:${coveredHour}`), false, "a complete newer daily rollup may prune hourly evidence");
+  assert.equal(retained.has(`60:${outageHour}`), false, "the incomplete outage-hour rollup cannot outlive its retention window");
+  assert.equal(retained.has(`15:${outageRawA}`), false, "outage-hour raw rows cannot outlive their retention window");
+  assert.equal(retained.has(`15:${outageRawB}`), false, "outage-hour raw rows cannot outlive their retention window");
+  assert.equal(retained.has(`1440:${outageDay}`), true, "daily summaries are retained indefinitely");
+  assert.equal(retained.has(`15:${recentRaw}`), true, "raw rows within their window are preserved");
 });
 
 test("history payload encoding is canonical, deterministic, and gzip round-trips", async () => {
