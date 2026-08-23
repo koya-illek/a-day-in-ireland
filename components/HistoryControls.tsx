@@ -240,7 +240,7 @@ export function HistoryControls({
             <section className="history-period-summary" aria-labelledby="history-period-summary-heading">
               <div>
                 <p className="utility-label">Retained daily summary</p>
-                <h4 id="history-period-summary-heading">Across {periodSummary.representedSamples.toLocaleString("en-IE")} retained hourly representative{periodSummary.representedSamples === 1 ? "" : "s"}</h4>
+                <h3 id="history-period-summary-heading">Across {periodSummary.representedSamples.toLocaleString("en-IE")} retained hourly representative{periodSummary.representedSamples === 1 ? "" : "s"}</h3>
                 <p>These values describe the retained hourly representatives only. They are not full-day extrema or a reconstructed point map.</p>
               </div>
               <dl>

@@ -2988,21 +2988,18 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                   : gridSnapshotDisplayable
                     ? "The saved grid response has no wind-share value; current grid conditions are unconfirmed"
                     : "EirGrid data unavailable; current wind share cannot be assessed"}</small>
-          <span className="signal-bars" aria-hidden="true">{[36, 52, 44, 70, 82, 65, 88].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</span>
           <b>Open the grid {timeMode === "past" ? "at capture" : "now"} →</b>
         </button>
         <button className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "Unavailable" : railNotableCurrent || trainsCached ? runningTrainCount ?? "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored rail aggregate" : "Connecting to Iarnród Éireann positions"}` : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "rail services represented in the retained aggregate; individual positions were not retained" : historyGapForFocus(historyGaps, "trains")?.detail ?? "rail history unavailable; no zero is inferred" : railNotableCurrent ? runningTrainCount === null ? "rail positions are present, but the service count is unavailable" : "trains currently reporting a position across Ireland · last seen at refresh, not a provider observation clock" : trainsCached ? runningTrainCount === null ? "cached positions are present, but the service count is unavailable" : "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
-          <div className="signal-line" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
           <b>Follow the trains →</b>
         </button>
         <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "temporary OPW fetch-path readings are present, but the gauge count is unavailable" : `temporary ${snapshot.sourceProvenance?.rivers.fallback} path · still OPW gauge levels` : "river readings unavailable; current levels cannot be assessed"}</small>
-          <div className="signal-wave" aria-hidden="true">⌁⌁⌁⌁⌁⌁</div>
           <b>See the water →</b>
         </button>
         </div>

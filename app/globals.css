@@ -1153,59 +1153,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 }
 .pulse-card small { font-size: .7rem; max-width: 17rem; min-height: 0; }
 .pulse-card b { color: #54e2b0; font-family: ui-monospace, monospace; font-size: .66rem; letter-spacing: .03em; margin-top: auto; padding-top: .65rem; }
-.pulse-card .signal-bars, .pulse-card .signal-line, .pulse-card .signal-wave { display: none; }
 .pulse-card.trains > span, .pulse-card.rivers > span { color: var(--green); }
-.signal-bars {
-  align-items: flex-end;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: .25rem;
-  height: 3.1rem;
-  margin: .8rem 0 0;
-}
-.signal-bars i {
-  background: linear-gradient(var(--water-accent), rgba(109, 151, 178, .1));
-  display: block;
-  flex: 1;
-  max-width: .85rem;
-}
-.signal-line {
-  align-items: flex-end;
-  display: flex;
-  gap: .18rem;
-  height: 3.2rem;
-  margin-top: .7rem;
-}
-.signal-line i {
-  background: var(--green);
-  border-radius: 50%;
-  height: .34rem;
-  position: relative;
-  width: .34rem;
-}
-.signal-line i:nth-child(2) { transform: translateY(-.55rem); }
-.signal-line i:nth-child(3) { transform: translateY(-.3rem); }
-.signal-line i:nth-child(4) { transform: translateY(-1.2rem); }
-.signal-line i:nth-child(5) { transform: translateY(-.75rem); }
-.signal-line i:nth-child(6) { transform: translateY(-1.5rem); }
-.signal-line i:not(:last-child)::after {
-  background: rgba(149, 171, 116, .5);
-  content: "";
-  height: 1px;
-  left: .3rem;
-  position: absolute;
-  top: .15rem;
-  width: 1.55rem;
-}
-.signal-wave {
-  color: var(--water-accent);
-  font: 1.35rem ui-monospace, monospace;
-  letter-spacing: -.35rem;
-  margin-top: 1.1rem;
-  opacity: .7;
-  overflow: hidden;
-  white-space: nowrap;
-}
 .dayline {
   border: 1px solid var(--line);
   border-radius: .4rem;
@@ -2992,7 +2940,7 @@ footer {
   padding: .7rem;
 }
 .history-period-summary .utility-label { color: var(--green); margin: 0 0 .2rem; }
-.history-period-summary h4 { font-size: .9375rem; line-height: 1.35; margin: 0; }
+.history-period-summary h3 { font-size: .9375rem; line-height: 1.35; margin: 0; }
 .history-period-summary p { color: var(--muted); font-size: .8125rem; line-height: 1.45; margin: .3rem 0 0; }
 .history-period-summary dl { margin: 0; }
 .history-period-summary dl > div {
