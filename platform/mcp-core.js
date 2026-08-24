@@ -55,6 +55,22 @@ class ToolInputError extends Error {}
 
 const contextSourcesDescription = `Optional filter. Omit for every source, or list any of: ${CONTEXT_SOURCE_NAMES.join(", ")}.`;
 
+// Public source names map onto the /api/contexts payload keys, which follow
+// the internal acquisition names (bathingAlerts, issTle) or merge two sources
+// into one array (airQuality holds both measured and modelled rows, split by
+// each row's source field). Without this mapping a filtered call for bathing,
+// iss, measuredAir or modelledAir matched no data key at all and returned
+// status/provenance with an absent body.
+export const CONTEXT_TOOL_DATA_KEYS = Object.freeze(Object.fromEntries(
+  CONTEXT_SOURCE_NAMES.map((name) => [name, name === "bathing"
+    ? ["bathingAlerts"]
+    : name === "iss" ? ["issTle"]
+      : name === "measuredAir" || name === "modelledAir" ? ["airQuality"]
+        : [name]])
+));
+
+const AIR_ROW_KINDS = { measuredAir: "measured", modelledAir: "modelled" };
+
 export const mcpTools = () => [
   {
     name: "get_living_layers",
@@ -82,7 +98,7 @@ export const mcpTools = () => [
   },
   {
     name: "get_island_contexts",
-    description: "Island-wide context layers: official weather warnings, rain radar frames, electricity grid demand, measured and modelled air quality, aurora activity, tide predictions, bathing-water alerts, satellite imagery availability, recent earthquakes, ISS orbital elements, sunrise/sunset for today, and Met Éireann's national forecast. Includes per-source status and provenance.",
+    description: "Island-wide context layers: official weather warnings, rain radar frames, electricity grid demand, measured and modelled air quality, aurora activity, tide predictions, bathing-water alerts, satellite imagery availability, recent earthquakes, ISS orbital elements, sunrise/sunset for today, and Met Éireann's national forecast. Includes per-source status and provenance; measuredAir and modelledAir select rows of the merged air-quality array by their recorded origin.",
     inputSchema: {
       type: "object",
       properties: {
@@ -147,6 +163,7 @@ export const buildToolImplementations = (sources) => ({
     return {
       generatedAt: payload.generatedAt,
       sourceStatus: payload.sourceStatus,
+      sourceProvenance: payload.sourceProvenance,
       trains: payload.trains,
       rivers: payload.rivers
     };
@@ -181,9 +198,33 @@ export const buildToolImplementations = (sources) => ({
     // generatedAt always travels with the result: a filtered view without its
     // timestamp would let stale data masquerade as current.
     const result = { generatedAt: payload.generatedAt };
+    const wantedDataKeys = requested
+      ? new Set(requested.flatMap((name) => CONTEXT_TOOL_DATA_KEYS[name]))
+      : null;
+    const airKinds = requested
+      ? new Set(requested.flatMap((name) => AIR_ROW_KINDS[name] ?? []))
+      : null;
     for (const [key, value] of Object.entries(payload)) {
       if (key === "generatedAt") continue;
-      if (requested && key !== "contextStatus" && key !== "contextProvenance" && !requested.includes(key)) continue;
+      // warningsStatus restates contextStatus.warnings for the unfiltered
+      // shape; it travels with a warnings request and never alone.
+      if (!requested || requested.includes(key) || (key === "warningsStatus" && requested.includes("warnings"))) {
+        result[key] = value;
+        continue;
+      }
+      if (wantedDataKeys?.has(key)) {
+        // Measured and modelled air share one merged array; select rows by
+        // their recorded origin so each public source returns only its own
+        // observations. Requesting both (or either alongside no split) keeps
+        // every row.
+        if (key === "airQuality" && airKinds && airKinds.size === 1) {
+          const [kind] = airKinds;
+          result[key] = (Array.isArray(value) ? value : []).filter((row) => row?.source === kind);
+          continue;
+        }
+        result[key] = value;
+        continue;
+      }
       if (requested) {
         if (key === "contextStatus") {
           result.contextStatus = Object.fromEntries(Object.entries(value ?? {}).filter(([name]) => requested.includes(name)));
@@ -194,7 +235,6 @@ export const buildToolImplementations = (sources) => ({
           continue;
         }
       }
-      result[key] = value;
     }
     return result;
   },

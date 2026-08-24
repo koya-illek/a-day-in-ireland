@@ -24,7 +24,8 @@ const stubSources = () => ({
     generatedAt: "2026-08-23T12:00:00Z",
     trains: [{ id: "A800", latitude: 53.35, longitude: -6.26, status: "running", observedAt: "2026-08-23T11:59:00Z" }],
     rivers: [],
-    sourceStatus: { trains: "live", rivers: "unavailable" }
+    sourceStatus: { trains: "live", rivers: "unavailable" },
+    sourceProvenance: { trains: { status: "live", fetchedAt: "2026-08-23T12:00:00Z" }, rivers: { status: "unavailable" } }
   }),
   transit: stubSource({
     generatedAt: "2026-08-23T12:00:00Z",
@@ -39,8 +40,18 @@ const stubSources = () => ({
     radar: ["frame"],
     tides: [{ height: 2 }],
     warnings: [],
-    contextStatus: { marine: "live", radar: "live", tides: "stale", warnings: "unavailable" },
-    contextProvenance: { marine: { status: "live" }, radar: { status: "live" }, tides: { status: "stale" }, warnings: { status: "unavailable" } }
+    airQuality: [
+      { id: "measured-dub", source: "measured", europeanAqi: 30 },
+      { id: "modelled-cork", source: "modelled", europeanAqi: 45 }
+    ],
+    bathingAlerts: [{ name: "Portmarnock" }],
+    issTle: { line1: "1 25544U" },
+    warningsStatus: "unavailable",
+    contextStatus: { marine: "live", radar: "live", tides: "stale", warnings: "unavailable", measuredAir: "live", modelledAir: "live", bathing: "partial", iss: "live", aurora: "unavailable" },
+    contextProvenance: {
+      marine: { status: "live" }, radar: { status: "live" }, tides: { status: "stale" }, warnings: { status: "unavailable" },
+      measuredAir: { status: "live" }, modelledAir: { status: "live" }, bathing: { status: "partial" }, iss: { status: "live" }
+    }
   }),
   historySnapshot: stubSource({ schemaVersion: 1, requestedAt: "x", resolvedAt: null, snapshot: null, gaps: [] }),
   historyRange: stubSource({ schemaVersion: 1, resolutions: [], snapshotCount: 0 })
@@ -178,13 +189,19 @@ test("transit limit validation surfaces as a readable tool error", async () => {
   assert.match(message.result.content[0].text, /between 1 and 1000/);
 });
 
+test("get_living_layers carries the provenance its own instructions quote", async () => {
+  const call = await rpcCall(stubSources(), "tools/call", { name: "get_living_layers", arguments: {} });
+  const payload = JSON.parse(call.result.content[0].text);
+  assert.deepEqual(payload.sourceProvenance.trains, { status: "live", fetchedAt: "2026-08-23T12:00:00Z" });
+});
+
 test("get_island_contexts filters layers and keeps their status maps aligned", async () => {
   const filtered = await rpcCall(stubSources(), "tools/call", {
     name: "get_island_contexts",
     arguments: { sources: ["tides", "warnings"] }
   });
   const payload = JSON.parse(filtered.result.content[0].text);
-  assert.deepEqual(Object.keys(payload).sort(), ["contextProvenance", "contextStatus", "generatedAt", "tides", "warnings"]);
+  assert.deepEqual(Object.keys(payload).sort(), ["contextProvenance", "contextStatus", "generatedAt", "tides", "warnings", "warningsStatus"]);
   assert.deepEqual(payload.contextStatus, { tides: "stale", warnings: "unavailable" });
   assert.deepEqual(payload.tides, [{ height: 2 }]);
   assert.deepEqual(payload.contextProvenance.tides, { status: "stale" });
@@ -192,6 +209,50 @@ test("get_island_contexts filters layers and keeps their status maps aligned", a
   const full = JSON.parse(everything.result.content[0].text);
   assert.ok(full.marine.length > 0);
   assert.ok(full.radar.length > 0);
+});
+
+test("filtered context sources reach data stored under internal payload keys", async () => {
+  // bathing -> bathingAlerts, iss -> issTle: without the mapping these calls
+  // returned status and provenance with no data array at all.
+  for (const [source, key, expected] of [
+    ["bathing", "bathingAlerts", [{ name: "Portmarnock" }]],
+    ["iss", "issTle", { line1: "1 25544U" }]
+  ]) {
+    const call = await rpcCall(stubSources(), "tools/call", {
+      name: "get_island_contexts",
+      arguments: { sources: [source] }
+    });
+    const payload = JSON.parse(call.result.content[0].text);
+    assert.deepEqual(payload[key], expected, source);
+    assert.deepEqual(payload.contextStatus, { [source]: stubContextStatus[source] });
+    assert.ok(payload.contextProvenance[source]);
+  }
+});
+
+const stubContextStatus = {
+  bathing: "partial",
+  iss: "live",
+  measuredAir: "live",
+  modelledAir: "live"
+};
+
+test("measuredAir and modelledAir select their rows from the merged air-quality array", async () => {
+  const measured = JSON.parse((await rpcCall(stubSources(), "tools/call", {
+    name: "get_island_contexts",
+    arguments: { sources: ["measuredAir"] }
+  })).result.content[0].text);
+  assert.deepEqual(measured.airQuality, [{ id: "measured-dub", source: "measured", europeanAqi: 30 }]);
+  assert.deepEqual(measured.contextStatus, { measuredAir: "live" });
+  const modelled = JSON.parse((await rpcCall(stubSources(), "tools/call", {
+    name: "get_island_contexts",
+    arguments: { sources: ["modelledAir"] }
+  })).result.content[0].text);
+  assert.deepEqual(modelled.airQuality, [{ id: "modelled-cork", source: "modelled", europeanAqi: 45 }]);
+  const both = JSON.parse((await rpcCall(stubSources(), "tools/call", {
+    name: "get_island_contexts",
+    arguments: { sources: ["measuredAir", "modelledAir"] }
+  })).result.content[0].text);
+  assert.equal(both.airQuality.length, 2);
 });
 
 test("unknown context source names fail with the valid vocabulary", async () => {
