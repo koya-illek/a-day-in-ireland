@@ -27,28 +27,38 @@ export class NtaFeedCoordinator {
     this.refreshPromise = null;
   }
 
-  staleResult(snapshot, errorCode = "provider-rate-limit-stale") {
+  staleResult(snapshot, { lastStatus = null, errorCode = "provider-rate-limit-stale" } = {}) {
     return snapshot?.result?.vehicles?.length
       ? { ...snapshot.result, status: "stale", errorCode }
-      : { vehicles: [], status: "unavailable", errorCode };
+      // A rate-limit window says nothing new about the provider. A terminal
+      // configuration status such as credential-required must survive the
+      // whole window instead of being masked as a transient unavailability;
+      // history captures would otherwise record two different truths for one
+      // unchanged condition.
+      : { vehicles: [], status: lastStatus === "credential-required" ? "credential-required" : "unavailable", errorCode };
   }
 
   async refresh(snapshot) {
     const startedAt = Date.now();
     await this.state.storage.put("nextAllowedAt", startedAt + NTA_REFRESH_MS);
+    let value;
     try {
-      const value = await fetchTransit(this.env, fetch, startedAt);
-      if (!transitUsable(value.status) || !value.vehicles?.length) return value;
-      const result = {
-        ...value,
-        vehicles: addEstimatedSpeeds(value.vehicles, snapshot?.result?.vehicles ?? [])
-      };
-      await this.state.storage.put("snapshot", { expiresAt: startedAt + NTA_REFRESH_MS, result });
-      return result;
+      value = await fetchTransit(this.env, fetch, startedAt);
     } catch (error) {
       console.error("NTA coordinated refresh failed", error);
-      return this.staleResult(snapshot, String(error?.message ?? error));
+      // A thrown refresh says nothing about configuration; drop any retained
+      // terminal status so later windows cannot quote it.
+      await this.state.storage.put("lastRefreshStatus", null);
+      return this.staleResult(snapshot, { errorCode: String(error?.message ?? error) });
     }
+    await this.state.storage.put("lastRefreshStatus", value.status ?? null);
+    if (!transitUsable(value.status) || !value.vehicles?.length) return value;
+    const result = {
+      ...value,
+      vehicles: addEstimatedSpeeds(value.vehicles, snapshot?.result?.vehicles ?? [])
+    };
+    await this.state.storage.put("snapshot", { expiresAt: startedAt + NTA_REFRESH_MS, result });
+    return result;
   }
 
   async current(snapshot, now) {
@@ -58,7 +68,9 @@ export class NtaFeedCoordinator {
     if (this.refreshPromise) return this.refreshPromise;
     const nextAllowedAt = await this.state.storage.get("nextAllowedAt");
     if (this.refreshPromise) return this.refreshPromise;
-    if (typeof nextAllowedAt === "number" && nextAllowedAt > now) return this.staleResult(snapshot);
+    if (typeof nextAllowedAt === "number" && nextAllowedAt > now) {
+      return this.staleResult(snapshot, { lastStatus: await this.state.storage.get("lastRefreshStatus") });
+    }
     if (!this.refreshPromise) {
       this.refreshPromise = this.refresh(snapshot).finally(() => { this.refreshPromise = null; });
     }

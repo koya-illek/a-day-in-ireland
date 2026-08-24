@@ -1238,8 +1238,29 @@ test("failed NTA refresh relabels an expired snapshot stale and never serves its
   }
 });
 
-test("an empty NTA feed is unavailable and is not cached as live", async () => {
-  const { fetchTransit } = await import("../platform/api-core.js");
+test("a credential-required feed keeps its label for every request inside the rate-limit window", async () => {
+  const { NtaFeedCoordinator } = await import("../platform/cloudflare-entry.js");
+  const stored = new Map();
+  const coordinator = new NtaFeedCoordinator({
+    storage: {
+      get: async (key) => stored.get(key),
+      put: async (key, value) => { stored.set(key, value); }
+    }
+  }, {});
+  // Without an API key the first refresh answers credential-required and
+  // arms the rate-limit window; the second request used to fall out of that
+  // window's stale path as a plain "unavailable".
+  const first = await (await coordinator.fetch(new Request("https://internal/transit"))).json();
+  const second = await (await coordinator.fetch(new Request("https://internal/transit"))).json();
+  assert.equal(first.transitStatus, "credential-required");
+  assert.equal(second.transitStatus, "credential-required");
+  // Consecutive capture buckets must record one truth for one condition.
+  const capture = new Request(`https://internal/history-summary?captureBucketStartMs=${Date.now() - 1_000}`);
+  const summary = await (await coordinator.fetch(capture)).json();
+  assert.equal(summary.transitStatus, "credential-required");
+});
+
+test("an empty NTA feed is unavailable and is not cached as live", async () => {  const { fetchTransit } = await import("../platform/api-core.js");
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ entity: [] }), {
     status: 200,
