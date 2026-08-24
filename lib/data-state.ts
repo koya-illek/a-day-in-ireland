@@ -95,7 +95,10 @@ export function getSelectedSourceAssessment(
   const availableContext = (status: ContextSourceStatus) => status === "live" || status === "fallback";
 
   if (["weather", "rain", "wind"].some((layer) => selectedLayers.has(layer))) {
-    add("weather observations", snapshot.sourceStatus === "live" && snapshot.stations.length > 0 &&
+    // "partial" (fewer than six fresh stations) still renders markers and
+    // feeds hero facts, so assessment must treat it as current too; requiring
+    // exactly "live" here made this row contradict what the map displays.
+    add("weather observations", ["live", "partial"].includes(snapshot.sourceStatus) && snapshot.stations.length > 0 &&
       timestampIsCurrent(latestTimestamp(snapshot.stations), WEATHER_OBSERVATION_MAX_AGE_MS, now));
   }
   if (selectedLayers.has("warnings")) add("official notices", snapshot.contextStatus.warnings === "live");

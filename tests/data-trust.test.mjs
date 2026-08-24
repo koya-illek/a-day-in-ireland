@@ -198,6 +198,23 @@ test("selected-source assessment never reassures when a chosen provider is unava
     contextStatus: { ...empty.contextStatus, warnings: "stale" }
   };
   assert.equal(getSelectedSourceAssessment(cached, new Set(["warnings"]), now).fullyAssessed, false);
+
+  // A partial weather source (fewer than six fresh stations) renders markers
+  // and hero facts, so the assessment row must not contradict the map by
+  // calling weather observations non-current.
+  const partialWeather = {
+    ...empty,
+    sourceStatus: "partial",
+    stations: [{
+      id: "station", name: "Station", latitude: 53.3, longitude: -7.2,
+      temperature: 14, rainfall: 0, windSpeed: 8, windDirection: "W", description: "Dry",
+      observedAt: new Date(now - 60_000).toISOString(), fresh: true
+    }],
+    summary: { ...empty.summary, reporting: 1 }
+  };
+  const partialAssessment = getSelectedSourceAssessment(partialWeather, new Set(["weather"]), now);
+  assert.equal(partialAssessment.fullyAssessed, true);
+  assert.deepEqual(partialAssessment.unavailableSources, []);
 });
 
 test("last-good retention is age bounded and is always relabelled cached rather than live", async () => {
