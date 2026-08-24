@@ -86,10 +86,12 @@ export function MapMarker({
   );
 }
 
+// Null for unrecognised provider text: an unknown direction must not render
+// as an arrow asserting northerly flow.
 export const windDirectionDegrees = (direction: string) => {
   const points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
   const index = points.indexOf(direction.toUpperCase());
-  return index < 0 ? 0 : index * 22.5;
+  return index < 0 ? null : index * 22.5;
 };
 
 export function StationMarker({

@@ -30,6 +30,7 @@ export function ExplorePanel({
   open,
   onOpenChange,
   openerRef,
+  onFocusFallback,
   timeMode,
   activePreset,
   layers,
@@ -43,6 +44,7 @@ export function ExplorePanel({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   openerRef: RefObject<HTMLButtonElement | null>;
+  onFocusFallback?: () => void;
   timeMode: TimeMode;
   activePreset: Preset;
   layers: Set<Layer>;
@@ -104,10 +106,14 @@ export function ExplorePanel({
         window.requestAnimationFrame(() => {
           if (opener.isConnected) opener.focus();
         });
+      } else {
+        // The opener can disappear underneath an open panel; park focus on a
+        // surviving map marker instead of dropping it to <body>.
+        onFocusFallback?.();
       }
       document.body.style.overflow = "";
     };
-  }, [onOpenChange, open, openerRef]);
+  }, [onOpenChange, open, openerRef, onFocusFallback]);
 
   return (
     <>

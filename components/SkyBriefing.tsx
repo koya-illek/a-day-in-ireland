@@ -52,9 +52,11 @@ export function SkyLightStrip({ solar, status, now }: {
   const next = nextSolarTransition(solar, now);
   const illumination = solar.moonIllumination === null
     ? "Unavailable"
-    : `${solar.moonIllumination * 100 < 1
-      ? (solar.moonIllumination * 100).toFixed(1)
-      : Math.round(solar.moonIllumination * 100)}%`;
+    : solar.moonIllumination * 100 < 0.1
+      ? "less than 0.1%"
+      : `${solar.moonIllumination * 100 < 1
+        ? (solar.moonIllumination * 100).toFixed(1)
+        : Math.round(solar.moonIllumination * 100)}%`;
   return (
     <section className="sky-light-strip" aria-labelledby="sky-light-heading">
       <div className="sky-light-heading">

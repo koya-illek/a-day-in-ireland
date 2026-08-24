@@ -142,17 +142,17 @@ export function DetailCard({
       role="dialog"
       tabIndex={-1}
     >
-      <button ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>
+      <button type="button" ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>
       {stack && stack.items.length <= MOVEMENT_DRILL_THRESHOLD && (
         <div className="detail-stack-navigation" role="navigation" aria-label="Overlapping map items">
-          <button
+          <button type="button"
             onClick={() => onStackChange((stack.index - 1 + stack.items.length) % stack.items.length)}
             aria-label="Previous item at this location"
           >
             ←
           </button>
           <span>{stack.index + 1} of {stack.items.length}</span>
-          <button
+          <button type="button"
             onClick={() => onStackChange((stack.index + 1) % stack.items.length)}
             aria-label="Next item at this location"
           >

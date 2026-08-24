@@ -50,7 +50,7 @@ export default function InfoPage({
         <div className="info-content">{children}</div>
       </article>
       <footer className="info-footer">
-        <nav aria-label="Project information">
+        <nav aria-label="Project information, footer">
           {INFO_LINKS.filter((item) => item.href !== "/").map((item) => (
             <Link
               key={item.href}

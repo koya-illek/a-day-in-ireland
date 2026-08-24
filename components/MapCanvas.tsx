@@ -107,9 +107,9 @@ export function MapCanvas({
         </g>
       </svg>
       <nav className="map-navigation" aria-label="Map navigation">
-        <button onClick={onZoomIn} disabled={mapView.scale >= 4} aria-label="Zoom in">+</button>
-        <button onClick={onZoomOut} disabled={mapView.scale <= 1} aria-label="Zoom out">−</button>
-        <button
+        <button type="button" onClick={onZoomIn} disabled={mapView.scale >= 4} aria-label="Zoom in">+</button>
+        <button type="button" onClick={onZoomOut} disabled={mapView.scale <= 1} aria-label="Zoom out">−</button>
+        <button type="button"
           className="map-reset"
           onClick={onReset}
           disabled={mapView.scale === 1 && mapView.x === 0 && mapView.y === 0}

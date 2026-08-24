@@ -225,6 +225,53 @@ test("upstream route failures become tool errors instead of transport errors", a
   assert.match(message.result.content[0].text, /temporarily unavailable/);
 });
 
+test("get_history_range answers through tools/call with the stored-coverage payload", async () => {
+  const message = await rpcCall(stubSources(), "tools/call", {
+    name: "get_history_range",
+    arguments: {}
+  });
+  assert.equal(message.result.isError, false);
+  const payload = JSON.parse(message.result.content[0].text);
+  assert.deepEqual(payload.resolutions, []);
+  assert.equal(payload.snapshotCount, 0);
+});
+
+test("tools/call rejects non-object argument containers", async () => {
+  for (const arguments_ of [42, "limit=5", [1, 2], null]) {
+    const message = await rpcCall(stubSources(), "tools/call", {
+      name: "get_transit_positions",
+      arguments: arguments_
+    });
+    assert.equal(message.error?.code, -32602, String(arguments_));
+    assert.match(message.error.message, /arguments must be an object/);
+  }
+});
+
+test("initialize sent as a notification is an error, while ping notifications answer 202", async () => {
+  const notification = (response) => response.status === 202 ? { status: 202 } : response.json();
+  const init = await notification(await handleMcpRequest(post({ jsonrpc: "2.0", method: "initialize", params: {} }), stubSources()));
+  assert.equal(init.status, undefined);
+  assert.match(init.error.message, /initialize must carry an id/);
+
+  const pong = await handleMcpRequest(post({ jsonrpc: "2.0", method: "ping" }), stubSources());
+  assert.equal(pong.status, 202);
+
+  const unknown = await handleMcpRequest(post({ jsonrpc: "2.0", method: "notifications/does-not-exist" }), stubSources());
+  assert.equal(unknown.status, 202);
+});
+
+test("unexpected tool crashes become isError results without leaking the transport", async () => {
+  const exploding = {
+    ...stubSources(),
+    living: async () => {
+      throw new TypeError("cannot read properties of undefined");
+    }
+  };
+  const message = await rpcCall(exploding, "tools/call", { name: "get_living_layers", arguments: {} });
+  assert.equal(message.result.isError, true);
+  assert.match(message.result.content[0].text, /Tool execution failed/);
+});
+
 // ---------------------------------------------------------------------------
 // Dispatcher wiring
 // ---------------------------------------------------------------------------

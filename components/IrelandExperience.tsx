@@ -2540,11 +2540,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onCompare={() => void compareHistoryWithNow()}
         />
         <nav className="map-presets" aria-label="Map view shortcuts">
-          <button className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" /><span className="preset-label">Weather</span></button>
-          <button className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" /><span className="preset-label">Movement</span></button>
-          <button className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" aria-hidden="true" /><span className="preset-label">Water</span></button>
-          <button className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span className="preset-label">All layers</span></button>
-          <button
+          <button type="button" className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" /><span className="preset-label">Weather</span></button>
+          <button type="button" className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" /><span className="preset-label">Movement</span></button>
+          <button type="button" className={activePreset === "water" ? "active" : ""} aria-pressed={activePreset === "water"} onClick={() => showPreset("water")}><span className="preset-dot water" aria-hidden="true" /><span className="preset-label">Water</span></button>
+          <button type="button" className={activePreset === "all" ? "active" : ""} aria-pressed={activePreset === "all"} onClick={() => showPreset("all")}><span className="preset-label">All layers</span></button>
+          <button type="button"
             className={activePreset === "custom" ? "active custom" : "custom"}
             aria-pressed={activePreset === "custom"}
             onClick={(event) => {
@@ -2580,7 +2580,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         {displayedMapNotice && (
           <aside className="map-notice" data-radar-availability={displayedMapNotice.focus === "radar" ? radarPresentationState : undefined}>
             <span>Focused view</span>
-            <button onClick={() => setMapNotice(null)} aria-label="Dismiss map context">×</button>
+            <button type="button" onClick={() => setMapNotice(null)} aria-label="Dismiss map context">×</button>
             <strong>{displayedMapNotice.title}</strong>
             <p>{displayedMapNotice.detail}</p>
           </aside>
@@ -2783,7 +2783,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               const windContents = (
                 <>
                   <circle r="12" />
-                  <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
+                  {windDirectionDegrees(station.windDirection) !== null && (
+                    <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
+                  )}
                   <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>
                 </>
               );
@@ -3079,32 +3081,32 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         {hasVisibleNotable && (
           <div className={`notable-signals ${showAllNotables ? "show-all" : ""}`} role="region" aria-label={`${timeMode === "past" ? "Historical" : "Current"} highlighted signals`}>
           {showRainNotable && weatherNotableCurrent && snapshot.summary.wettest && (snapshot.summary.wettest.rainfall ?? 0) > 0.5 && (
-            <button className="signal-item" onClick={() => focusContext("radar")}>
+            <button type="button" className="signal-item" onClick={() => focusContext("radar")}>
               <span>Rainfall</span><b>{snapshot.summary.wettest.name}</b><small>{snapshot.summary.wettest.rainfall === null ? "Rainfall unavailable" : `${snapshot.summary.wettest.rainfall.toFixed(1)} mm recently observed`}</small>
             </button>
           )}
           {showBathingNotables && bathingNotableCurrent && snapshot.bathingAlerts.map((alert) => (
-            <button className="signal-item" key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
+            <button type="button" className="signal-item" key={alert.id} onClick={() => { focusContext("bathing"); setSelected({ type: "bathing", item: alert }); }}>
               <span>Bathing water</span><b>{alert.name}</b><small>{alert.restriction}</small>
             </button>
           ))}
           {showTideNotable && tideNotableCurrent && unusualTide && Math.abs(unusualTide.surge ?? 0) >= .15 && (
-            <button className="signal-item" onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
+            <button type="button" className="signal-item" onClick={() => { focusContext("tides"); setSelected({ type: "tide", item: unusualTide }); }}>
               <span>Sea-level anomaly</span><b>{unusualTide.name}</b><small>{Math.abs(unusualTide.surge ?? 0).toFixed(2)} m {Number(unusualTide.surge) >= 0 ? "above" : "below"} modelled tide</small>
             </button>
           )}
           {showEarthquakeNotable && earthquakeNotableCurrent && largestEarthquake && (
-            <button className="signal-item" onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
+            <button type="button" className="signal-item" onClick={() => { focusContext("earthquakes"); setSelected({ type: "earthquake", item: largestEarthquake }); }}>
               <span>Seismic detection</span><b>M {largestEarthquake.magnitude.toFixed(1)} · {largestEarthquake.place}</b><small>{formatDate(new Date(largestEarthquake.observedAt))}</small>
             </button>
           )}
           {showIssNotable && issNotableCurrent && visibleIssPass && (
-            <button className="signal-item" onClick={() => focusContext("iss")}>
+            <button type="button" className="signal-item" onClick={() => focusContext("iss")}>
               <span>Night sky</span><b>ISS pass at {formatTime(new Date(visibleIssPass.startsAt))}</b><small>{formatDate(new Date(visibleIssPass.startsAt))} · up to {visibleIssPass.maxElevation.toFixed(0)}°</small>
             </button>
           )}
           {notableItemCount > 1 && (
-            <button className="notable-more" onClick={() => setShowAllNotables((current) => !current)}>
+            <button type="button" className="notable-more" onClick={() => setShowAllNotables((current) => !current)}>
               {showAllNotables ? "Show fewer" : `View ${notableItemCount - 1} more`}
             </button>
           )}
@@ -3115,7 +3117,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         )}
 
         <div className="what-matters-grid">
-        <button className="pulse-card grid" onClick={() => focusContext("grid")}>
+        <button type="button" className="pulse-card grid" onClick={() => focusContext("grid")}>
           <span><i>ϟ</i> All-island electricity</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : gridWindShare === null ? "Unavailable" : `${gridWindShare.toFixed(0)}%`}</strong>
           <small>{isConnectingWithoutSnapshot
@@ -3133,13 +3135,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                     : "EirGrid data unavailable; current wind share cannot be assessed"}</small>
           <b>Open the grid {timeMode === "past" ? "at capture" : "now"} →</b>
         </button>
-        <button className="pulse-card trains" onClick={() => focusContext("trains")}>
+        <button type="button" className="pulse-card trains" onClick={() => focusContext("trains")}>
           <span><i>⌁</i> Rail positions</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : timeMode === "past" ? historyState.envelope?.movementSummary.rail?.total ?? "Unavailable" : railNotableCurrent || trainsCached ? runningTrainCount ?? "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored rail aggregate" : "Connecting to Iarnród Éireann positions"}` : timeMode === "past" ? historyState.envelope?.movementSummary.rail ? "rail services represented in the retained aggregate; individual positions were not retained" : historyGapForFocus(historyGaps, "trains")?.detail ?? "rail history unavailable; no zero is inferred" : railNotableCurrent ? runningTrainCount === null ? "rail positions are present, but the service count is unavailable" : "trains currently reporting a position across Ireland · last seen at refresh, not a provider observation clock" : trainsCached ? runningTrainCount === null ? "cached positions are present, but the service count is unavailable" : "trains represented in the cached snapshot; current rail movement is unconfirmed" : "rail positions unavailable; current movement cannot be assessed"}</small>
           <b>Follow the trains →</b>
         </button>
-        <button className="pulse-card rivers" onClick={() => focusContext("rivers")}>
+        <button type="button" className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "Unavailable" : "Unavailable"}</strong>
           <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "temporary OPW fetch-path readings are present, but the gauge count is unavailable" : `temporary ${snapshot.sourceProvenance?.rivers.fallback} path · still OPW gauge levels` : "river readings unavailable; current levels cannot be assessed"}</small>
@@ -3240,6 +3242,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       open={panelOpen}
       onOpenChange={setExplorePanelOpen}
       openerRef={panelOpenerRef}
+      onFocusFallback={parkMapFocusAfterDetailClose}
       timeMode={timeMode}
       activePreset={activePreset}
       layers={layers}
