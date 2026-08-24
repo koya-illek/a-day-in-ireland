@@ -128,6 +128,13 @@ const compareStableIds = (first: string, second: string) =>
 // stale; only true absence withholds data. The panels word the caveat.
 const retainedContextStatuses: ReadonlySet<LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]> = new Set(["live", "partial", "fallback", "stale"]);
 
+const latestObservedTimestamp = (items: Array<{ observedAt: string | null }>) => items.length
+  ? items.reduce((latest, item) => {
+      const ts = Date.parse(item.observedAt ?? "");
+      return Number.isFinite(ts) && ts > latest ? ts : latest;
+    }, 0)
+  : 0;
+
 type MovementRecord = TrainPosition | LiveSnapshot["transit"][number];
 
 const stablePayloadValue = (value: unknown) => {
@@ -1437,44 +1444,45 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     : ["live", "partial", "fallback", "stale"].includes(snapshot.contextStatus.warnings);
   const warningsCurrent = snapshotReadable && snapshot.contextStatus.warnings === "live";
   const warningsUnavailable = !warningsUsable;
-  const guidancePlace: GuidancePlace = {
+  const guidancePlace = useMemo<GuidancePlace>(() => ({
     id: selectedPlace.id,
     name: selectedPlace.name,
     latitude: selectedPlace.lat,
     longitude: selectedPlace.lon
-  };
-  const activityGuidance = getActivityGuidance(snapshot, now, guidancePlace);
+  }), [selectedPlace]);
+  // Guidance is prose with minute-scale wording; recomputing its haversine
+  // scans on every clock tick bought nothing, so it refreshes on a 15 s
+  // cadence instead.
+  const guidanceTick = Math.floor(now.getTime() / 15_000) * 15_000;
+  const activityGuidance = useMemo(
+    () => getActivityGuidance(snapshot, new Date(guidanceTick), guidancePlace),
+    [snapshot, guidanceTick, guidancePlace]
+  );
   const visibleWarnings = warningsUnavailable ? [] : sortOfficialWeatherWarnings(snapshot.warnings, now.getTime());
   const currentWarnings = visibleWarnings.filter((warning) => warningTiming(warning, now.getTime()) === "active");
   const activeWarning = currentWarnings[0] ?? null;
-  const unusualTide = snapshot.tides
-    .filter((tide) => tide.surge !== null)
-    .sort((a, b) => Math.abs(b.surge ?? 0) - Math.abs(a.surge ?? 0))[0] ?? null;
-  const largestEarthquake = [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null;
-  const visibleIssPass = snapshot.iss?.passes.find((pass) => pass.visible) ?? null;
+  const unusualTide = useMemo(
+    () => snapshot.tides
+      .filter((tide) => tide.surge !== null)
+      .sort((a, b) => Math.abs(b.surge ?? 0) - Math.abs(a.surge ?? 0))[0] ?? null,
+    [snapshot.tides]
+  );
+  const largestEarthquake = useMemo(
+    () => [...snapshot.earthquakes].sort((a, b) => b.magnitude - a.magnitude)[0] ?? null,
+    [snapshot.earthquakes]
+  );
+  const visibleIssPass = useMemo(
+    () => snapshot.iss?.passes.find((pass) => pass.visible) ?? null,
+    [snapshot.iss]
+  );
   const showRainNotable = layers.has("rain");
   const showBathingNotables = layers.has("bathing");
   const showTideNotable = layers.has("tides");
   const showEarthquakeNotable = layers.has("earthquakes");
   const showIssNotable = layers.has("iss");
-  const latestWeatherObs = snapshot.stations.length
-    ? snapshot.stations.reduce((latest, station) => {
-        const ts = Date.parse(station.observedAt ?? "");
-        return Number.isFinite(ts) && ts > latest ? ts : latest;
-      }, 0)
-    : 0;
-  const latestTrainObs = snapshot.trains.length
-    ? snapshot.trains.reduce((latest, train) => {
-        const ts = Date.parse(train.observedAt);
-        return Number.isFinite(ts) && ts > latest ? ts : latest;
-      }, 0)
-    : 0;
-  const latestRiverObs = snapshot.rivers.length
-    ? snapshot.rivers.reduce((latest, river) => {
-        const ts = Date.parse(river.observedAt);
-        return Number.isFinite(ts) && ts > latest ? ts : latest;
-      }, 0)
-    : 0;
+  const latestWeatherObs = useMemo(() => latestObservedTimestamp(snapshot.stations), [snapshot.stations]);
+  const latestTrainObs = useMemo(() => latestObservedTimestamp(snapshot.trains), [snapshot.trains]);
+  const latestRiverObs = useMemo(() => latestObservedTimestamp(snapshot.rivers), [snapshot.rivers]);
   const weatherStale = isDataStale(
     latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : null,
     STALE_THRESHOLDS.weather,
@@ -1600,16 +1608,22 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   // "unavailable" contradicted the map's own loading and partial-coverage
   // notices, so while tiles load the assessment simply omits it, and only
   // genuinely unusable presentation states are forced to unavailable.
-  const radarAssessmentLayers = radarLayerActive && radarPresentationState === "loading"
-    ? (() => {
-        const next = new Set(layers);
-        next.delete("radar");
-        return next;
-      })()
-    : layers;
-  const assessmentSnapshot = radarLayerActive && radarPresentationState !== "live" && radarPresentationState !== "loading"
-    ? { ...snapshot, contextStatus: { ...snapshot.contextStatus, radar: "unavailable" as const } }
-    : snapshot;
+  const radarAssessmentLayers = useMemo(
+    () => radarLayerActive && radarPresentationState === "loading"
+      ? (() => {
+          const next = new Set(layers);
+          next.delete("radar");
+          return next;
+        })()
+      : layers,
+    [radarLayerActive, radarPresentationState, layers]
+  );
+  const assessmentSnapshot = useMemo(
+    () => radarLayerActive && radarPresentationState !== "live" && radarPresentationState !== "loading"
+      ? { ...snapshot, contextStatus: { ...snapshot.contextStatus, radar: "unavailable" as const } }
+      : snapshot,
+    [snapshot, radarLayerActive, radarPresentationState]
+  );
   const assessedSources = getSelectedSourceAssessment(assessmentSnapshot, radarAssessmentLayers, now.getTime());
   const selectedSourceAssessment = timeMode === "past" && !online
     ? {
