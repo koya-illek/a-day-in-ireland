@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "next build && rm -rf dist/client dist/server && mkdir -p dist/client dist/server dist/.openai && cp -R out/. dist/client/ && cp platform/server-entry.js dist/server/index.js && cp platform/api-core.js platform/bounded-io.js platform/river-source.js platform/sky-source.js platform/live-normalize.js platform/weather-stations.js dist/server/ && cp .openai/hosting.json dist/.openai/hosting.json && node scripts/write-build-provenance.mjs dist/client/build-provenance.json && node scripts/write-csp-headers.mjs dist/client",
+    "build": "next build && rm -rf dist/client dist/server && mkdir -p dist/client dist/server dist/.openai && cp -R out/. dist/client/ && cp platform/server-entry.js dist/server/index.js && cp platform/api-core.js platform/bounded-io.js platform/openapi.js platform/mcp-core.js platform/river-source.js platform/sky-source.js platform/live-normalize.js platform/weather-stations.js dist/server/ && cp .openai/hosting.json dist/.openai/hosting.json && node scripts/write-build-provenance.mjs dist/client/build-provenance.json && node scripts/write-csp-headers.mjs dist/client",
     "start": "next start",
     "lint": "eslint .",
     "test": "node --test tests/*.test.mjs",
