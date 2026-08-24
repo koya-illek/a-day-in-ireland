@@ -2608,8 +2608,7 @@ footer {
 .map-legend { order: 8; }
 
 .history-mode-row,
-.history-compare-actions,
-.history-comparison-heading {
+.history-compare-actions {
   align-items: center;
   display: flex;
   gap: .75rem;
@@ -2760,18 +2759,20 @@ footer {
 .history-period-summary dt,
 .history-period-summary dd { font-size: .8125rem; margin: 0; }
 .history-period-summary dd { color: #dffef3; font-weight: 800; text-align: right; }
-.history-comparison-heading { font-size: .8125rem; }
-.history-comparison dl { margin: .45rem 0 0; }
-.history-comparison dl > div {
+.history-comparison table { border-collapse: collapse; margin-top: .45rem; width: 100%; }
+.history-comparison th,
+.history-comparison td {
   border-top: 1px solid rgba(151, 190, 201, .18);
-  display: grid;
-  gap: .5rem;
-  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 1.5fr);
-  padding: .5rem 0;
+  font-size: .8125rem;
+  font-weight: 600;
+  padding: .5rem .35rem .5rem 0;
+  text-align: right;
+  vertical-align: baseline;
 }
-.history-comparison dt,
-.history-comparison dd { font-size: .8125rem; margin: 0; }
-.history-comparison dd { display: grid; gap: .5rem; grid-template-columns: repeat(2, minmax(0, 1fr)); text-align: right; }
+.history-comparison thead th { color: var(--muted); font-weight: 400; }
+.history-comparison tbody th,
+.history-comparison thead th:first-child { text-align: left; }
+.history-comparison td { color: #dffef3; }
 .history-map-gap { border-left-color: #f1c76f; top: 0; }
 .history-guidance { border-color: rgba(149, 171, 116, .35); }
 .is-history .refresh-data-button:disabled { opacity: 1; }
@@ -2783,8 +2784,8 @@ footer {
   .history-picker { grid-template-columns: minmax(0, 1fr); }
   .history-picker .history-apply,
   .history-compare-actions button { width: 100%; }
-  .history-comparison dl > div { grid-template-columns: minmax(0, 1fr); }
-  .history-comparison dd { text-align: left; }
+  .history-comparison thead th:first-child,
+  .history-comparison tbody th { width: 1%; }
   .history-period-summary { grid-template-columns: minmax(0, 1fr); }
   .is-history .map-notice { max-height: none; top: 0; }
 }
@@ -2792,7 +2793,6 @@ footer {
 @media (max-width: 360px) {
   .history-controls { padding: .6rem; }
   .history-mode-toggle { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .history-comparison-heading { align-items: flex-start; flex-direction: column; }
 }
 
 @media (forced-colors: active) {

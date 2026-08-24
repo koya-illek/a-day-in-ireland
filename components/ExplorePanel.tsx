@@ -120,6 +120,7 @@ export function ExplorePanel({
       {open && (
         <button
           className="panel-backdrop"
+          type="button"
           aria-label="Close layer panel backdrop"
           onClick={() => onOpenChange(false)}
         />
@@ -135,7 +136,7 @@ export function ExplorePanel({
       >
         <div className="panel-heading">
           <div><p className="utility-label">Explore the moment</p><h2>{timeMode === "past" ? "Stored layers" : "Live layers"}</h2></div>
-          <button ref={closeRef} onClick={() => onOpenChange(false)} aria-label="Close explore panel">×</button>
+          <button ref={closeRef} type="button" onClick={() => onOpenChange(false)} aria-label="Close explore panel">×</button>
         </div>
         <div className="panel-layer-state" role="status">
           <strong>{activePreset === "custom"
@@ -183,6 +184,7 @@ export function ExplorePanel({
                   <button
                     key={id}
                     data-layer-id={id}
+                    type="button"
                     className={layers.has(id) ? "active" : ""}
                     onClick={() => onToggleLayer(id)}
                     aria-pressed={layers.has(id)}

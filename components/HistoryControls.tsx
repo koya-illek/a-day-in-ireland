@@ -188,8 +188,8 @@ export function HistoryControls({
       {mode === "past" && (
         <>
           <div className="history-picker">
-            <label>Date in Ireland<input type="date" aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); setWallTimeError(""); }} /></label>
-            <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); setWallTimeError(""); }} /></label>
+            <label>Date in Ireland<input type="date" aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); setAmbiguousCandidates([]); setWallTimeError(""); }} /></label>
+            <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); setAmbiguousCandidates([]); setWallTimeError(""); }} /></label>
             <button type="button" className="history-apply" onClick={submitWallTime} disabled={!dateInput || !timeInput || history.status === "loading"}>Show past conditions</button>
           </div>
           {ambiguousCandidates.length > 1 && (
@@ -267,12 +267,24 @@ export function HistoryControls({
           {comparison.status === "error" && <p className="history-error" role="alert">Comparison unavailable. {comparison.error}</p>}
           {comparison.status === "ready" && history.envelope && comparison.envelope?.resolvedAt && (
             <div className="history-comparison" role="region" aria-label="Selected historical conditions compared with the latest stored snapshot">
-              <div className="history-comparison-heading"><b>Selected · {history.envelope.resolvedAt ? formatIrelandHistoryTime(history.envelope.resolvedAt) : "Unavailable"}</b><b>Latest stored · {formatIrelandHistoryTime(comparison.envelope.resolvedAt)}</b></div>
-              <dl>
-                {historyMetricRows(history.envelope, comparison.envelope).map((row) => (
-                  <div key={row.label}><dt>{row.label}</dt><dd><span>{row.past}</span><span>{row.comparison}</span></dd></div>
-                ))}
-              </dl>
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Metric</th>
+                    <th scope="col">Selected · {history.envelope.resolvedAt ? formatIrelandHistoryTime(history.envelope.resolvedAt) : "Unavailable"}</th>
+                    <th scope="col">Latest stored · {formatIrelandHistoryTime(comparison.envelope.resolvedAt)}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyMetricRows(history.envelope, comparison.envelope).map((row) => (
+                    <tr key={row.label}>
+                      <th scope="row">{row.label}</th>
+                      <td>{row.past}</td>
+                      <td>{row.comparison}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>
