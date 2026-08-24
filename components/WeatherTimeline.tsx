@@ -23,9 +23,9 @@ export function WeatherTimeline({
   const temperatures = timeline
     .map((point) => point.temperature)
     .filter((value): value is number => value !== null && Number.isFinite(value));
-  const temperatureMin = temperatures.length ? Math.floor(Math.min(...temperatures) - 1) : 0;
-  const temperatureMax = temperatures.length ? Math.ceil(Math.max(...temperatures) + 1) : 20;
-  const temperatureRange = Math.max(1, temperatureMax - temperatureMin);
+  const temperatureMin = temperatures.length ? Math.floor(Math.min(...temperatures) - 1) : null;
+  const temperatureMax = temperatures.length ? Math.ceil(Math.max(...temperatures) + 1) : null;
+  const temperatureRange = Math.max(1, (temperatureMax ?? 0) - (temperatureMin ?? 0));
   const rainValues = timeline
     .map((point) => point.rainfall)
     .filter((value): value is number => value !== null && Number.isFinite(value));
@@ -56,13 +56,15 @@ export function WeatherTimeline({
           >
             <div className="timeline-plot">
               <div className="timeline-axis temperature-axis" aria-hidden="true">
-                <span>{temperatureMax}°C</span>
+                {/* Without any finite reading an invented 0-20 scale would
+                    fabricate data the chart does not hold. */}
+                <span>{temperatureMax !== null ? `${temperatureMax}°C` : "–"}</span>
                 <strong>Temperature</strong>
-                <span>{temperatureMin}°C</span>
+                <span>{temperatureMin !== null ? `${temperatureMin}°C` : "–"}</span>
               </div>
               <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
             {timeline.map((point) => {
-              const temperatureHeight = point.temperature === null
+              const temperatureHeight = point.temperature === null || temperatureMin === null
                 ? 4
                 : 12 + ((point.temperature - temperatureMin) / temperatureRange) * 76;
               const rainHeight = point.rainfall === null || point.rainfall <= 0
