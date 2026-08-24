@@ -2013,10 +2013,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     if (applied !== null && applied === projection) return;
     const point = projection([pending.longitude, pending.latitude]);
     if (!point) return;
+    // The viewport renders translate(x y) scale(s): screen = s·point + offset.
+    // Centring therefore needs offset = centre − s·point, matching cluster
+    // zoom and the URL writer's inverse below.
     setMapView(constrainMapView(
       pending.zoom,
-      500 - (500 - point[0]) * pending.zoom,
-      450 - (450 - point[1]) * pending.zoom
+      500 - point[0] * pending.zoom,
+      450 - point[1] * pending.zoom
     ));
     if (applied === null) {
       hashViewAppliedProjectionRef.current = projection;
