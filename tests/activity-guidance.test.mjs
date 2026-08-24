@@ -247,6 +247,26 @@ test("warning feed unavailable maps to limited context, never caution", () => {
   assert.notEqual(walk.status, "caution");
 });
 
+test("a stale notice feed keeps active notices visible and discloses the cached check", () => {
+  const guidance = getActivityGuidance(baseSnapshot({
+    stations: [station({ id: "cork", name: "Cork", latitude: cork.latitude, longitude: cork.longitude })],
+    warnings: [warning({ headline: "Rain warning for Cork", description: "Heavy rain in Cork", regions: ["Cork"] })],
+    contextStatus: { ...baseSnapshot().contextStatus, warnings: "stale" }
+  }), now, cork);
+  const walk = byId(guidance, "outdoor-walk");
+  assert.equal(walk.status, "relevant-notice");
+  assert.match(walk.caveat, /last completed check/);
+});
+
+test("a stale notice feed with no notices stays live-observations but never claims an all-clear", () => {
+  const guidance = getActivityGuidance(baseSnapshot({
+    contextStatus: { ...baseSnapshot().contextStatus, warnings: "stale" }
+  }), now);
+  const walk = byId(guidance, "outdoor-walk");
+  assert.equal(walk.status, "live-observations");
+  assert.match(walk.caveat, /last completed check/);
+});
+
 test("bathing alerts stay localized and do not affect an unrelated selected place", () => {
   const snapshot = baseSnapshot({
     marine: [{ id: "cork-buoy", name: "Cork coast", kind: "coastal-observatory", latitude: 51.9, longitude: -8.47, observedAt, windSpeedKnots: 6, waveHeight: null, wavePeriod: null, seaTemperature: 15 }],

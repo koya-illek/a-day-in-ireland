@@ -51,6 +51,12 @@ export function OfficialNotices({
   historyGaps: HistoryGap[];
   historyGapDetail: (gaps: HistoryGap[]) => string | undefined;
 }) {
+  const degradedCaveat = snapshot.contextStatus.warnings === "stale"
+    ? `The notice feed could not be refreshed just now; these notices come from the last completed check, ${lastSuccessLabel}.`
+    : snapshot.contextStatus.warnings === "partial" || snapshot.contextStatus.warnings === "fallback"
+      ? "The notice feed answered partially, so this list may be missing some notices."
+      : null;
+
   return (
     <section
       id="official-notices"
@@ -77,43 +83,48 @@ export function OfficialNotices({
           {layers.has("warnings") ? isConnectingWithoutSnapshot ? (
             <p className="official-notices-empty">{timeMode === "past" ? "Loading stored Met Éireann notices…" : "Connecting to the Met Éireann notice feed…"}</p>
           ) : visibleWarnings.length ? (
-            visibleWarnings.map((warning, warningIndex) => {
-              const timing = warningTiming(warning, now.getTime());
-              const isActive = timing === "active";
-              const warningIdentity = warning.id || warning.capId || `${warning.headline}-${warningIndex}`;
-              return (
-                <aside
-                  id={isActive && warning === activeWarning ? "active-warning" : undefined}
-                  key={warningIdentity}
-                  className={`warning-strip official-notice ${(warning.level || "advisory").toLowerCase()} ${timing}`}
-                  aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice ${timeMode === "past" ? "at the selected time " : ""}for ${warningScopeText(warning)}`}
-                >
-                  <span className="warning-badge">{timeMode === "past" ? isActive ? "Active at capture" : "Upcoming at capture" : isActive ? "Official notice" : "Upcoming notice"}</span>
-                  <div className="warning-copy">
-                    <h3>{warning.headline}</h3>
-                    <dl className="warning-key-facts">
-                      <div><dt>Scope</dt><dd>{warningScopeText(warning)}</dd></div>
-                      <div>
-                        <dt>{isActive ? "Expires" : "Starts"}</dt>
-                        <dd><time dateTime={isActive ? warning.expiry : warning.onset}>{formatWarningDate(isActive ? warning.expiry : warning.onset)}</time></dd>
+            <>
+              {visibleWarnings.map((warning, warningIndex) => {
+                const timing = warningTiming(warning, now.getTime());
+                const isActive = timing === "active";
+                const warningIdentity = warning.id || warning.capId || `${warning.headline}-${warningIndex}`;
+                return (
+                  <aside
+                    id={isActive && warning === activeWarning ? "active-warning" : undefined}
+                    key={warningIdentity}
+                    className={`warning-strip official-notice ${(warning.level || "advisory").toLowerCase()} ${timing}`}
+                    aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice ${timeMode === "past" ? "at the selected time " : ""}for ${warningScopeText(warning)}`}
+                  >
+                    <span className="warning-badge">{timeMode === "past" ? isActive ? "Active at capture" : "Upcoming at capture" : isActive ? "Official notice" : "Upcoming notice"}</span>
+                    <div className="warning-copy">
+                      <h3>{warning.headline}</h3>
+                      <dl className="warning-key-facts">
+                        <div><dt>Scope</dt><dd>{warningScopeText(warning)}</dd></div>
+                        <div>
+                          <dt>{isActive ? "Expires" : "Starts"}</dt>
+                          <dd><time dateTime={isActive ? warning.expiry : warning.onset}>{formatWarningDate(isActive ? warning.expiry : warning.onset)}</time></dd>
+                        </div>
+                      </dl>
+                      <p>{warning.description || "Met Éireann has not supplied a description for this notice."}</p>
+                      <div className="warning-actions">
+                        <a href={OFFICIAL_WARNING_URL} target="_blank" rel="noreferrer">{timeMode === "past" ? "Open current Met Éireann warning page" : "Check official Met Éireann notice"} <span aria-hidden="true">↗</span></a>
+                        <details>
+                          <summary>Source and issue details</summary>
+                          <p>Met Éireann · {warning.level || "Unspecified"} level · severity {warning.severity || "not specified"} · issued {formatWarningDate(warning.issued)} · updated {formatWarningDate(warning.updated)}</p>
+                        </details>
                       </div>
-                    </dl>
-                    <p>{warning.description || "Met Éireann has not supplied a description for this notice."}</p>
-                    <div className="warning-actions">
-                      <a href={OFFICIAL_WARNING_URL} target="_blank" rel="noreferrer">{timeMode === "past" ? "Open current Met Éireann warning page" : "Check official Met Éireann notice"} <span aria-hidden="true">↗</span></a>
-                      <details>
-                        <summary>Source and issue details</summary>
-                        <p>Met Éireann · {warning.level || "Unspecified"} level · severity {warning.severity || "not specified"} · issued {formatWarningDate(warning.issued)} · updated {formatWarningDate(warning.updated)}</p>
-                      </details>
                     </div>
-                  </div>
-                </aside>
-              );
-            })
+                  </aside>
+                );
+              })}
+              {degradedCaveat && <p className="official-notices-caveat">{degradedCaveat}</p>}
+            </>
           ) : warningsUnavailable ? (
             <p className="official-notices-empty">{timeMode === "past"
               ? historyGapDetail(historyGaps) ?? "Official notices were not retained in this historical record; no zero or all-clear state is inferred."
               : !online ? `Offline. The notice feed cannot be refreshed; last success ${lastSuccessLabel}, so current warnings cannot be confirmed.` : snapshot.contextStatus.warnings === "stale" ? `The last notice check is cached from ${lastSuccessLabel}; current warnings cannot be confirmed.` : "The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed."}</p>
+          ) : snapshot.contextStatus.warnings !== "live" ? (
+            <p className="official-notices-empty">The notice feed answered without a complete list, so no all-clear is inferred from the empty result.</p>
           ) : (
             <p className="official-notices-empty">{timeMode === "past" ? "No active or upcoming Met Éireann notices are represented in this stored record." : "No current or upcoming Met Éireann notices are represented in the current horizon."}</p>
           ) : (

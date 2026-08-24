@@ -107,7 +107,23 @@ const warningAppliesToPlace = (warning: WeatherWarning, place: GuidancePlace) =>
   return isIsland(place) || warningScope(warning, place) === "place";
 };
 
-const activeWarnings = (snapshot: LiveSnapshot, now: number) => snapshot.contextStatus.warnings === "live"
+// Met Éireann notices are long-lived documents (a wind warning can run for
+// days), so a cached check that still lists them stays usable evidence. Only a
+// missing or explicitly failed feed justifies hiding notices.
+const warningsFeedUsable = (snapshot: LiveSnapshot) =>
+  ["live", "partial", "fallback", "stale"].includes(snapshot.contextStatus.warnings);
+
+const warningsFeedCaveat = (snapshot: LiveSnapshot): string | null => {
+  switch (snapshot.contextStatus.warnings) {
+    case "live": return null;
+    case "stale": return "Official notices come from the last completed check; current warnings cannot be confirmed.";
+    case "partial":
+    case "fallback": return "The Met Éireann notice feed answered partially, so some official notices may be missing.";
+    default: return "The Met Éireann notice feed is unavailable, so official notices cannot be assessed here.";
+  }
+};
+
+const activeWarnings = (snapshot: LiveSnapshot, now: number) => warningsFeedUsable(snapshot)
   ? snapshot.warnings.filter((warning) => warningTiming(warning, now) === "active")
   : [];
 
@@ -149,8 +165,8 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
       "Outdoor walk",
       place.name,
       `No recent weather observation with a usable temperature, rainfall, or wind value is available ${location}.`,
-      snapshot.contextStatus.warnings !== "live"
-        ? "The Met Éireann notice feed is unavailable, and local observations cannot support a fuller context."
+      warningsFeedCaveat(snapshot)
+        ? `${warningsFeedCaveat(snapshot)} Local observations cannot support a fuller context.`
         : "The walk card reports observations only; it cannot assess conditions without a nearby usable record."
     );
   }
@@ -184,9 +200,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
     unknownWarnings.length
       ? `${unknownWarnings.length} active official notice${unknownWarnings.length === 1 ? " is" : "s are"} displayed separately; ${unknownWarnings.length === 1 ? "its category does" : "their categories do"} not change this observation state.`
       : null,
-    snapshot.contextStatus.warnings !== "live"
-      ? "The Met Éireann notice feed is unavailable, so official notices cannot be assessed here."
-      : null,
+    warningsFeedCaveat(snapshot),
     highestAqi?.source === "modelled" ? `The strongest air-quality value ${aqiLocation} is modelled rather than measured.` : null,
     temperatures.length < stations.length || rainfall.length < stations.length || wind.length < stations.length
       ? "Some station fields are missing."
@@ -201,7 +215,7 @@ function scoreOutdoorWalk(snapshot: LiveSnapshot, now: number, place: GuidancePl
     caveat: caveats.join(" "),
     status: relevantWarnings.length
       ? warningStatus(relevantWarnings, place)
-      : snapshot.contextStatus.warnings !== "live" ? "limited-context" : "live-observations"
+      : warningsFeedUsable(snapshot) ? "live-observations" : "limited-context"
   };
 }
 

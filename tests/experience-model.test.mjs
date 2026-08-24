@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 
-const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex, weatherNarrative } = await (async () => {
+const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex, weatherNarrative, buildHeroFacts } = await (async () => {
   const source = await readFile(new URL("../components/experience-model.ts", import.meta.url), "utf8");
   const output = ts.transpileModule(source, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
@@ -88,4 +88,22 @@ test("the weather narrative keeps the rain lead when only rainfall is known", ()
     weatherNarrative(narrativeSnapshot({ wettest: { name: "Malin Head", rainfall: 1 } })),
     "Rain is being observed around Malin Head. The warmest station is unavailable."
   );
+});
+
+test("hero notice facts separate presence evidence from all-clear claims", () => {
+  const base = { activeNoticeCount: 0, upcomingNoticeCount: 0, weatherNotableCurrent: false, warmestStation: null, wettestStation: null, windiestStation: null };
+  const notices = (options) => buildHeroFacts({ ...base, ...options }).filter((fact) => fact.key === "warnings");
+
+  const clear = notices({ warningsUsable: true, warningsCurrent: true, activeNoticeCount: 0 });
+  assert.equal(clear.length, 1);
+  assert.equal(clear[0].value, "Clear");
+  assert.equal(clear[0].detail, "No current or upcoming notices");
+
+  const stalePresence = notices({ warningsUsable: true, warningsCurrent: false, activeNoticeCount: 2 });
+  assert.equal(stalePresence.length, 1);
+  assert.equal(stalePresence[0].value, "2");
+  assert.equal(stalePresence[0].detail, "Notices now in effect");
+
+  assert.deepEqual(notices({ warningsUsable: true, warningsCurrent: false }), []);
+  assert.deepEqual(notices({ warningsUsable: false, warningsCurrent: false }), []);
 });

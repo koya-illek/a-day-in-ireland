@@ -1562,6 +1562,13 @@ footer {
   margin: .6rem 0 0;
   padding: .65rem .75rem;
 }
+.official-notices-caveat {
+  border-left: 2px solid rgba(241, 199, 111, .45);
+  color: var(--muted);
+  font: .62rem/1.45 ui-monospace, monospace;
+  margin: .6rem 0 0;
+  padding: .35rem 0 .35rem .65rem;
+}
 .layer-list {
   gap: 1.15rem;
 }

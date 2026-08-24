@@ -247,7 +247,12 @@ export type HeroFactDraft = {
 };
 
 export function buildHeroFacts(options: {
-  warningsUnavailable: boolean;
+  // Usable: retained notices are real evidence, so a presence claim ("2
+  // official notices") may rest on a cached check. Current: absence claims
+  // ("Clear") need live evidence, because a stale feed cannot prove nothing
+  // has been issued since.
+  warningsUsable: boolean;
+  warningsCurrent: boolean;
   activeNoticeCount: number;
   upcomingNoticeCount: number;
   weatherNotableCurrent: boolean;
@@ -255,25 +260,31 @@ export function buildHeroFacts(options: {
   wettestStation: { name: string; rainfall: number | null } | null;
   windiestStation: { name: string; windSpeed: number | null } | null;
 }): HeroFactDraft[] {
+  const noticePresence = options.warningsUsable && (options.activeNoticeCount > 0 || options.upcomingNoticeCount > 0);
   return [
-    !options.warningsUnavailable
+    noticePresence
       ? {
           key: "warnings",
           family: "notices",
-          label: options.activeNoticeCount > 0 ? "official notices" : options.upcomingNoticeCount > 0 ? "notice outlook" : "official notices",
+          label: options.activeNoticeCount > 0 ? "official notices" : "notice outlook",
           value: options.activeNoticeCount > 0
             ? formatCount(options.activeNoticeCount)
-            : options.upcomingNoticeCount > 0
-              ? formatCount(options.upcomingNoticeCount)
-              : "Clear",
+            : formatCount(options.upcomingNoticeCount),
           detail: options.activeNoticeCount > 0
             ? `${options.activeNoticeCount === 1 ? "Notice" : "Notices"} now in effect`
-            : options.upcomingNoticeCount > 0
-              ? `${options.upcomingNoticeCount === 1 ? "Notice" : "Notices"} due later`
-              : "No current or upcoming notices",
+            : `${options.upcomingNoticeCount === 1 ? "Notice" : "Notices"} due later`,
           action: "notices" as const
         }
-      : null,
+      : options.warningsCurrent && !options.activeNoticeCount && !options.upcomingNoticeCount
+        ? {
+            key: "warnings",
+            family: "notices",
+            label: "official notices",
+            value: "Clear",
+            detail: "No current or upcoming notices",
+            action: "notices" as const
+          }
+        : null,
     options.weatherNotableCurrent && options.warmestStation?.temperature != null
       ? {
           key: "temperature",

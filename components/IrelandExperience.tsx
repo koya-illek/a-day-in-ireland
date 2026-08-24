@@ -1421,7 +1421,16 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         selectedPlace,
         selectedPlaceIsEphemeral ? Number.POSITIVE_INFINITY : NEARBY_RADIUS_KM.air
       );
-  const warningsUnavailable = !snapshotReadable || snapshot.contextStatus.warnings !== "live";
+  // Met Éireann notices are long-lived documents, so a cached ("stale") or
+  // partial feed still counts as usable evidence and keeps notices visible;
+  // only a missing or explicitly failed feed hides them. Affirmative
+  // all-clear claims ("Clear", the compact all-clear row) require the live
+  // status, because absence cannot be asserted from cached evidence.
+  const warningsUsable = !snapshotReadable
+    ? false
+    : ["live", "partial", "fallback", "stale"].includes(snapshot.contextStatus.warnings);
+  const warningsCurrent = snapshotReadable && snapshot.contextStatus.warnings === "live";
+  const warningsUnavailable = !warningsUsable;
   const guidancePlace: GuidancePlace = {
     id: selectedPlace.id,
     name: selectedPlace.name,
@@ -1749,7 +1758,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     weatherDisplayStatus
   });
   const heroFacts = buildHeroFacts({
-    warningsUnavailable,
+    warningsCurrent,
+    warningsUsable,
     activeNoticeCount,
     upcomingNoticeCount,
     weatherNotableCurrent,
@@ -2116,10 +2126,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           ? "Current Met Éireann notice"
           : warningsUnavailable
             ? "Met Éireann notice feed unavailable"
-            : "No current Met Éireann notices",
+            : warningsCurrent
+              ? "No current Met Éireann notices"
+              : "Notices from the last completed check",
         detail: activeWarning?.headline ?? (warningsUnavailable
           ? "The notice feed could not be refreshed, so this view cannot confirm whether a current warning or advisory exists."
-          : "Met Éireann is not currently publishing a warning or advisory for Ireland.")
+          : warningsCurrent
+            ? "Met Éireann is not currently publishing a warning or advisory for Ireland."
+            : `The notices shown come from the last completed check (${lastSuccessLabel}); current warnings cannot be confirmed.`)
       },
       radar: {
         title: "Rainfall radar",
@@ -2229,7 +2243,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       document.getElementById(focus === "warnings" && activeWarning ? "active-warning" : "live-map")
         ?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
     });
-  }, [activeWarning, coastalObservatoryCount, lastSuccessLabel, now, online, prefersReducedMotion, railNotableCurrent, reportingCount, riverDataStale, riverStationCount, riversCached, riversFallback, riversLive, riversPartial, runningTrainCount, snapshot, trainsCached, warningsUnavailable, weatherBuoyCount, weatherNotableCurrent]);
+  }, [activeWarning, coastalObservatoryCount, lastSuccessLabel, now, online, prefersReducedMotion, railNotableCurrent, reportingCount, riverDataStale, riverStationCount, riversCached, riversFallback, riversLive, riversPartial, runningTrainCount, snapshot, trainsCached, warningsCurrent, warningsUnavailable, weatherBuoyCount, weatherNotableCurrent]);
 
   const toggleLayer = useCallback((layer: Layer) => {
     rememberVisibleMapAnchor();
@@ -2996,7 +3010,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           />
           <OfficialNotices
             timeMode={timeMode}
-            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && !warningsUnavailable && visibleWarnings.length === 0}
+            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && warningsCurrent && visibleWarnings.length === 0}
             layers={layers}
             visibleWarnings={visibleWarnings}
             activeWarning={activeWarning}
