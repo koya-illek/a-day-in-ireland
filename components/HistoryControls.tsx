@@ -188,8 +188,8 @@ export function HistoryControls({
       {mode === "past" && (
         <>
           <div className="history-picker">
-            <label>Date in Ireland<input type="date" aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); }} /></label>
-            <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); }} /></label>
+            <label>Date in Ireland<input type="date" aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); setWallTimeError(""); }} /></label>
+            <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); setWallTimeError(""); }} /></label>
             <button type="button" className="history-apply" onClick={submitWallTime} disabled={!dateInput || !timeInput || history.status === "loading"}>Show past conditions</button>
           </div>
           {ambiguousCandidates.length > 1 && (

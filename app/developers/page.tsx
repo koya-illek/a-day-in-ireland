@@ -49,7 +49,7 @@ export default function DevelopersPage() {
         </section>
         <section>
           <h2>Endpoints</h2>
-          <div className="api-doc-table-wrap">
+          <div className="api-doc-table-wrap" role="region" aria-label="REST endpoint table, scrollable horizontally" tabIndex={0}>
             <table className="api-doc-table">
               <thead>
                 <tr><th scope="col">Method</th><th scope="col">Path</th><th scope="col">Returns</th><th scope="col">Typical cache tier</th></tr>
@@ -67,7 +67,7 @@ export default function DevelopersPage() {
             </table>
           </div>
           <p>Try it:</p>
-          <pre className="api-doc-code"><code>{`curl -s https://day.illek.ie/api/transit | jq '{generatedAt, transitStatus, count: (.transit | length)}'
+          <pre className="api-doc-code" role="region" aria-label="Example curl requests, scrollable horizontally" tabIndex={0}><code>{`curl -s https://day.illek.ie/api/transit | jq '{generatedAt, transitStatus, count: (.transit | length)}'
 curl -s "https://day.illek.ie/api/history?at=2026-08-01T13:00:00Z" | jq '.resolvedAt, .snapshot.summary'`}</code></pre>
         </section>
         <section>
@@ -86,7 +86,7 @@ curl -s "https://day.illek.ie/api/history?at=2026-08-01T13:00:00Z" | jq '.resolv
         <section>
           <h2>MCP for agents</h2>
           <p>The same data is exposed as Model Context Protocol tools over Streamable HTTP at <code>/mcp</code> (also mirrored at <code>/api/mcp</code>). The server is stateless and answers every request with exactly one JSON response, with no sessions and no SSE stream, speaking protocol versions <code>2025-06-18</code> and <code>2025-03-26</code>.</p>
-          <div className="api-doc-table-wrap">
+          <div className="api-doc-table-wrap" role="region" aria-label="MCP tool table, scrollable horizontally" tabIndex={0}>
             <table className="api-doc-table">
               <thead><tr><th scope="col">Tool</th><th scope="col">Purpose</th></tr></thead>
               <tbody>
@@ -97,7 +97,7 @@ curl -s "https://day.illek.ie/api/history?at=2026-08-01T13:00:00Z" | jq '.resolv
             </table>
           </div>
           <p>A minimal handshake:</p>
-          <pre className="api-doc-code"><code>{`curl -s https://day.illek.ie/mcp -X POST \\
+          <pre className="api-doc-code" role="region" aria-label="Example MCP handshake, scrollable horizontally" tabIndex={0}><code>{`curl -s https://day.illek.ie/mcp -X POST \\
   -H 'content-type: application/json' \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 

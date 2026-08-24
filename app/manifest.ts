@@ -5,7 +5,7 @@ export const dynamic = "force-static";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "A Day in Ireland",
-    short_name: "Ireland Now",
+    short_name: "Day in Ireland",
     description: "A living portrait of Ireland through public observations.",
     start_url: "/",
     display: "standalone",

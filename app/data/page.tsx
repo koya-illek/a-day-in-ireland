@@ -72,9 +72,9 @@ export default function DataPage() {
       </section>
       <section>
         <h2>Attribution</h2>
-        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Met Éireann forecast copy is shown verbatim after safe markup/entity normalization and is displayed with current official warnings. Sunrise and lunar events are attributed to <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Sunrise-Sunset.org</a>. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
+        <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Met Éireann forecast copy is shown verbatim after safe markup/entity normalisation and is displayed with current official warnings. Sunrise and lunar events are attributed to <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Sunrise-Sunset.org</a>. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
         <p>
-          Contains NTA GTFS data © 2025 NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalized by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
+          Contains NTA GTFS data © 2025 NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalised by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
         </p>
       </section>
     </InfoPage>

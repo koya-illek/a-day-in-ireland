@@ -24,7 +24,7 @@ test("transport history attribution and permission boundary stay explicit", () =
   assert.match(dataPage, /Contains NTA GTFS data © 2025 NTA/);
   assert.match(dataPage, /creativecommons\.org\/licenses\/by\/4\.0/);
   assert.match(dataPage, /NTA Developer Portal/);
-  assert.match(dataPage, /aggregated and normalized by A Day in Ireland; changes were made/);
+  assert.match(dataPage, /aggregated and normalised by A Day in Ireland; changes were made/);
   assert.match(dataPage, /GTFS data is provided “as is”/);
   assert.match(dataPage, /is not endorsed by NTA/);
   assert.match(dataPage, /Irish Rail positions are stamped at refresh/);

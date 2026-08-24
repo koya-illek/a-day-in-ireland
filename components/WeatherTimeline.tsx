@@ -41,9 +41,9 @@ export function WeatherTimeline({
       </div>
       {timeline.length ? (
         <>
-          <div className="timeline-legend" role="img" aria-label="Chart legend">
-            <span><i className="temperature" />Average temperature (°C)</span>
-            <span><i className="rain" />Average observed rain per station (mm)</span>
+          <div className="timeline-legend">
+            <span><i aria-hidden="true" className="temperature" />Average temperature (°C)</span>
+            <span><i aria-hidden="true" className="rain" />Average observed rain per station (mm)</span>
           </div>
           {timeMode !== "past" && (sourceStatus === "stale" || serviceDisplayState === "offline") && (
             <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>

@@ -410,7 +410,7 @@ button { color: inherit; }
 .explore-panel.is-open { box-shadow: -2rem 0 6rem rgba(0, 0, 0, .35); transform: translateX(0); }
 .panel-heading { align-items: flex-start; display: flex; justify-content: space-between; margin-bottom: 2rem; }
 .panel-heading h2 { font-family: "Newsreader", serif; font-size: 2.3rem; font-weight: 400; margin: 0; }
-.panel-heading button { background: none; border: 1px solid var(--line); border-radius: 50%; cursor: pointer; font-size: 1.3rem; height: 2.5rem; width: 2.5rem; }
+.panel-heading button { background: none; border: 1px solid var(--line); border-radius: 50%; cursor: pointer; font-size: 1.3rem; height: 2.75rem; width: 2.75rem; }
 .layer-list { display: grid; gap: .55rem; }
 .layer-list > button {
   align-items: center;
@@ -1248,7 +1248,7 @@ footer {
   cursor: pointer;
   flex: 0 0 auto;
   font: 600 .59rem ui-monospace, monospace;
-  min-height: 2.15rem;
+  min-height: 2.75rem;
   padding: .35rem .65rem;
   text-transform: uppercase;
 }
@@ -1307,6 +1307,7 @@ footer {
   color: var(--green);
   cursor: pointer;
   font: 600 .6rem ui-monospace, monospace;
+  min-height: 2.75rem;
   padding: .45rem .6rem;
   white-space: nowrap;
 }

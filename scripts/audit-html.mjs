@@ -79,9 +79,12 @@ for (const document of documents) {
   }
 
   const jsonLd = matches(html, /<script\b[^>]*\btype="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
-  if (jsonLd.length !== 1) {
-    fail(document.file, "must contain one JSON-LD block");
-  } else {
+  // WebSite/Dataset claims describe this product, so they belong only on the
+  // homepage document; other pages must not inherit them.
+  const expectedJsonLd = document.file.startsWith("index") ? 1 : 0;
+  if (jsonLd.length !== expectedJsonLd) {
+    fail(document.file, `must contain exactly ${expectedJsonLd} JSON-LD block(s)`);
+  } else if (jsonLd.length) {
     try {
       JSON.parse(jsonLd[0][1]);
     } catch {

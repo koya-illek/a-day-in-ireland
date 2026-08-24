@@ -24,9 +24,13 @@ test("deployed interface source has no eyebrow markup or em-dash copy", async ()
   assert.deepEqual(violations, []);
 });
 
-test("public metadata includes structured data", async () => {
+test("public metadata includes structured data on the homepage", async () => {
   const layout = await readFile("app/layout.tsx", "utf8");
-  assert.match(layout, /application\/ld\+json/);
-  assert.match(layout, /WebSite/);
-  assert.match(layout, /Dataset/);
+  assert.doesNotMatch(layout, /application\/ld\+json/, "structured data is scoped to the page that describes it");
+  const home = await readFile("app/page.tsx", "utf8");
+  assert.match(home, /application\/ld\+json/);
+  assert.match(home, /WebSite/);
+  assert.match(home, /Dataset/);
+  assert.match(home, /license/);
+  assert.match(home, /creator/);
 });

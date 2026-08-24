@@ -27,14 +27,6 @@ export const metadata: Metadata = {
   },
   applicationName: "A Day in Ireland",
   category: "weather and public data",
-  keywords: [
-    "Ireland live map",
-    "Irish weather",
-    "Ireland public transport",
-    "Irish rivers",
-    "Met Éireann radar",
-    "Ireland electricity grid"
-  ],
   authors: [{ name: "Illek", url: "https://illek.ie" }],
   creator: "Illek",
   publisher: "Illek",
@@ -76,24 +68,10 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const structuredData = {
-    "@context": "https://schema.org",
-    "@type": ["WebSite", "Dataset"],
-    name: "A Day in Ireland",
-    url: "https://day.illek.ie/",
-    description: "A living, near-real-time portrait of weather, transport, rivers, daylight, energy and the sea across Ireland.",
-    inLanguage: "en-IE",
-    spatialCoverage: {
-      "@type": "Place",
-      name: "Ireland"
-    },
-    isAccessibleForFree: true
-  };
   return (
     <html lang="en-IE" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('ireland-interface-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme='dark'}})()` }} />
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       </head>
       <body className={`${dmSans.variable} ${newsreader.variable}`}>{children}</body>
     </html>

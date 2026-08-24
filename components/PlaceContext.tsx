@@ -1,6 +1,7 @@
 import type { AirQualityReading, RiverReading, StationReading } from "../lib/types";
 import { formatIrelandHistoryTime } from "../lib/history";
 import {
+  aqiLabel,
   formatAge,
   formatDistance,
   NEARBY_RADIUS_KM,
@@ -141,7 +142,7 @@ export function PlaceContext({
               </div>
               <div>
                 <dt>Air</dt>
-                <dd><span className="place-observation-value">{localAir?.item.europeanAqi == null ? "Unavailable" : `AQI ${localAir.item.europeanAqi}`}</span>
+                <dd><span className="place-observation-value">{localAir?.item.europeanAqi == null ? "Unavailable" : `AQI ${localAir.item.europeanAqi} (${aqiLabel(localAir.item.europeanAqi)})`}</span>
                 <small>{localAir
                   ? formatLocalObservation(localAir.item.source === "measured" ? "EEA measured" : "CAMS modelled", localAir.item, localAir.distanceKm, now, timeMode === "past")
                   : isConnectingWithoutSnapshot ? `${timeMode === "past" ? "Loading stored" : "Connecting to"} air-quality sources…` : timeMode === "past" ? airGap ?? `No point air-quality observation was retained within ${NEARBY_RADIUS_KM.air} km for this historical record.` : !online ? "Offline; saved air-quality data is not used as a current nearby condition." : airAvailable ? selectedPlaceIsEphemeral ? "No current measured or modelled air context is available." : `No nearby air observation within ${NEARBY_RADIUS_KM.air} km.` : "Air-quality sources are unavailable; nearby conditions cannot be assessed."}</small>

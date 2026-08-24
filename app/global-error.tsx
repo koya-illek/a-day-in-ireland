@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 // Last-resort boundary for failures thrown by the root layout itself, where
 // app/error.tsx is not mounted. It must render its own html/body shell.
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
@@ -16,10 +18,16 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
             <button
               type="button"
               onClick={reset}
-              style={{ cursor: "pointer", font: "600 1rem system-ui, sans-serif", padding: ".6rem 1rem" }}
+              style={{ cursor: "pointer", font: "600 1rem system-ui, sans-serif", minHeight: "2.75rem", padding: ".6rem 1rem" }}
             >
-              Reload the page
+              Try rendering again
             </button>
+          </p>
+          <p style={{ lineHeight: 1.6 }}>
+            If that does not help, these pages are served separately:{" "}
+            <Link href="/" style={{ color: "#1d4d3b" }}>the live map</Link>,{" "}
+            <Link href="/data" style={{ color: "#1d4d3b" }}>data &amp; methodology</Link> or{" "}
+            <Link href="/about" style={{ color: "#1d4d3b" }}>about this project</Link>.
           </p>
           {error.digest ? (
             <p style={{ color: "#52665e" }}>
