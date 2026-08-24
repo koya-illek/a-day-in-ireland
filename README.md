@@ -39,7 +39,7 @@ The Cloudflare production architecture uses:
 - Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error. Treat Browser Run as a temporary fetch path, not a second origin of truth.
 - The non-Cloudflare server adapter supports an operator-configured river bridge for that same OPW fallback (`RIVER_BRIDGE_URL`, HTTPS only, disabled unless set); treat any such bridge as an operational dependency rather than an origin of truth for the data.
 
-The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while content-hashed generated data assets are cached for a year at the edge and HTML is cached for five minutes.
+The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while content-hashed generated data assets are cached for a year at the edge; HTML documents carry no explicit edge caching rule.
 
 The Worker serves the exported frontend directly from its static asset binding on `day.illek.ie`.
 
@@ -47,7 +47,9 @@ Both hosting adapters share one Worker API core (`platform/api-core.js`): provid
 
 `/api/health` reports the deployed build's provenance (commit, build time, config and data hashes) by reading `build-provenance.json`, which every build writes into the served assets. Missing or unreadable provenance degrades to `unknown`; it never fails the endpoint.
 
-The build generates a hash-based script CSP: after the static export lands in `dist/client`, `scripts/write-csp-headers.mjs` replaces `script-src 'unsafe-inline'` with sha256 hashes of every inline script found in the exported documents. `public/_headers` stays valid on its own if that step is skipped.
+The build generates a per-page script CSP: after the static export lands in `dist/client`, `scripts/write-csp-headers.mjs` removes the global template policy and gives each document a `Content-Security-Policy` whose `script-src` lists sha256 hashes of only that page's inline scripts (one policy per document, because Cloudflare's `_headers` format caps line length). `public/_headers` stays valid on its own if that step is skipped.
+
+The API surface is self-describing: `/api/openapi.json` serves an OpenAPI 3.1 document, `/mcp` (mirrored at `/api/mcp`) exposes the same data as read-only MCP tools, and the human-readable contract lives on the `/developers` page.
 
 Decorative road geometry is not part of the JavaScript bundle or the pre-rendered HTML. The map fetches `/map/major-roads.json` once after mount; the URL carries a content-hash version query computed at configure time, and the asset is cached immutably.
 

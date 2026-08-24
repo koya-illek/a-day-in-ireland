@@ -9,9 +9,9 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "A living portrait of Ireland through public observations.",
     start_url: "/",
     display: "standalone",
-    background_color: "#edf2ea",
-    // Matches the dark viewport theme color and the installed app chrome the
-    // site actually renders, not a separate brand green.
+    // Both colours match the dark chrome the installed app actually renders;
+    // a pale launch background flashed before the dark interface loaded.
+    background_color: "#071815",
     theme_color: "#071815",
     icons: [{
       src: "/icon.svg",

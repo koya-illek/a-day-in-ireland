@@ -7,7 +7,10 @@ const notFoundDescription =
 
 // Without this the error page inherits the homepage canonical/description and
 // claims to be indexable; unknown URLs must not pose as duplicates of "/".
-// The null canonical suppresses the inherited "/" canonical entirely.
+// The null canonical suppresses the inherited "/" canonical entirely. Next
+// additionally injects its own <meta name="robots" content="noindex"/> for
+// the built not-found document, so two robots tags ship here; keeping this
+// one preserves the explicit "follow" allowance on outbound escape links.
 export const metadata: Metadata = {
   title: "Page not found",
   description: notFoundDescription,

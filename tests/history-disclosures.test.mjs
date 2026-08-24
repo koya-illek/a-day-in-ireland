@@ -21,7 +21,8 @@ test("history disclosures preserve retention tiers, gaps and collection boundari
 });
 
 test("transport history attribution and permission boundary stay explicit", () => {
-  assert.match(dataPage, /Contains NTA GTFS data © 2025 NTA/);
+  // The year is interpolated from the build date, not a frozen literal.
+  assert.match(dataPage, /Contains NTA GTFS data © \{ntaAttributionYear\} NTA/);
   assert.match(dataPage, /creativecommons\.org\/licenses\/by\/4\.0/);
   assert.match(dataPage, /NTA Developer Portal/);
   assert.match(dataPage, /aggregated and normalised by A Day in Ireland; changes were made/);

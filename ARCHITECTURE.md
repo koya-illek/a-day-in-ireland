@@ -93,9 +93,11 @@ flowchart LR
 | `GET /api/transit` | Coordinated NTA live vehicle positions |
 | `GET /api/history` | Historical snapshot lookup |
 | `GET /api/history/range` | Bounded history range and summary retrieval |
+| `GET /api/openapi.json` | OpenAPI 3.1 description of every path in this table and below |
+| `POST /mcp`, `POST /api/mcp` | Read-only MCP tool surface over the same route handlers (stateless Streamable HTTP) |
 | `/data/transit-destinations.manifest.json` | Transit dictionary provenance and content-hashed asset pointer |
 
-Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. `OPTIONS` receives a minimal response where supported.
+Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. The MCP transport is the deliberate exception: it accepts `POST` envelopes (and answers `405` to `GET`) per the Streamable HTTP protocol. `OPTIONS` receives a minimal response where supported.
 
 ## Third-party data services
 
@@ -180,6 +182,8 @@ The product does not replace official warnings, emergency services, transport op
 - Static build: `npm run build`
 - Built-page metadata, headings, skip links, and external-link safety: `npm run check:html`
 - Asset and request budgets: `npm run check:budgets`
+- Dead-CSS audit: `npm run check:css`
+- Public API contract and MCP transport semantics: `npm test` (tests/public-api.test.mjs, tests/build-artifacts.test.mjs)
 - Release provenance gate: `npm run check:release`
 - Read-only deployed-candidate provenance, CSP, and 404 verification: `npm run check:deployment`
 - D1 schema: `migrations/0001_history_v1.sql`

@@ -7,6 +7,11 @@ export const metadata = infoPageMetadata({
   path: "/data"
 });
 
+// The transit dictionary is regenerated from the current NTA feed whenever
+// the data pipeline runs, so the attribution year follows the build year
+// instead of freezing at the year this copy was written.
+const ntaAttributionYear = new Date().getFullYear();
+
 const sources = [
   ["Met Éireann", "Weather observations, official warnings and five-minute rain radar", "https://www.met.ie/about-us/specialised-services/open-data"],
   ["Iarnród Éireann", "Current train positions, service direction and public messages", "https://api.irishrail.ie/realtime/"],
@@ -74,7 +79,7 @@ export default function DataPage() {
         <h2>Attribution</h2>
         <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Met Éireann forecast copy is shown verbatim after safe markup/entity normalisation and is displayed with current official warnings. Sunrise and lunar events are attributed to <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Sunrise-Sunset.org</a>. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA. Road and boundary data © OpenStreetMap contributors, ODbL.</p>
         <p>
-          Contains NTA GTFS data © 2025 NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalised by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
+          Contains NTA GTFS data © {ntaAttributionYear} NTA, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Source: <a href="https://developer.nationaltransport.ie/" target="_blank" rel="noreferrer">NTA Developer Portal</a>. The data is aggregated and normalised by A Day in Ireland; changes were made. GTFS data is provided “as is”, and NTA is not responsible for errors or inaccuracies. A Day in Ireland is independent and is not endorsed by NTA.
         </p>
       </section>
     </InfoPage>

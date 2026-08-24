@@ -1,8 +1,8 @@
 // Machine-readable description of the public read-only HTTP API, served at
 // /api/openapi.json on every adapter. This file is the single source of truth
 // for the documented contract; the response shapes below mirror what
-// api-core.js and history-store.js actually emit (pinned by tests that compare
-// this document against live payload fixtures).
+// api-core.js and history-store.js actually emit (structure, paths and
+// vocabulary pinned by tests in tests/public-api.test.mjs).
 //
 // Versioning policy: the deployed paths (/api/living, /api/contexts, …) are
 // the stable v1 surface consumed by the shipped frontend. Breaking changes
@@ -129,7 +129,7 @@ export const openApiDocument = () => ({
       "A machine-readable copy of this document is always at /api/openapi.json; human documentation",
       "lives at /developers."
     ].join("\n"),
-    license: { name: "CC-BY-4.0 (data © the originating providers)" }
+    license: { name: "Mixed open-data licences; see the attribution page for per-source terms", url: "https://day.illek.ie/data" }
   },
   servers: [{ url: "/", description: "Current host" }],
   tags: [
@@ -160,13 +160,8 @@ export const openApiDocument = () => ({
         description: "Coordinated through Durable Objects in production so upstream rate limits are honoured. Cache tier degrades to no-store when neither source is usable.",
         responses: {
           200: {
-            description: "Trains and rivers with per-source status and provenance. Served with Cache-Control: public, max-age=15 tiers when any source is usable; no-store when none are.",
+            description: "Trains and rivers with per-source status and provenance. Upstream failures degrade to a 200 answer whose status fields read unavailable (Cache-Control: no-store); the endpoint itself only fails on unexpected errors.",
             ...schemaResponse({ $ref: "#/components/schemas/LivingPayload" })
-          },
-          503: {
-            description: "Both upstreams failed.",
-            headers: commonJsonHeaders,
-            content: { "application/json": { schema: errorResponseRef } }
           }
         }
       }
@@ -191,13 +186,8 @@ export const openApiDocument = () => ({
         description: "Positions older than 30 minutes are dropped; estimated speeds are added by the coordinator when the provider omits them.",
         responses: {
           200: {
-            description: "Vehicle positions plus transitStatus. Served with Cache-Control: public, max-age=15 tiers; no-store when unavailable.",
+            description: "Vehicle positions plus transitStatus. Coordinator or upstream failures degrade to a 200 answer whose transitStatus reads unavailable (Cache-Control: no-store). Served with Cache-Control: public, max-age=15 tiers when usable.",
             ...schemaResponse({ $ref: "#/components/schemas/TransitPayload" })
-          },
-          503: {
-            description: "Transit refresh failed.",
-            headers: commonJsonHeaders,
-            content: { "application/json": { schema: errorResponseRef } }
           }
         }
       }
