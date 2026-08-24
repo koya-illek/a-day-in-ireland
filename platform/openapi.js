@@ -205,7 +205,7 @@ export const openApiDocument = ({ history = true } = {}) => {
       get: {
         tags: ["history"],
         summary: "Nearest stored snapshot at or before a moment.",
-        description: "Resolves across retention tiers (raw 15-minute snapshots within 7 days, hourly within 90 days, daily beyond). A miss returns snapshot:null plus the available window and gap detail rather than inventing data. Requires the history D1 database to be provisioned.",
+        description: "Resolves across retention tiers (raw 15-minute snapshots within 30 days, hourly within 365 days). A miss returns snapshot:null plus the available window and gap detail rather than inventing data. Requires the history D1 database to be provisioned.",
         parameters: [{
           name: "at",
           in: "query",
@@ -361,7 +361,10 @@ export const openApiDocument = ({ history = true } = {}) => {
         properties: {
           generatedAt: { type: "string", format: "date-time" },
           lastSuccessAt: { type: ["string", "null"], format: "date-time" },
-          sourceStatus: { type: "object", additionalProperties: sourceStatusSchema },
+          sourceStatus: {
+            ...sourceStatusSchema,
+            description: "Delivery status of the weather-station source that anchors the snapshot (or fallback for an empty shape)."
+          },
           stations: { type: "array", items: { type: "object" } },
           warnings: { type: "array", items: { type: "object" } },
           marine: { type: "array", items: { type: "object" } },

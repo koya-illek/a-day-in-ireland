@@ -117,6 +117,19 @@ test("context source names in the spec match the refresh policies' public names"
   );
 });
 
+test("the history contract states the retention tiers the store enforces", async () => {
+  const { RAW_RETENTION_MS, HOUR_RETENTION_MS } = await import("../platform/history-store.js");
+  const day = (ms) => Math.round(ms / 86_400_000);
+  const description = openApiDocument().paths["/api/history"].get.description;
+  assert.ok(description.includes(`within ${day(RAW_RETENTION_MS)} days`), description);
+  assert.ok(description.includes(`within ${day(HOUR_RETENTION_MS)} days`), description);
+});
+
+test("HistorySnapshot.sourceStatus is typed as the string captures actually store", () => {
+  const schema = openApiDocument().components.schemas.HistorySnapshot.properties.sourceStatus;
+  assert.equal(schema.type, "string");
+});
+
 // ---------------------------------------------------------------------------
 // MCP transport
 // ---------------------------------------------------------------------------

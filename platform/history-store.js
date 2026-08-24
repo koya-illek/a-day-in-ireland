@@ -10,8 +10,10 @@ export const MAX_COMPRESSED_ROW_BYTES = 1_999_999;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
-const RAW_RETENTION_MS = 30 * DAY_MS;
-const HOUR_RETENTION_MS = 365 * DAY_MS;
+// Exported so contract surfaces (OpenAPI description) can be pinned against
+// the retention the store actually enforces instead of drifting from it.
+export const RAW_RETENTION_MS = 30 * DAY_MS;
+export const HOUR_RETENTION_MS = 365 * DAY_MS;
 const HISTORY_TOLERANCE_MS = new Map([
   [RAW_RESOLUTION_MINUTES, 30 * MINUTE_MS],
   [HOUR_RESOLUTION_MINUTES, 2 * HOUR_MS],
