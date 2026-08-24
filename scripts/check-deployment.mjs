@@ -59,6 +59,15 @@ export async function verifyDeployment({
   expectEqual(healthBody?.build?.transitDataSha256, expected.transitDataSha256, "transit-data hash");
   const builtAt = requiredString(healthBody?.build?.builtAt, "build time");
   if (!Number.isFinite(Date.parse(builtAt))) throw new Error(`Deployment build time is invalid: ${builtAt}`);
+  // The storage flags exist precisely to expose a deploy whose D1 binding or
+  // DO migrations half-landed; the gate fails loudly rather than serving a
+  // history-less product. Data endpoints are probed further below.
+  const storage = healthBody?.storage ?? {};
+  for (const binding of ["historyDb", "ntaCoordinator", "riverCoordinator"]) {
+    if (storage[binding] !== true) {
+      throw new Error(`Deployment health reports storage binding ${binding} as not wired`);
+    }
+  }
 
   const home = await request("/");
   if (home.status !== 200) throw new Error(`Deployment homepage returned HTTP ${home.status}`);
@@ -96,6 +105,42 @@ export async function verifyDeployment({
     throw new Error("Deployment MCP initialize did not identify the service");
   }
 
+  // Probe every data endpoint so routing and bindings are proven end to end.
+  // Upstream providers may legitimately be down at deploy time (the routes
+  // degrade to a 503 JSON error contract), so the gate demands an honest
+  // envelope in either case, never a wrong content type, missing noindex
+  // header, or HTML error page.
+  const dataExpectations = {
+    "/api/living": (body) => typeof body.sourceStatus === "object",
+    "/api/transit": (body) => typeof body.transitStatus === "string",
+    "/api/contexts": (body) => typeof body.contextStatus === "object",
+    "/api/history/range": (body) => body.schemaVersion === 1 || typeof body.error === "string"
+  };
+  const dataResults = {};
+  for (const [path, shapeOk] of Object.entries(dataExpectations)) {
+    const response = await request(path);
+    if (!response.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+      throw new Error(`Deployment ${path} did not return JSON`);
+    }
+    if (!response.headers.get("x-robots-tag")?.toLowerCase().includes("noindex")) {
+      throw new Error(`Deployment ${path} is missing X-Robots-Tag: noindex`);
+    }
+    let body;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error(`Deployment ${path} returned unparseable JSON`);
+    }
+    const degraded = response.status === 503 && typeof body?.error === "string";
+    if (response.status !== 200 && !degraded) {
+      throw new Error(`Deployment ${path} answered HTTP ${response.status} without the documented degradation contract`);
+    }
+    if (response.status === 200 && !shapeOk(body)) {
+      throw new Error(`Deployment ${path} is missing its expected status fields`);
+    }
+    dataResults[path] = response.status;
+  }
+
   const missingPath = `/release-verification-${expected.commitSha.slice(0, 12)}`;
   const missing = await request(missingPath);
   if (missing.status !== 404) throw new Error(`Unknown deployment route returned HTTP ${missing.status}`);
@@ -118,6 +163,7 @@ export async function verifyDeployment({
     cspScriptHashes: [...scriptSrc.matchAll(/'sha256-[A-Za-z0-9+/]+=*'/g)].length,
     openapiPaths: Object.keys(specBody.paths).length,
     mcpServer: mcpBody.result.serverInfo.name,
+    dataEndpoints: dataResults,
     branded404: true
   };
 }

@@ -14,7 +14,9 @@ const responseFor = ({
   cspUnsafe = false,
   branded404 = true,
   specMissing = false,
-  mcpBroken = false
+  mcpBroken = false,
+  storageMissing = false,
+  dataRouteBroken = false
 } = {}) => async (url, init = {}) => {
   const path = new URL(url).pathname;
   if (path === "/api/health") {
@@ -26,8 +28,28 @@ const responseFor = ({
         configSha256: expected.configSha256,
         transitDataSha256: expected.transitDataSha256,
         deploymentId: "deployment-1"
-      }
+      },
+      storage: storageMissing
+        ? { historyDb: true, ntaCoordinator: true }
+        : { historyDb: true, ntaCoordinator: true, riverCoordinator: true }
     }, { headers: { "x-robots-tag": "noindex, nofollow" } });
+  }
+  if (dataRouteBroken && path in {
+    "/api/living": true, "/api/transit": true, "/api/contexts": true, "/api/history/range": true
+  }) {
+    return new Response("<html>worker error</html>", { status: 500, headers: { "content-type": "text/html" } });
+  }
+  if (path === "/api/living") {
+    return Response.json({ generatedAt: "x", sourceStatus: { trains: "unavailable", rivers: "unavailable" }, trains: [], rivers: [] }, { headers: { "x-robots-tag": "noindex" } });
+  }
+  if (path === "/api/transit") {
+    return Response.json({ generatedAt: "x", transitStatus: "live", transit: [] }, { headers: { "x-robots-tag": "noindex" } });
+  }
+  if (path === "/api/contexts") {
+    return Response.json({ generatedAt: "x", contextStatus: {}, contextProvenance: {} }, { headers: { "x-robots-tag": "noindex" } });
+  }
+  if (path === "/api/history/range") {
+    return Response.json({ schemaVersion: 1, resolutions: [], snapshotCount: 0 }, { headers: { "x-robots-tag": "noindex" } });
   }
   if (path === "/") {
     const scriptSrc = cspUnsafe
@@ -73,6 +95,12 @@ test("deployment check pins provenance, hashed CSP, branded 404 behavior, and th
   assert.equal(result.cspScriptHashes, 1);
   assert.equal(result.openapiPaths, 3);
   assert.equal(result.mcpServer, "a-day-in-ireland");
+  assert.deepEqual(result.dataEndpoints, {
+    "/api/living": 200,
+    "/api/transit": 200,
+    "/api/contexts": 200,
+    "/api/history/range": 200
+  });
   assert.equal(result.branded404, true);
 });
 
@@ -102,5 +130,16 @@ test("deployment check rejects a deploy that half-landed the API or MCP surfaces
   await assert.rejects(
     verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ mcpBroken: true }) }),
     /MCP initialize returned HTTP 500/
+  );
+});
+
+test("deployment check rejects unwired storage bindings and broken data routes", async () => {
+  await assert.rejects(
+    verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ storageMissing: true }) }),
+    /storage binding riverCoordinator/
+  );
+  await assert.rejects(
+    verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ dataRouteBroken: true }) }),
+    /\/api\/living did not return JSON/
   );
 });
