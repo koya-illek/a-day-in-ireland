@@ -51,9 +51,11 @@ export function OfficialNotices({
   historyGaps: HistoryGap[];
   historyGapDetail: (gaps: HistoryGap[]) => string | undefined;
 }) {
-  const degradedCaveat = snapshot.contextStatus.warnings === "stale"
+  // Present-tense provenance caveats belong to the live view only; a stored
+  // record discloses its capture-time state through its own gap detail.
+  const degradedCaveat = timeMode !== "past" && snapshot.contextStatus.warnings === "stale"
     ? `The notice feed could not be refreshed just now; these notices come from the last completed check, ${lastSuccessLabel}.`
-    : snapshot.contextStatus.warnings === "partial" || snapshot.contextStatus.warnings === "fallback"
+    : timeMode !== "past" && (snapshot.contextStatus.warnings === "partial" || snapshot.contextStatus.warnings === "fallback")
       ? "The notice feed answered partially, so this list may be missing some notices."
       : null;
 
@@ -122,11 +124,15 @@ export function OfficialNotices({
           ) : warningsUnavailable ? (
             <p className="official-notices-empty">{timeMode === "past"
               ? historyGapDetail(historyGaps) ?? "Official notices were not retained in this historical record; no zero or all-clear state is inferred."
-              : !online ? `Offline. The notice feed cannot be refreshed; last success ${lastSuccessLabel}, so current warnings cannot be confirmed.` : snapshot.contextStatus.warnings === "stale" ? `The last notice check is cached from ${lastSuccessLabel}; current warnings cannot be confirmed.` : "The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed."}</p>
+              : !online ? `Offline. The notice feed cannot be refreshed; last success ${lastSuccessLabel}, so current warnings cannot be confirmed.` : "The Met Éireann notice feed is unavailable, so current warnings cannot be confirmed."}</p>
+          ) : timeMode === "past" ? (
+            <p className="official-notices-empty">No active or upcoming Met Éireann notices are represented in this stored record.</p>
+          ) : snapshot.contextStatus.warnings === "stale" ? (
+            <p className="official-notices-empty">The last notice check, {lastSuccessLabel}, recorded no notices; current warnings cannot be confirmed until the feed refreshes.</p>
           ) : snapshot.contextStatus.warnings !== "live" ? (
             <p className="official-notices-empty">The notice feed answered without a complete list, so no all-clear is inferred from the empty result.</p>
           ) : (
-            <p className="official-notices-empty">{timeMode === "past" ? "No active or upcoming Met Éireann notices are represented in this stored record." : "No current or upcoming Met Éireann notices are represented in the current horizon."}</p>
+            <p className="official-notices-empty">No current or upcoming Met Éireann notices are represented in the current horizon.</p>
           ) : (
             <p className="official-notices-empty">Met Éireann notices are hidden in this map view. Enable them in Explore to review {timeMode === "past" ? "the stored notices" : "official notices across Ireland"}.</p>
           )}
