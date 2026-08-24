@@ -567,6 +567,16 @@ export async function rollupPeriod(db, {
     sourceStatus,
     gaps
   });
+  // Re-rolling a period whose evidence has not changed (an hour that
+  // permanently missed a sample stays a repair candidate for its whole
+  // lookback window) produces a byte-identical row. Rewriting it anyway
+  // would churn storage, refresh collected_at_ms for identical evidence and
+  // push fresher backlog behind stable candidates in the repair queue.
+  const stored = await db.prepare(`
+    SELECT content_sha256 FROM history_snapshots
+    WHERE resolution_minutes = ? AND bucket_start_ms = ?
+  `).bind(resolutionMinutes, startMs).first();
+  if (stored?.content_sha256 === row.contentSha256) return row;
   await writeSnapshot(db, row, { replace: true });
   return row;
 }

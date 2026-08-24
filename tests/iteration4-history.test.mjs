@@ -82,6 +82,48 @@ test("maintenance leaves complete hourly rollups untouched", async (t) => {
   assert.equal(Number(after.collected_at_ms), Number(before.collected_at_ms));
 });
 
+test("re-rolling a permanently incomplete hour without new evidence changes nothing", async (t) => {
+  const db = new TestD1Database();
+  t.after(() => db.close());
+  await applyMigration(db);
+  // The hour lost its remaining raw samples forever: it stays an incomplete
+  // repair candidate for the whole maintenance lookback window.
+  const hourStart = Date.parse("2026-08-05T09:00:00Z");
+  await insertFixtureRow(db, {
+    resolutionMinutes: 15, bucketStartMs: hourStart,
+    periodEndMs: hourStart + 900_000, expectedSamples: 1, collectedSamples: 1
+  });
+  const { maintainHistory } = await import("../platform/history.js");
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T10:15:00Z"));
+  const before = db.sqlite.prepare(`
+    SELECT collected_at_ms, collected_samples, content_sha256 FROM history_snapshots
+    WHERE resolution_minutes = 60 AND bucket_start_ms = ?
+  `).get(hourStart);
+  assert.ok(before, "the first maintenance tick rolls the incomplete hour up");
+
+  // A later tick re-selects the hour; identical evidence must not rewrite it.
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T11:15:00Z"));
+  const after = db.sqlite.prepare(`
+    SELECT collected_at_ms, content_sha256 FROM history_snapshots
+    WHERE resolution_minutes = 60 AND bucket_start_ms = ?
+  `).get(hourStart);
+  assert.equal(Number(after.collected_at_ms), Number(before.collected_at_ms));
+  assert.equal(after.content_sha256, before.content_sha256);
+
+  // New raw evidence in the same hour must still be rolled up.
+  await insertFixtureRow(db, {
+    resolutionMinutes: 15, bucketStartMs: hourStart + 1_800_000,
+    periodEndMs: hourStart + 2_700_000, expectedSamples: 1, collectedSamples: 1
+  });
+  await maintainHistory({ HISTORY_DB: db }, Date.parse("2026-08-05T12:15:00Z"));
+  const grown = db.sqlite.prepare(`
+    SELECT collected_at_ms, collected_samples FROM history_snapshots
+    WHERE resolution_minutes = 60 AND bucket_start_ms = ?
+  `).get(hourStart);
+  assert.equal(Number(grown.collected_samples), 2);
+  assert.ok(Number(grown.collected_at_ms) > Number(before.collected_at_ms));
+});
+
 test("daily summary backfills when the Dublin-midnight maintenance was missed, and skips empty days", async (t) => {
   const db = new TestD1Database();
   t.after(() => db.close());

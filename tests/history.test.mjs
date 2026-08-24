@@ -607,6 +607,7 @@ test("tide auxiliary feed failures remain explicit partial gaps", async () => {
       return {
         bind() { return this; },
         async all() { return { results: rawRows }; },
+        async first() { return null; },
         async run() {
           assert.match(sql, /INSERT INTO history_snapshots/);
           return { success: true };
@@ -878,6 +879,7 @@ test("hourly rollups preserve their actual representative time and never return 
           assert.match(sql, /FROM history_snapshots/);
           return { results: rawRows };
         },
+        async first() { return null; },
         async run() {
           assert.match(sql, /INSERT INTO history_snapshots/);
           return { success: true };
@@ -1029,6 +1031,7 @@ test("daily rollups are summary-only and never clone a point-in-time map", async
           assert.match(sql, /FROM history_snapshots/);
           return { results: inputRows };
         },
+        async first() { return null; },
         async run() {
           assert.match(sql, /INSERT INTO history_snapshots/);
           return { success: true };
