@@ -178,6 +178,19 @@ test("Met Éireann singleton forecast is fresh, verbatim in meaning, and selects
   assert.equal(assessMetForecast(metBody("2026-08-12T12:11:00.000Z"), NOW).status, "unavailable");
 });
 
+test("forecast copy strips real tags before decoding entities so escaped comparisons survive", async () => {
+  const { normalizeForecastCopy } = await import("../platform/sky-source.js");
+  // Decoding first turned "&lt;40" into "<40" and the tag stripper deleted
+  // everything between two escaped comparisons.
+  const comparisons = normalizeForecastCopy(
+    "Rainfall &lt;40 mm expected. Winds &gt;90 km/h at coasts. <br>Issued &amp; verified by Met Éireann."
+  );
+  assert.equal(comparisons, "Rainfall <40 mm expected. Winds >90 km/h at coasts. \nIssued & verified by Met Éireann.");
+  // Real markup still converts to plain text newlines.
+  const markup = normalizeForecastCopy("<p>Dry at first.</p><p>Rain later.<br>Clearing.</p>");
+  assert.equal(markup, "Dry at first.\nRain later.\nClearing.");
+});
+
 test("Met Éireann fetch rejects provider errors and bounded oversized bodies", async () => {
   resetMetForecastCache();
   await assert.rejects(

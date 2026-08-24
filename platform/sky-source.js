@@ -311,10 +311,15 @@ const decodeEntities = (value) => String(value ?? "")
 
 export const normalizeForecastCopy = (value, maximum = 8_000) => {
   if (value !== null && value !== undefined && typeof value !== "string") return null;
-  const decoded = decodeEntities(value)
+  // Strip real tags before decoding entities: decoding first would turn
+  // escaped literal text such as "&lt;40 mm" into markup characters that the
+  // tag stripper then deletes, together with the span between two escaped
+  // comparisons in official copy.
+  const stripped = String(value ?? "")
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p\s*>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
+    .replace(/<[^>]*>/g, "");
+  const decoded = decodeEntities(stripped)
     .replace(/[\t\r ]+/g, " ")
     .replace(/\n\s*/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
