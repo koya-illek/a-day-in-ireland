@@ -128,6 +128,7 @@ export function ExplorePanel({
       <aside
         ref={panelRef}
         className={`explore-panel ${open ? "is-open" : ""}`}
+        data-explore-drawer=""
         aria-hidden={!open}
         aria-modal={open}
         role="dialog"

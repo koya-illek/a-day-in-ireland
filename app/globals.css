@@ -1994,33 +1994,33 @@ footer {
     min-width: 44px;
     padding: 0 2px;
   }
-  .explore-panel[aria-label="Explore live map layers"] {
+  .explore-panel[data-explore-drawer] {
     box-sizing: border-box;
     max-width: 100vw;
     overflow-x: hidden;
     padding: clamp(12px, .55rem, 18px);
     width: 100vw;
   }
-  .explore-panel[aria-label="Explore live map layers"] > * {
+  .explore-panel[data-explore-drawer] > * {
     box-sizing: border-box;
     max-width: 100%;
     min-width: 0;
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-heading {
+  .explore-panel[data-explore-drawer] .panel-heading {
     gap: 8px;
     margin-bottom: clamp(16px, .75rem, 24px);
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-heading > div { min-width: 0; }
-  .explore-panel[aria-label="Explore live map layers"] .panel-heading .utility-label {
+  .explore-panel[data-explore-drawer] .panel-heading > div { min-width: 0; }
+  .explore-panel[data-explore-drawer] .panel-heading .utility-label {
     font-size: clamp(12px, .5rem, 16px);
     overflow-wrap: anywhere;
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-heading h2 {
+  .explore-panel[data-explore-drawer] .panel-heading h2 {
     font-size: clamp(28px, 1.4rem, 40px);
     line-height: 1;
     overflow-wrap: anywhere;
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-heading button {
+  .explore-panel[data-explore-drawer] .panel-heading button {
     box-sizing: border-box;
     flex: 0 0 44px;
     height: 44px;
@@ -2029,10 +2029,10 @@ footer {
     padding: 0;
     width: 44px;
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-layer-state,
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-heading,
-  .explore-panel[aria-label="Explore live map layers"] .source-note { overflow-wrap: anywhere; }
-  .explore-panel[aria-label="Explore live map layers"] .panel-presets {
+  .explore-panel[data-explore-drawer] .panel-layer-state,
+  .explore-panel[data-explore-drawer] .layer-group-heading,
+  .explore-panel[data-explore-drawer] .source-note { overflow-wrap: anywhere; }
+  .explore-panel[data-explore-drawer] .panel-presets {
     box-sizing: border-box;
     gap: 8px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2040,7 +2040,7 @@ footer {
     min-width: 0;
     width: 100%;
   }
-  .explore-panel[aria-label="Explore live map layers"] .panel-presets button {
+  .explore-panel[data-explore-drawer] .panel-presets button {
     box-sizing: border-box;
     font-size: clamp(12px, .5rem, 16px);
     min-height: 44px;
@@ -2049,20 +2049,20 @@ footer {
     padding: 8px 4px;
     width: 100%;
   }
-  .explore-panel[aria-label="Explore live map layers"] .layer-group,
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-controls,
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-controls > button,
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-controls > button > span:last-child {
+  .explore-panel[data-explore-drawer] .layer-group,
+  .explore-panel[data-explore-drawer] .layer-group-controls,
+  .explore-panel[data-explore-drawer] .layer-group-controls > button,
+  .explore-panel[data-explore-drawer] .layer-group-controls > button > span:last-child {
     box-sizing: border-box;
     max-width: 100%;
     min-width: 0;
   }
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-heading p { margin-left: 0; }
-  .explore-panel[aria-label="Explore live map layers"] .layer-group-controls > button {
+  .explore-panel[data-explore-drawer] .layer-group-heading p { margin-left: 0; }
+  .explore-panel[data-explore-drawer] .layer-group-controls > button {
     gap: clamp(8px, .35rem, 12px);
     padding: clamp(10px, .4rem, 14px);
   }
-  .explore-panel[aria-label="Explore live map layers"] .source-note a {
+  .explore-panel[data-explore-drawer] .source-note a {
     max-width: 100%;
     overflow-wrap: anywhere;
   }
