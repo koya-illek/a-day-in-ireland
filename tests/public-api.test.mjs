@@ -86,6 +86,27 @@ test("documented paths cover the deployed API surface exactly", () => {
   );
 });
 
+test("documents without history storage omit the history surface instead of advertising it", () => {
+  const trimmed = openApiDocument({ history: false });
+  const paths = Object.keys(trimmed.paths);
+  assert.deepEqual(paths.sort(), ["/api/contexts", "/api/health", "/api/living", "/api/openapi.json", "/api/transit"].sort());
+  assert.ok(!trimmed.tags.some((tag) => tag.name === "history"));
+  const schemaNames = Object.keys(trimmed.components.schemas);
+  for (const name of ["HistoryResolution", "HistoryRangePayload", "HistorySnapshot", "HistoryGap", "HistoryEnvelope"]) {
+    assert.ok(!schemaNames.includes(name), `${name} should not be advertised`);
+  }
+  // Every remaining $ref must still resolve.
+  const resolve = (value) => {
+    if (typeof value !== "object" || value === null) return;
+    if (typeof value.$ref === "string") {
+      assert.ok(schemaNames.includes(value.$ref.split("/").at(-1)), `dangling ref ${value.$ref}`);
+      return;
+    }
+    for (const child of Object.values(value)) resolve(child);
+  };
+  resolve(trimmed.paths);
+});
+
 test("context source names in the spec match the refresh policies' public names", async () => {
   const { CONTEXT_SOURCE_POLICIES } = await import("../platform/api-core.js");
   const publicName = (name) => name === "bathingAlerts" ? "bathing"
@@ -352,6 +373,36 @@ test("the dispatcher routes MCP before the GET-only API method gate", async () =
   assert.equal(response.status, 200);
   const listed = await response.json();
   assert.equal(listed.result.tools.length, 5);
+});
+
+test("adapters without history advertise only the tools and paths they serve", async () => {
+  const { handleApiRequest } = await import("../platform/api-core.js");
+  const toolsResponse = await handleApiRequest(
+    new Request("https://day.illek.ie/mcp", {
+      method: "POST",
+      headers: { "mcp-protocol-version": "2025-06-18" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" })
+    }),
+    {}, {}
+  );
+  const listed = (await toolsResponse.json()).result.tools.map((tool) => tool.name);
+  assert.deepEqual(listed.sort(), ["get_island_contexts", "get_living_layers", "get_transit_positions"]);
+  const spec = await (await handleApiRequest(new Request("https://day.illek.ie/api/openapi.json"), {}, {})).json();
+  assert.ok(!spec.paths["/api/history"]);
+  // A direct call still fails honestly rather than pretending to work.
+  const call = await handleApiRequest(
+    new Request("https://day.illek.ie/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 2, method: "tools/call",
+        params: { name: "get_history_range", arguments: {} }
+      })
+    }),
+    {}, {}
+  );
+  const message = await call.json();
+  assert.equal(message.result.isError, true);
+  assert.match(message.result.content[0].text, /History storage is not wired on this deployment/);
 });
 
 test("both /mcp and /api/mcp serve the same transport", async () => {

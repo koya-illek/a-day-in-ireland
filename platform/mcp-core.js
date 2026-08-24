@@ -54,7 +54,6 @@ class ToolInputError extends Error {}
 // ---------------------------------------------------------------------------
 
 const contextSourcesDescription = `Optional filter. Omit for every source, or list any of: ${CONTEXT_SOURCE_NAMES.join(", ")}.`;
-
 // Public source names map onto the /api/contexts payload keys, which follow
 // the internal acquisition names (bathingAlerts, issTle) or merge two sources
 // into one array (airQuality holds both measured and modelled rows, split by
@@ -71,7 +70,7 @@ export const CONTEXT_TOOL_DATA_KEYS = Object.freeze(Object.fromEntries(
 
 const AIR_ROW_KINDS = { measuredAir: "measured", modelledAir: "modelled" };
 
-export const mcpTools = () => [
+export const mcpTools = ({ history = true } = {}) => [
   {
     name: "get_living_layers",
     description: "Current Irish Rail train positions and OPW river-gauge readings for the island of Ireland. Each source carries an honest status (live/partial/fallback/stale/unavailable) and provenance timestamps; report those alongside any values you quote.",
@@ -112,29 +111,31 @@ export const mcpTools = () => [
     },
     annotations: { readOnlyHint: true }
   },
-  {
-    name: "get_history_snapshot",
-    description: "The nearest stored island snapshot at or before a given moment. Snapshots are captured every 15 minutes and rolled up hourly and daily; a miss returns snapshot:null plus gap detail rather than invented data.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        at: {
-          type: "string",
-          format: "date-time",
-          description: "RFC 3339 timestamp, e.g. 2026-08-23T09:00:00Z. Future timestamps are rejected."
-        }
+  ...(history ? [
+    {
+      name: "get_history_snapshot",
+      description: "The nearest stored island snapshot at or before a given moment. Snapshots are captured every 15 minutes and rolled up hourly and daily; a miss returns snapshot:null plus gap detail rather than invented data.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          at: {
+            type: "string",
+            format: "date-time",
+            description: "RFC 3339 timestamp, e.g. 2026-08-23T09:00:00Z. Future timestamps are rejected."
+          }
+        },
+        required: ["at"],
+        additionalProperties: false
       },
-      required: ["at"],
-      additionalProperties: false
+      annotations: { readOnlyHint: true }
     },
-    annotations: { readOnlyHint: true }
-  },
-  {
-    name: "get_history_range",
-    description: "Which history is stored: overall availability window plus per-resolution (raw/hour/day) coverage and snapshot counts.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true }
-  }
+    {
+      name: "get_history_range",
+      description: "Which history is stored: overall availability window plus per-resolution (raw/hour/day) coverage and snapshot counts.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true }
+    }
+  ] : [])
 ];
 
 // ---------------------------------------------------------------------------
@@ -292,7 +293,7 @@ const toolErrorResult = (message) => ({
   isError: true
 });
 
-const dispatchMessage = async (implementations, message) => {
+const dispatchMessage = async (implementations, message, capabilities = {}) => {
   // Echo back any detectable id so clients can correlate the failure to
   // their request even when the envelope itself is malformed.
   const detectableId = message && typeof message === "object" && !Array.isArray(message) &&
@@ -319,7 +320,7 @@ const dispatchMessage = async (implementations, message) => {
     case "tools/list":
       return isNotification
         ? undefined
-        : rpcResult(id, { tools: mcpTools() });
+        : rpcResult(id, { tools: mcpTools(capabilities) });
     case "tools/call": {
       if (isNotification) return undefined;
       const name = message.params?.name;
@@ -347,7 +348,7 @@ const dispatchMessage = async (implementations, message) => {
   }
 };
 
-export const handleMcpRequest = async (request, sources) => {
+export const handleMcpRequest = async (request, sources, capabilities = {}) => {
   if (request.method === "OPTIONS") {
     return new Response(null, {
       status: 204,
@@ -396,7 +397,7 @@ export const handleMcpRequest = async (request, sources) => {
     return jsonResponse(rpcError(null, ERROR_CODES.invalidRequest, "Batch requests are not supported."));
   }
   const implementations = buildToolImplementations(sources);
-  const responseMessage = await dispatchMessage(implementations, message);
+  const responseMessage = await dispatchMessage(implementations, message, capabilities);
   if (responseMessage === undefined) return new Response(null, { status: 202 });
   return jsonResponse(responseMessage);
 };

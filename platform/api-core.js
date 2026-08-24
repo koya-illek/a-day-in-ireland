@@ -1204,6 +1204,10 @@ export const healthResponse = (env, provenance = null) => {
 // soft-200 an API surface. Returns undefined for non-API paths so each
 // adapter applies its own static-serving behaviour. /mcp joins the API
 // namespace before the GET-only gate because its transport is POST-based.
+//
+// Adapters without a history binding get discovery documents that omit the
+// history surface entirely, so no host advertises endpoints or tools it
+// cannot serve.
 
 // MCP tools deliberately consume the adapter-wired route handlers rather than
 // duplicating acquisition logic, so agents receive exactly what the site's own
@@ -1225,8 +1229,9 @@ const mcpSourcesFromAdapters = (env, adapters) => ({
 export const handleApiRequest = async (request, env, adapters) => {
   const url = new URL(request.url);
   const isMcpPath = MCP_PATHS.includes(url.pathname);
+  const historyWired = Boolean(adapters?.history);
   if (!url.pathname.startsWith("/api/") && !isMcpPath) return undefined;
-  if (isMcpPath) return handleMcpRequest(request, mcpSourcesFromAdapters(env, adapters));
+  if (isMcpPath) return handleMcpRequest(request, mcpSourcesFromAdapters(env, adapters), { history: historyWired });
   if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
     return methodResponse(request);
   }
@@ -1235,7 +1240,7 @@ export const handleApiRequest = async (request, env, adapters) => {
     case "/api/health":
       return adapters.health ? adapters.health(env) : healthResponse(env);
     case OPENAPI_PATH:
-      return openApiResponse();
+      return openApiResponse({ history: historyWired });
     case "/api/living":
       try {
         return await adapters.living(env);

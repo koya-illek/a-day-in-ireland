@@ -114,7 +114,16 @@ const schemaResponse = (schemaRef) => ({
   content: { "application/json": { schema: schemaRef } }
 });
 
-export const openApiDocument = () => ({
+// Adapters without history storage must not advertise a history surface they
+// cannot serve: discovery documents are contracts, and listing unreachable
+// paths or tools there is exactly the soft-200 problem in another costume.
+const HISTORY_PATHS = ["/api/history", "/api/history/range"];
+const HISTORY_SCHEMA_NAMES = [
+  "HistoryResolution", "HistoryRangePayload", "HistorySnapshot", "HistoryGap", "HistoryEnvelope"
+];
+
+export const openApiDocument = ({ history = true } = {}) => {
+  const document = {
   openapi: "3.1.0",
   info: {
     title: "A Day in Ireland — public data API",
@@ -409,10 +418,18 @@ export const openApiDocument = () => ({
     "/api/history/range": "public, max-age=60, s-maxage=60",
     "/api/openapi.json": "public, max-age=3600, s-maxage=86400"
   }
-});
+  };
+  if (!history) {
+    for (const path of HISTORY_PATHS) delete document.paths[path];
+    for (const name of HISTORY_SCHEMA_NAMES) delete document.components.schemas[name];
+    for (const path of HISTORY_PATHS) delete document["x-cache-policy"][path];
+    document.tags = document.tags.filter((tag) => tag.name !== "history");
+  }
+  return document;
+};
 
-export const openApiResponse = () =>
-  new Response(JSON.stringify(openApiDocument()), {
+export const openApiResponse = ({ history = true } = {}) =>
+  new Response(JSON.stringify(openApiDocument({ history })), {
     status: 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
