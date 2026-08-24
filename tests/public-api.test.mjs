@@ -159,6 +159,7 @@ test("notifications are acknowledged with an empty 202", async () => {
   const response = await handleMcpRequest(post({ jsonrpc: "2.0", method: "notifications/initialized" }), stubSources());
   assert.equal(response.status, 202);
   assert.equal(await response.text(), "");
+  assert.equal(response.headers.get("access-control-allow-origin"), "*", "cross-origin browser clients must see the acknowledgement");
 });
 
 test("ping answers with an empty result object", async () => {
@@ -199,6 +200,17 @@ test("GET is refused and OPTIONS advertises POST on the transport", async () => 
 test("oversized request bodies answer 413 before parsing", async () => {
   const huge = `{"jsonrpc":"2.0","id":1,"method":"tools/list","pad":"${"x".repeat(300_000)}"}`;
   const response = await handleMcpRequest(new Request("https://day.illek.ie/mcp", { method: "POST", body: huge }), stubSources());
+  assert.equal(response.status, 413);
+});
+
+test("the request-body cap counts bytes, not UTF-16 code units", async () => {
+  // 130_000 two-byte characters: under the old .length check (130_000 <
+  // 256_000) this parsed; at ~260k bytes it must be rejected.
+  const twoByte = "é".repeat(130_000);
+  const response = await handleMcpRequest(
+    new Request("https://day.illek.ie/mcp", { method: "POST", body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","pad":"${twoByte}"}` }),
+    stubSources()
+  );
   assert.equal(response.status, 413);
 });
 

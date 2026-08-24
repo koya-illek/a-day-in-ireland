@@ -35,6 +35,46 @@ const jsonResponse = (body, status = 200) =>
     }
   });
 
+const emptyResponse = (status) =>
+  new Response(null, {
+    status,
+    headers: {
+      "cache-control": "no-store",
+      "access-control-allow-origin": "*",
+      "x-robots-tag": "noindex, nofollow"
+    }
+  });
+
+// The transport caps request bodies, but reading one fully and checking after
+// would still buffer an unbounded upload inside the isolate. Stream with a
+// byte ceiling instead; string .length counts UTF-16 units, not bytes.
+const readBoundedRequestText = async (request, limitBytes) => {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limitBytes) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const body = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
+};
+
+const oversizedBodyResponse = () =>
+  jsonResponse(rpcError(null, ERROR_CODES.invalidRequest, "Request body too large."), 413);
+
 const rpcResult = (id, result) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id, code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
@@ -381,9 +421,13 @@ export const handleMcpRequest = async (request, sources, capabilities = {}) => {
   if (validateProtocolHeader(request) === null) {
     return jsonResponse(rpcError(null, ERROR_CODES.invalidRequest, `Unsupported MCP-Protocol-Version. Supported: ${MCP_PROTOCOL_VERSIONS.join(", ")}.`), 400);
   }
-  const raw = await request.text();
-  if (raw.length > MAX_REQUEST_BODY_BYTES) {
-    return jsonResponse(rpcError(null, ERROR_CODES.invalidRequest, "Request body too large."), 413);
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isInteger(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    return oversizedBodyResponse();
+  }
+  const raw = await readBoundedRequestText(request, MAX_REQUEST_BODY_BYTES);
+  if (raw === null) {
+    return oversizedBodyResponse();
   }
   let message;
   try {
@@ -398,6 +442,8 @@ export const handleMcpRequest = async (request, sources, capabilities = {}) => {
   }
   const implementations = buildToolImplementations(sources);
   const responseMessage = await dispatchMessage(implementations, message, capabilities);
-  if (responseMessage === undefined) return new Response(null, { status: 202 });
+  // Notifications get no body, but browser-based cross-origin clients still
+  // need the shared CORS posture or their POST never resolves at all.
+  if (responseMessage === undefined) return emptyResponse(202);
   return jsonResponse(responseMessage);
 };
