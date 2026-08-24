@@ -58,7 +58,9 @@ const types = {
 
 createServer(async (request, response) => {
   const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-  if (pathname.startsWith("/api/")) {
+  // /mcp (and /api/mcp via the prefix below) belongs to the worker surface in
+  // live mode, matching the production dispatcher's route set.
+  if (pathname.startsWith("/api/") || pathname === "/mcp") {
     if (process.env.LIVE_CONTEXTS === "1") {
       const { default: worker } = await import("../platform/server-entry.js");
       const env = {};

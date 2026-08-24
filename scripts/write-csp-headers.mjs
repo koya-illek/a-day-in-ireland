@@ -20,7 +20,9 @@ export const inlineScriptHashes = (html) => {
   // tag, case-insensitively, tolerating whitespace before the bracket. Even
   // empty bodies execute as script elements and need their own allowance.
   for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
-    if (/\bsrc\s*=/i.test(match[1])) continue;
+    // Anchor to an attribute boundary: \b would treat "data-src" as src and
+    // skip a genuinely inline block, breaking its page after deploy.
+    if (/(?:^|\s)src\s*=/i.test(match[1])) continue;
     // CSP hashes the exact raw bytes between the tags, which is also what
     // the browser executes; no entity decoding or whitespace trimming.
     hashes.add(`'sha256-${createHash("sha256").update(match[2]).digest("base64")}'`);

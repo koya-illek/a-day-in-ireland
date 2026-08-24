@@ -157,6 +157,13 @@ test("inline script hashing tolerates uppercase tags and hashes empty bodies lik
   ]);
 });
 
+test("attribute names ending in src do not masquerade as an external script", () => {
+  // \b matches between a letter and a hyphen, so data-src used to be read as
+  // src and the genuinely inline body was left without a CSP allowance.
+  const html = "<html><body><script data-src=\"x\">inline();</script></body></html>";
+  assert.deepEqual(inlineScriptHashes(html), [expectedHash("inline();")]);
+});
+
 test("per-page CSP removes the global policy and gives each document only its own hashes", () => {
   const headers = "/*\n  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'\n  X-Frame-Options: DENY\n";
   const updated = renderHeadersWithPerPageCsp(headers, [
