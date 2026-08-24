@@ -827,6 +827,49 @@ test("tide query windows remain stable inside a cache bucket", async () => {
   });
 });
 
+test("live tide picks the earliest future high and low regardless of provider row order", async () => {
+  const { fetchTides } = await import("../platform/api-core.js");
+  const originalFetch = globalThis.fetch;
+  const now = Date.now();
+  const observedAt = new Date(now - 30 * 60_000).toISOString();
+  const hoursFromNow = (hours) => new Date(now + hours * 3_600_000).toISOString();
+  // Deliberately shuffled: the provider only guarantees ordering when the
+  // query asks for it, and "next" must never mean "first row returned".
+  const predictions = [
+    ["Dublin", -6.2, 53.3, hoursFromNow(11), "HIGH", 2.1],
+    ["Dublin", -6.2, 53.3, hoursFromNow(2), "LOW", 0.9],
+    ["Dublin", -6.2, 53.3, hoursFromNow(-3), "HIGH", 1.8],
+    ["Dublin", -6.2, 53.3, hoursFromNow(5), "HIGH", 2.4],
+    ["Dublin", -6.2, 53.3, hoursFromNow(8), "LOW", 0.7]
+  ];
+  let predictionUrl = "";
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("IrishNationalTideGaugeNetwork.json")) {
+      return Response.json({ table: { rows: [["Dublin", -6.2, 53.3, observedAt, 1.1]] } });
+    }
+    if (url.includes("imiSurgeObservationINTGN")) return new Response("upstream unavailable", { status: 503 });
+    if (url.includes("IMI_TidePrediction_HighLow")) {
+      predictionUrl = url;
+      return Response.json({ table: { rows: predictions } });
+    }
+    throw new Error(`unexpected upstream ${url}`);
+  };
+  try {
+    const result = await fetchTides();
+    assert.equal(result.status, "partial");
+    assert.equal(result.readings.length, 1);
+    assert.equal(result.readings[0].nextHighAt, hoursFromNow(5));
+    assert.equal(result.readings[0].nextHighLevel, 2.4);
+    assert.equal(result.readings[0].nextLowAt, hoursFromNow(2));
+    assert.equal(result.readings[0].nextLowLevel, 0.9);
+    // Same ordering contract the history collector already pins.
+    assert.match(predictionUrl, /orderBy\((%22|\")stationID,time/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("tide trend uses the recent 30-minute movement instead of only the latest pair", async () => {
   const { classifyTideTrend } = await import("../platform/live-normalize.js");
   const sample = (minutes, waterLevel) => ({

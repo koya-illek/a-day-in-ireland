@@ -388,7 +388,7 @@ export const fetchTides = async () => {
   const [levelsResult, surgeResult, predictionResult] = await Promise.allSettled([
     fetch(`${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
     fetch(`${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, { cf: { cacheEverything: true, cacheTtl: 900 } }),
-    fetch(`${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, { cf: { cacheEverything: true, cacheTtl: 3600 } })
+    fetch(`${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}&orderBy("stationID,time")`)}`, { cf: { cacheEverything: true, cacheTtl: 3600 } })
   ]);
   if (levelsResult.status === "rejected") throw levelsResult.reason;
   const levelsResponse = levelsResult.value;
@@ -413,7 +413,11 @@ export const fetchTides = async () => {
     if (!freshEnough(observedAt, 3)) return [];
     const surge = [...surges].sort((a, b) => distance(row, a) - distance(row, b))[0];
     const nearby = predictions.filter((item) => distance(row, item) < .08);
-    const future = nearby.filter((item) => new Date(item[3]).getTime() > now);
+    // "Next" means earliest future event, not first row in provider order;
+    // ERDDAP only guarantees ordering when the query asks for it.
+    const future = nearby
+      .filter((item) => new Date(item[3]).getTime() > now)
+      .sort((a, b) => new Date(a[3]) - new Date(b[3]));
     const nextHigh = future.find((item) => item[4] === "HIGH");
     const nextLow = future.find((item) => item[4] === "LOW");
     const predictedLevel = surge && distance(row, surge) < .08 ? numeric(surge[4]) : null;
