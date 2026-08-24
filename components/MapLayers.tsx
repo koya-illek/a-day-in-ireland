@@ -229,7 +229,10 @@ function RadarTileImage({
     }
 
     onStatus(frameKey, tileKey, "loading");
-    let prepared = false;
+    // Tracks this instance's cache claim only. It cannot be folded into a
+    // completion flag: an abort during decode resumes after the cleanup has
+    // already run, so the continuation must be able to release on its own.
+    let holdsCacheClaim = false;
     const prepare = async () => {
       try {
         const response = await fetch(href, {
@@ -257,12 +260,15 @@ function RadarTileImage({
           const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
           if (!blob) throw new Error("Radar tile could not be encoded");
           const objectUrl = URL.createObjectURL(blob);
-          // The cache owns one reference from production; this instance holds
-          // the other until its cleanup runs. An abort after completion still
-          // leaves a valid cached copy for the next replay pass.
           rememberProcessedTile(href, objectUrl);
-          prepared = true;
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted) {
+            // The cleanup already ran while this continuation was suspended,
+            // so release the instance claim here. The produced copy stays in
+            // the cache unreferenced, evictable and ready for the next pass.
+            releaseProcessedTile(href);
+            return;
+          }
+          holdsCacheClaim = true;
           setTile({ href: objectUrl, status: "ready" });
           onStatus(frameKey, tileKey, "ready");
         } finally {
@@ -278,7 +284,7 @@ function RadarTileImage({
     void prepare();
     return () => {
       controller.abort();
-      if (prepared) releaseProcessedTile(href);
+      if (holdsCacheClaim) releaseProcessedTile(href);
     };
   }, [frameKey, href, onStatus, tileKey]);
 

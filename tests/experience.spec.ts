@@ -42,9 +42,14 @@ const RADAR_FIXTURE_PNG = Buffer.from(
 
 async function installRadarTileAvailabilityFixture(
   page: Page,
-  outcome: "valid" | "partial" | "unavailable"
+  outcome: "valid" | "partial" | "unavailable",
+  { frameCount = 1 }: { frameCount?: number } = {}
 ) {
   const now = new Date().toISOString();
+  const frames = Array.from({ length: frameCount }, (_, index) => ({
+    id: `20260804151${index}`, observedAt: now, modifiedTime: index + 1, provider: "Met Éireann",
+    tileTemplate: `https://gdal.met.ie/api/maps/radar/20260804151${index}/{x}/{y}/{z}/1`
+  }));
   await page.route("https://prodapi.metweb.ie/**", (route) => route.fulfill({
     contentType: "application/json",
     body: "[]"
@@ -66,10 +71,7 @@ async function installRadarTileAvailabilityFixture(
     body: JSON.stringify({
       generatedAt: now,
       marine: [],
-      radar: [{
-        id: "202608041510", observedAt: now, modifiedTime: 1, provider: "Met Éireann",
-        tileTemplate: "https://gdal.met.ie/api/maps/radar/202608041510/{x}/{y}/{z}/1"
-      }],
+      radar: frames,
       grid: null, airQuality: [], aurora: null, tides: [], bathingAlerts: [], warnings: [],
       warningsStatus: "live", issTle: null, satellite: null, earthquakes: [],
       contextStatus: {
@@ -2642,6 +2644,27 @@ test("browser radar rendering masks the neutral no-data wedge and preserves prec
   });
   expect(pixels[3]).toBe(0);
   expect(pixels.slice(4)).toEqual([0, 128, 194, 255]);
+});
+
+test("revisiting a cached radar frame returns to live instead of stranding in loading", async ({ page }) => {
+  await installRadarTileAvailabilityFixture(page, "valid", { frameCount: 2 });
+  await page.goto("/");
+  await enableExploreLayer(page, /Rainfall radar/);
+
+  const control = page.getByLabel("Rainfall radar timeline");
+  const slider = control.getByRole("slider", { name: "Radar frame" });
+  // The timeline opens on the latest frame; step to the older frame first.
+  await expect(control).toHaveAttribute("data-radar-availability", "live");
+  await slider.fill("0");
+  await expect(control).toHaveAttribute("data-radar-availability", "live");
+
+  // Returning to the latest frame revisits tiles that are already processed:
+  // every status report is synchronous, so the frame must reach "live" again
+  // without a network round trip instead of stranding at "loading".
+  await slider.fill("1");
+  await expect(control).toHaveAttribute("data-radar-availability", "live");
+  await expect(control).toHaveAttribute("data-radar-ready-tiles", "4");
+  await expect(page.locator('.radar-tile[data-radar-tile-state="ready"]')).toHaveCount(4);
 });
 
 test("mobile view keeps the layer rail clear of the what-matters board", async ({ page }, testInfo) => {

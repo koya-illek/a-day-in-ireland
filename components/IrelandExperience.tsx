@@ -1504,9 +1504,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const radarFrames = timeMode !== "past" && online && !radarHistoryGap && snapshot.contextStatus.radar === "live" ? snapshot.radar : [];
   const radarFrame = radarFrames[Math.min(radarFrameIndex, Math.max(0, radarFrames.length - 1))] ?? null;
   const radarFrameKey = radarFrame ? `${radarFrame.id}:${radarFrame.modifiedTime}` : null;
-  useEffect(() => {
-    activeRadarFrameKeyRef.current = radarLayerActive ? radarFrameKey : null;
-  }, [radarFrameKey, radarLayerActive]);
+  // Mirrored during render rather than in an effect: RadarTileImage reports
+  // synchronously from its own effects (cache hits report before any parent
+  // effect runs), so a late ref update would drop those reports and strand
+  // the frame at "loading" forever. The value only gates idempotent status
+  // reports, so a discarded concurrent render cannot mislabel anything.
+  activeRadarFrameKeyRef.current = radarLayerActive ? radarFrameKey : null;
   const reportRadarTileStatus = useCallback<RadarTileStatusReporter>((frameKey, tileKey, status) => {
     if (frameKey !== activeRadarFrameKeyRef.current) return;
     setRadarTileState((current) => {
@@ -1515,11 +1518,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       return { frameKey, tiles: { ...tiles, [tileKey]: status } };
     });
   }, []);
-  useEffect(() => {
-    setRadarTileState(radarLayerActive && radarFrameKey
-      ? { frameKey: radarFrameKey, tiles: createRadarTileStatusRecord() }
-      : null);
-  }, [radarFrameKey, radarLayerActive]);
   const radarTileStatuses = radarFrameKey && radarTileState?.frameKey === radarFrameKey
     ? Object.values(radarTileState.tiles)
     : [];
