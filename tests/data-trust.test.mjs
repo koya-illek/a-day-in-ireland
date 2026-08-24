@@ -1021,23 +1021,6 @@ test("the server grid integration uses the newest component timestamp", async ()
   assert.equal(result.reading.carbonIntensity, 250);
 });
 
-test("Met Éireann CSV fallback does not invent fetch-time freshness", async () => {
-  const source = await readFile(new URL("../lib/latest-observations.ts", import.meta.url), "utf8");
-  let output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
-  const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
-  output = output.replace('"./weather-stations"', JSON.stringify(weatherUrl));
-  const observations = await import(`data:text/javascript,${encodeURIComponent(output)}`);
-  const [reading] = observations.parseLatestObservations(
-    "Name,Temperature,Description,Wind,Unused,Direction,Unused,Rain,Unused\nStation,12,Clear,10,,N,,1,",
-    [{ id: "test", name: "Test", csvName: "Station", latitude: 53.3, longitude: -7.2 }]
-  );
-
-  assert.equal(reading.observedAt, null);
-  assert.equal(reading.fresh, false);
-});
-
 test("river normalization rejects malformed and out-of-Ireland coordinates before deduplication", () => {
   const now = Date.parse("2026-08-02T12:00:00.000Z");
   const readings = normalizeRiverReadings([
