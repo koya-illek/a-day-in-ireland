@@ -84,9 +84,13 @@ createServer(async (request, response) => {
     // paths get the branded page with a true 404 status, never a soft 200.
     const notFoundFile = join(root, "404.html");
     if (existsSync(notFoundFile)) {
-      // The 404 document carries the "/404" header rules (its per-page CSP);
-      // the miss path itself matched none.
+      // The miss path may have matched long-cache rules above (a stale
+      // content-hashed asset, say); a branded 404 must never inherit them,
+      // or browsers would cache the error page under an immutable-year
+      // policy. Reset caching, then layer the /404 document rules on top.
+      response.removeHeader("Cache-Control");
       for (const [name, value] of headersForPath("/404")) response.setHeader(name, value);
+      if (!response.getHeader("Cache-Control")) response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", types[".html"]);
       response.writeHead(404);
       const stream = createReadStream(notFoundFile);
