@@ -164,7 +164,7 @@ export function DetailCard({
         <section className="movement-browser" aria-label={`${stack.items.length} transport positions in this area`}>
           <div className="movement-browser-heading">
             <strong>Transport in this area</strong>
-            <span>{movementMatches.length} of {stack.items.length}</span>
+            <span role="status">{movementMatches.length} of {stack.items.length}</span>
           </div>
           <div className="movement-browser-filters">
             <label>
@@ -206,7 +206,7 @@ export function DetailCard({
                 );
               })}
             </ol>
-          ) : <p className="movement-results-empty">No transport positions match this search.</p>}
+          ) : <p className="movement-results-empty" role="status">No transport positions match this search.</p>}
           {movementPageCount > 1 && (
             <nav className="movement-pagination" aria-label="Transport result pages">
               <button type="button" disabled={movementPage === 0} onClick={() => setMovementPage((page) => page - 1)}>Previous</button>

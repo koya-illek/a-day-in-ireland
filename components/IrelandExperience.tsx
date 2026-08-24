@@ -878,13 +878,15 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     const refreshAll = async () => {
       setServicesRefreshing(true);
       try {
+        // Only a pass that actually contacted providers may stamp "Checked":
+        // an offline press skips every fetch and must not claim one.
         if (navigator.onLine) {
           await Promise.allSettled([update(), updateLivingLayers(), updateCurrentContexts(), updateTransit()]);
+          setLastCheckedAt(new Date());
         }
       } finally {
         lastRefreshAllAtRef.current = Date.now();
         setInitialRefreshComplete(true);
-        setLastCheckedAt(new Date());
         setServicesRefreshing(false);
       }
     };
@@ -1786,8 +1788,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         return constrainMapView(scale, 500 - stack.x * scale, 450 - stack.y * scale);
       });
       setSelected(null);
+      // One announcement channel: the feedback region already carries the
+      // position count, so the marker region would only repeat it.
       setMapFeedback(`Zoomed in on ${stack.items.length} transport positions. Select a cluster again to drill down or open the result list.`);
-      setMarkerAnnouncement(`${stack.items.length} transport positions; map zoomed in.`);
       return;
     }
     markerOpenerRef.current = [...(mapRef.current?.querySelectorAll<SVGElement>("[data-map-marker]") ?? [])]
