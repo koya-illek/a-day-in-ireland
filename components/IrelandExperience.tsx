@@ -644,6 +644,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   const enterPast = useCallback(async () => {
     setTimeMode("past");
+    // A live-chart selection must not re-announce itself against stored data
+    // for an hour the user never picked in that record.
+    setTimelineSelection(null);
     comparisonRequestRef.current?.abort();
     setHistoryComparison({ status: "idle", envelope: null, error: null });
     if (historyState.envelope?.resolvedAt) {
@@ -2308,7 +2311,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         });
         setPlaceMessage("Using your shared coordinates for this session only. They are not saved or added to share links.");
       },
-      () => setPlaceMessage("Location was not shared. Choose a place instead."),
+      ({ code }) => setPlaceMessage(code === 1
+        ? "Location was not shared. Choose a place instead."
+        : "Your location could not be determined right now. Choose a place instead."),
       { enableHighAccuracy: false, maximumAge: 300_000, timeout: 8_000 }
     );
   }, []);
@@ -2460,8 +2465,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <button
             type="button"
             className="theme-button"
-            aria-label={`Use ${interfaceTheme === "dark" ? "light" : "dark"} mode`}
-            aria-pressed={interfaceTheme === "light"}
+            aria-label="Dark mode"
+            aria-pressed={interfaceTheme === "dark"}
             onClick={toggleInterfaceTheme}
           >
             <span aria-hidden="true">{interfaceTheme === "dark" ? "☼" : "☾"}</span>
