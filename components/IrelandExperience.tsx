@@ -124,6 +124,10 @@ const DeferredIssPanel = dynamic(
 const compareStableIds = (first: string, second: string) =>
   first < second ? -1 : first > second ? 1 : 0;
 
+// Context panels keep rendering retained values when a source degrades to
+// stale; only true absence withholds data. The panels word the caveat.
+const retainedContextStatuses: ReadonlySet<LiveSnapshot["contextStatus"][keyof LiveSnapshot["contextStatus"]]> = new Set(["live", "partial", "fallback", "stale"]);
+
 type MovementRecord = TrainPosition | LiveSnapshot["transit"][number];
 
 const stablePayloadValue = (value: unknown) => {
@@ -2933,9 +2937,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           >
             <summary>Whole-island context · {contextPanelCount} panel{contextPanelCount === 1 ? "" : "s"}</summary>
             <div className="map-context-grid">
-              {layers.has("grid") && <DeferredGridPanel historical={timeMode === "past"} grid={online && (snapshot.contextStatus.grid === "live" || snapshot.contextStatus.grid === "fallback") ? snapshot.grid : null} />}
-              {layers.has("aurora") && <DeferredAuroraPanel aurora={online && (snapshot.contextStatus.aurora === "live" || snapshot.contextStatus.aurora === "fallback") ? snapshot.aurora : null} />}
-              {layers.has("iss") && <DeferredIssPanel historical={timeMode === "past"} iss={online && (snapshot.contextStatus.iss === "live" || snapshot.contextStatus.iss === "fallback") ? snapshot.iss : null} />}
+              {layers.has("grid") && <DeferredGridPanel historical={timeMode === "past"} grid={online && retainedContextStatuses.has(snapshot.contextStatus.grid) ? snapshot.grid : null} status={snapshot.contextStatus.grid} />}
+              {layers.has("aurora") && <DeferredAuroraPanel aurora={online && retainedContextStatuses.has(snapshot.contextStatus.aurora) ? snapshot.aurora : null} status={snapshot.contextStatus.aurora} />}
+              {layers.has("iss") && <DeferredIssPanel historical={timeMode === "past"} iss={online && retainedContextStatuses.has(snapshot.contextStatus.iss) ? snapshot.iss : null} status={snapshot.contextStatus.iss} />}
             </div>
           </details>
         )}

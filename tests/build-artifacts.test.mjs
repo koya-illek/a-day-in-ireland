@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-
-const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 // The alternate hosting target ships dist/server/index.js as a plain ES module
 // graph copied verbatim from platform/. Nothing bundles it, so every relative

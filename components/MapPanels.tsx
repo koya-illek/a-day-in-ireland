@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { LiveSnapshot } from "../lib/types";
+import type { ContextSourceStatus, LiveSnapshot } from "../lib/types";
 import { transitPresentation } from "../lib/presentation.js";
 import { providerHttpsUrl } from "../platform/live-normalize.js";
 import {
@@ -384,7 +384,8 @@ export function DetailCard({
   );
 }
 
-export function GridPanel({ grid, historical = false }: { grid: LiveSnapshot["grid"]; historical?: boolean }) {
+export function GridPanel({ grid, status, historical = false }: { grid: LiveSnapshot["grid"]; status: ContextSourceStatus; historical?: boolean }) {
+  const retained = status === "stale" && !historical;
   return (
     <aside className="map-data-panel grid-panel" aria-label={`All-island electricity grid ${historical ? "at the selected time" : "now"}`}>
       <p className="utility-label">EirGrid · operational data</p>
@@ -393,7 +394,13 @@ export function GridPanel({ grid, historical = false }: { grid: LiveSnapshot["gr
         <>
           <div className="grid-hero">
             <strong>{grid.windSharePercent === null ? "Unavailable" : `${grid.windSharePercent.toFixed(0)}%`}</strong>
-            <span>{grid.windSharePercent === null ? "wind share is unavailable in this grid response" : `of ${historical ? "captured" : "current"} demand supplied by wind`}</span>
+            <span>
+              {grid.windSharePercent === null
+                ? "wind share is unavailable in this grid response"
+                : retained
+                  ? "of demand at the last successful refresh, supplied by wind"
+                  : `of ${historical ? "captured" : "current"} demand supplied by wind`}
+            </span>
           </div>
           <dl>
             <div><dt>Demand</dt><dd>{grid.demandMW?.toLocaleString("en-IE") ?? "Unavailable"} MW</dd></div>
@@ -416,6 +423,7 @@ export function GridPanel({ grid, historical = false }: { grid: LiveSnapshot["gr
             </div>
             <div><dt>Data through</dt><dd>{grid.observedAt ? formatTime(new Date(grid.observedAt)) : "Unavailable"}</dd></div>
           </dl>
+          {retained && <small>Cached EirGrid values from the last successful refresh are retained; live conditions cannot be assessed.</small>}
         </>
       ) : (
         <>
@@ -432,7 +440,7 @@ export function GridPanel({ grid, historical = false }: { grid: LiveSnapshot["gr
   );
 }
 
-export function AuroraPanel({ aurora }: { aurora: LiveSnapshot["aurora"] }) {
+export function AuroraPanel({ aurora, status }: { aurora: LiveSnapshot["aurora"]; status: ContextSourceStatus }) {
   return (
     <aside className="map-data-panel aurora-panel" aria-label="Aurora probability over Ireland">
       <p className="utility-label">NOAA OVATION · forecast</p>
@@ -444,6 +452,7 @@ export function AuroraPanel({ aurora }: { aurora: LiveSnapshot["aurora"] }) {
             <span>maximum overhead probability</span>
           </div>
           <p>Kp {aurora.kpIndex?.toFixed(1) ?? "Unavailable"} · forecast for {formatTime(new Date(aurora.forecastAt))}</p>
+          {status === "stale" && <small>Cached NOAA guidance from the last successful refresh is retained; current conditions cannot be assessed.</small>}
           <small>This is probability directly overhead, not a guarantee of seeing aurora near the northern horizon. Darkness, cloud and light pollution matter.</small>
         </>
       ) : (
@@ -456,7 +465,7 @@ export function AuroraPanel({ aurora }: { aurora: LiveSnapshot["aurora"] }) {
   );
 }
 
-export function IssPanel({ iss, historical = false }: { iss: LiveSnapshot["iss"]; historical?: boolean }) {
+export function IssPanel({ iss, status, historical = false }: { iss: LiveSnapshot["iss"]; status: ContextSourceStatus; historical?: boolean }) {
   const next = iss?.passes[0] ?? null;
   const visible = iss?.passes.find((pass) => pass.visible) ?? null;
   return (
@@ -474,6 +483,7 @@ export function IssPanel({ iss, historical = false }: { iss: LiveSnapshot["iss"]
             <div><dt>Approaches from</dt><dd>{next?.direction ?? "Unavailable"}</dd></div>
             <div><dt>Next dark-sky pass</dt><dd>{visible ? `${formatDate(new Date(visible.startsAt))}, ${formatTime(new Date(visible.startsAt))}` : "None calculated in 48 hours"}</dd></div>
           </dl>
+          {status === "stale" && !historical && <small>These values were calculated during the last successful refresh; newer orbital elements could not be fetched.</small>}
           <small>Passes are calculated for central Ireland. “Dark-sky” means the pass occurs at night; actual visibility also depends on sunlight on the station, cloud, your location and the horizon.</small>
         </>
       ) : <p>ISS orbital data is temporarily unavailable.</p>}

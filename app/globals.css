@@ -959,6 +959,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .grid-hero, .aurora-probability, .iss-orbit-value { align-items: flex-end; display: flex; gap: .7rem; }
 .grid-hero strong, .aurora-probability strong, .iss-orbit-value strong { color: var(--accent-gold); font: 600 2.7rem/1 ui-monospace, monospace; }
 .grid-hero span, .aurora-probability span, .iss-orbit-value span { color: var(--muted); font-size: .62rem; line-height: 1.35; max-width: 8.5rem; }
+.map-data-panel small { color: var(--muted); display: block; margin-top: .75rem; }
 .aurora-panel { border-color: rgba(106, 255, 196, .42); }
 .aurora-panel .utility-label { color: #78ffc6; }
 .aurora-panel p:not(.utility-label), .aurora-panel small { color: var(--muted); font-size: .62rem; line-height: 1.45; }
@@ -2136,6 +2137,7 @@ footer {
 .aurora-probability span,
 .iss-orbit-value span,
 .aurora-panel p:not(.utility-label),
+.grid-panel small,
 .aurora-panel small,
 .iss-panel small,
 .notable-signals small,
