@@ -36,13 +36,21 @@ export const stripGeneratedCsp = (headersText) => headersText
   .trimEnd();
 
 const globalCspLine = (headersText) => {
-  const match = headersText.match(/^([ \t]*Content-Security-Policy:[^\n]*)$/m);
+  const match = headersText.match(/^[ \t]*(Content-Security-Policy:[^\n]*)$/m);
   if (!match) throw new Error("The base _headers file is missing its global Content-Security-Policy template.");
   if (!match[1].includes("'unsafe-inline'")) {
     throw new Error("The base Content-Security-Policy must keep 'unsafe-inline' as the pre-generation fallback.");
   }
   return match[1];
 };
+
+// The generator strips the template policy from its own output, so the
+// template travels inside the generated block as a comment. That makes
+// regeneration over a generated file reproduce identical bytes instead of
+// mistaking a page policy for the template.
+const TEMPLATE_COMMENT_PATTERN = /^# TEMPLATE: (Content-Security-Policy:[^\n]*)$/m;
+
+const embeddedTemplateLine = (headersText) => headersText.match(TEMPLATE_COMMENT_PATTERN)?.[1] ?? null;
 
 const withoutGlobalCsp = (headersText) => headersText
   .replace(/^([ \t]*Content-Security-Policy:[^\n]*)\n?/m, "")
@@ -87,7 +95,10 @@ const assertLineLength = (line, file) => {
 };
 
 export const renderHeadersWithPerPageCsp = (headersText, documents) => {
-  const template = globalCspLine(headersText);
+  // A fresh file carries the readable template policy; a generated file only
+  // carries its embedded copy. Both routes resolve the same indent-free
+  // template; the two-space header indent is re-applied when emitting.
+  const template = embeddedTemplateLine(headersText) ?? globalCspLine(headersText);
   const base = withoutGlobalCsp(stripGeneratedCsp(headersText));
   const uniqueHashes = new Set();
   const blocks = [];
@@ -97,14 +108,14 @@ export const renderHeadersWithPerPageCsp = (headersText, documents) => {
       throw new Error(`${document.file} has no inline scripts; refusing to guess the CSP.`);
     }
     for (const hash of document.hashes) uniqueHashes.add(hash);
-    const cspLine = template.replace("'unsafe-inline'", document.hashes.join(" "));
+    const cspLine = `  ${template.replace("'unsafe-inline'", document.hashes.join(" "))}`;
     assertLineLength(cspLine, document.file);
     for (const path of pathsForDocument(document.file)) {
       blocks.push(`${path}\n${cspLine}`);
     }
   }
 
-  return `${base}\n\n${GENERATED_BEGIN}\n${blocks.join("\n\n")}\n${GENERATED_END}\n`;
+  return `${base}\n\n${GENERATED_BEGIN}\n# TEMPLATE: ${template}\n${blocks.join("\n\n")}\n${GENERATED_END}\n`;
 };
 
 const main = () => {
@@ -112,10 +123,8 @@ const main = () => {
   const headersPath = join(root, "_headers");
   if (!existsSync(headersPath)) throw new Error(`${headersPath} is missing; run npm run build first`);
   const original = readFileSync(headersPath, "utf8");
-  if (!original.includes("'unsafe-inline'") && original.includes(GENERATED_BEGIN)) {
-    console.log("Per-page Content-Security-Policy rules were already generated; nothing to do.");
-    return;
-  }
+  // Regeneration is idempotent: an already generated file strips back to the
+  // same base and template, so running twice changes nothing.
   const documents = collectDocumentHashes(root);
   const updated = renderHeadersWithPerPageCsp(original, documents);
   writeFileSync(headersPath, updated);

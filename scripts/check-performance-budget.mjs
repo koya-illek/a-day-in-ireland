@@ -25,8 +25,9 @@ const largestJavascriptGzipBytes = largestJavascriptPath
 const html = files.filter((path) => path.endsWith(".html"));
 const largestHtml = Math.max(0, ...html.map(bytes));
 // Every shipped copy of the transit dictionary counts, not just the
-// canonical name: the content-hashed asset used to escape this check.
-const transitAssets = files.filter((path) => /\/data\/transit-destinations\..*\.json$/.test(path));
+// canonical name: the content-hashed asset used to escape this check. The
+// hash segment keeps the small manifest from being counted as data.
+const transitAssets = files.filter((path) => /\/data\/transit-destinations\.[0-9a-f]{8,}\.json$/.test(path));
 const transitBytes = Math.max(0, ...transitAssets.map(bytes), 0);
 const transitGzipBytes = Math.max(0, ...transitAssets.map((path) => gzipSync(readFileSync(path), { level: 9 }).length));
 // Decorative road geometry loads as a static asset; keep it from regrowing

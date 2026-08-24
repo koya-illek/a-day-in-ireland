@@ -41,10 +41,13 @@ const loadTransitDestinations = () => {
       .then(async (manifestResponse) => {
         if (!manifestResponse.ok) throw new Error(`Transit destinations manifest returned ${manifestResponse.status}`);
         const manifest = await manifestResponse.json() as { assetPath?: string };
-        const assetPath = typeof manifest.assetPath === "string" && manifest.assetPath.startsWith("/data/")
-          ? manifest.assetPath
-          : "/data/transit-destinations.json";
-        const response = await fetch(assetPath, { cache: "force-cache" });
+        // The build rewrites the manifest to the content-hashed asset and no
+        // longer ships the bare source name, so a manifest without a usable
+        // path is a broken deploy, not a fallback situation.
+        if (typeof manifest.assetPath !== "string" || !manifest.assetPath.startsWith("/data/")) {
+          throw new Error("Transit destinations manifest carries no usable asset path");
+        }
+        const response = await fetch(manifest.assetPath, { cache: "force-cache" });
         if (!response.ok) throw new Error(`Transit destinations returned ${response.status}`);
         return response.json() as Promise<Record<string, string>>;
       })

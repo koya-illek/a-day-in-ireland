@@ -187,3 +187,15 @@ test("per-page CSP leaves style-src untouched, is deterministic, and rejects ove
     /line limit is 2000/
   );
 });
+
+test("per-page CSP generation is idempotent over its own output", () => {
+  const headers = "/*\n  Content-Security-Policy: script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'\n  X-Frame-Options: DENY\n";
+  const documents = [
+    { file: "index.html", hashes: ["'sha256-HOME='"] },
+    { file: "about.html", hashes: ["'sha256-ABOUT='"] }
+  ];
+  const once = renderHeadersWithPerPageCsp(headers, documents);
+  // Re-running used to mistake the first page policy for the template and
+  // rewrite every page with that document's hashes; it must be a no-op.
+  assert.equal(renderHeadersWithPerPageCsp(once, documents), once);
+});
