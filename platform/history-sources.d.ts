@@ -37,12 +37,6 @@ export function collectBathing(
 ): Promise<HistorySourceResult>;
 export function collectEarthquakes(fetcher: typeof fetch, now: number): Promise<HistorySourceResult>;
 export function summarizeTransit(vehicles: unknown, status: string, capturedAt: string): unknown | null;
-export function summarizeRail(
-  trains: unknown,
-  status: string,
-  capturedAt: string,
-  includeRail: boolean
-): unknown | null;
 export function collectScopedSources(
   fetcher?: typeof fetch,
   now?: number

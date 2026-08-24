@@ -23,5 +23,4 @@ export const assessMetForecast: (body: unknown, now?: number) => { forecast: Off
 export const selectForecastPeriod: (forecast: OfficialForecast | null, now?: number) => { period: string; copy: string } | null;
 export const acceptClientSolar: (value: unknown, now?: number) => SolarReading | null;
 export const acceptClientForecast: (value: unknown, now?: number) => OfficialForecast | null;
-export const forecastFreshnessFor: (issued: string | null | undefined, now?: number) => "invalid" | "future" | "stale" | "fresh";
 export const resetSolarCache: () => void;

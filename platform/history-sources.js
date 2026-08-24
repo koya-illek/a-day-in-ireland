@@ -20,7 +20,7 @@ import {
   weatherBuoyQuery,
   EIRGRID_HISTORY_BODY_LIMIT
 } from "./live-normalize.js";
-import { WEATHER_STATIONS, matchesWeatherStationIdentity } from "./weather-stations.js";
+import { WEATHER_OBSERVATION_MAX_AGE_MS, WEATHER_STATIONS, matchesWeatherStationIdentity } from "./weather-stations.js";
 
 export const HISTORY_SOURCE_KEYS = [
   "weather", "warnings", "marine", "rivers", "tides", "grid",
@@ -32,6 +32,17 @@ const validTimestamp = (value) => {
   const timestamp = Date.parse(String(value ?? ""));
   return Number.isFinite(timestamp) ? timestamp : null;
 };
+
+// Provider free-text is capped per field before it reaches a compressed D1
+// row: encodeSnapshotRow throws when the whole row exceeds its byte budget,
+// so one bloated upstream field must not void every source in a capture
+// bucket. Caps are generous; legitimate copy is orders of magnitude smaller.
+const text = (value, maximum) => String(value ?? "").trim().slice(0, maximum);
+const TEXT_LIMITS = Object.freeze({
+  shortLabel: 120,
+  headline: 300,
+  narrative: 2000
+});
 
 const fresh = (value, maximumAgeMs, now) => {
   const timestamp = validTimestamp(value);
@@ -117,7 +128,7 @@ export async function collectWeather(fetcher, now) {
       const latest = selected?.row;
       if (!latest) return null;
       const observedAt = selected.observedAt;
-      if (!fresh(observedAt, 3 * 60 * 60_000, now)) return null;
+      if (!fresh(observedAt, WEATHER_OBSERVATION_MAX_AGE_MS, now)) return null;
       return {
         reading: {
           id: definition.id,
@@ -128,7 +139,7 @@ export async function collectWeather(fetcher, now) {
           rainfall: numeric(latest.rainfall),
           windSpeed: numeric(latest.windSpeed),
           windDirection: String(latest.cardinalWindDirection ?? "").trim(),
-          description: String(latest.weatherDescription ?? "Observation available"),
+          description: text(latest.weatherDescription, TEXT_LIMITS.shortLabel) || "Observation available",
           observedAt,
           fresh: true
         },
@@ -166,33 +177,52 @@ export async function collectWarnings(fetcher, now) {
   return collect("warnings", async () => {
     const rows = await fetchJson(fetcher, "https://www.met.ie/Open_Data/json/warning_IRELAND.json", 300);
     let postCutoffUpdates = 0;
+    let malformedTimestamps = 0;
     const warnings = normalizeOfficialWeatherWarnings(rows, now).filter((warning) => {
       const issuedText = String(warning.issued ?? "").trim();
       const updatedText = String(warning.updated ?? "").trim();
       const issued = issuedText ? Date.parse(issuedText) : null;
       const updated = updatedText ? Date.parse(updatedText) : null;
       if (issued !== null && Number.isFinite(issued) && issued > now) return false;
-      if ((issuedText && !Number.isFinite(issued)) ||
-          (updatedText && (!Number.isFinite(updated) || updated > now))) {
+      // A malformed timestamp is a different defect from an update after the
+      // capture cutoff: the gap detail must not assert a cause it cannot know.
+      if ((issuedText && !Number.isFinite(issued)) || (updatedText && !Number.isFinite(updated))) {
+        malformedTimestamps += 1;
+        return false;
+      }
+      if (updated !== null && Number.isFinite(updated) && updated > now) {
         postCutoffUpdates += 1;
         return false;
       }
       return true;
-    }).sort((a, b) => a.id.localeCompare(b.id));
-    const status = postCutoffUpdates ? "partial" : "live";
+    }).map((warning) => ({
+      ...warning,
+      headline: text(warning.headline, TEXT_LIMITS.headline),
+      description: text(warning.description, TEXT_LIMITS.narrative)
+    })).sort((a, b) => a.id.localeCompare(b.id));
+    const omittedCount = postCutoffUpdates + malformedTimestamps;
+    const status = omittedCount ? "partial" : "live";
+    const warningGaps = [
+      ...(postCutoffUpdates ? [gap(
+        "warnings",
+        "post-cutoff-update",
+        `${postCutoffUpdates} warning record${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+      )] : []),
+      ...(malformedTimestamps ? [gap(
+        "warnings",
+        "malformed-timestamp",
+        `${malformedTimestamps} warning record${malformedTimestamps === 1 ? " carried" : "s carried"} an unparseable issue or update timestamp and was omitted rather than stored with unknown provenance.`
+      )] : [])
+    ];
     return {
       envelope: source({
         status,
         data: warnings,
         fetchedAt,
         latestObservedAt: latestObservedAt(warnings.map((item) => ({ observedAt: item.updated || item.issued }))),
-        errorCode: postCutoffUpdates ? "post-cutoff-update" : null
+        errorCode: postCutoffUpdates ? "post-cutoff-update" : malformedTimestamps ? "malformed-timestamp" : null
       }),
-      gaps: postCutoffUpdates ? [gap(
-        "warnings",
-        "post-cutoff-update",
-        `${postCutoffUpdates} warning record${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
-      )] : []
+      gaps: warningGaps
     };
   }, fetchedAt);
 }
@@ -335,7 +365,7 @@ export async function collectTides(fetcher, now) {
     const [levelsResult, surgesResult, predictionsResult] = await Promise.allSettled([
       fetchJson(fetcher, `${base}IrishNationalTideGaugeNetwork.json?${encodeURI(`station_id,longitude,latitude,time,Water_Level_OD_Malin&time>=${since}`)}`, 900),
       fetchJson(fetcher, `${base}imiSurgeObservationINTGN.json?${encodeURI(`stationID,longitude,latitude,time,sea_surface_elevation_due_to_tide,sea_surface_elevation_due_to_storm_surge&time>=${since}&orderByMax("stationID,time")`)}`, 900),
-      fetchJson(fetcher, `${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}`)}`, 3600)
+      fetchJson(fetcher, `${base}IMI_TidePrediction_HighLow.json?${encodeURI(`stationID,longitude,latitude,time,tide_time_category,Water_Level_ODMalin&time>=${since}&time<=${until}&orderBy("stationID,time")`)}`, 3600)
     ]);
     if (levelsResult.status === "rejected") throw levelsResult.reason;
     const auxiliaryGaps = [
@@ -401,7 +431,7 @@ export async function collectTides(fetcher, now) {
       const nextLow = future.find((item) => item[4] === "LOW");
       return [{
         id: `tide-${String(row[0]).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        name: String(row[0]), longitude: Number(row[1]), latitude: Number(row[2]), observedAt: String(row[3]),
+        name: text(row[0], TEXT_LIMITS.shortLabel), longitude: Number(row[1]), latitude: Number(row[2]), observedAt: String(row[3]),
         waterLevel: numeric(row[4]), predictedLevel: surge && distance(row, surge) < .08 ? numeric(surge[4]) : null,
         surge: surge && distance(row, surge) < .08 ? numeric(surge[5]) : null,
         trend: classifyTideTrend(rows.map((sample) => ({ observedAt: sample[3], waterLevel: sample[4] }))),
@@ -428,27 +458,39 @@ export async function collectBathing(fetcher, now, compactLocations = null) {
   return collect("bathing", async () => {
     const alertsBody = await fetchJson(fetcher, "https://data.epa.ie/bw/api/v1/alerts?per_page=100", 900);
     let postCutoffUpdates = 0;
+    let malformedTimestamps = 0;
     const alerts = (Array.isArray(alertsBody?.list) ? alertsBody.list : []).filter((item) => {
       const started = Date.parse(normalizeProviderTimestamp(item.incident_start_date) ?? "");
       const ended = Date.parse(normalizeProviderTimestamp(item.incident_end_date) ?? "");
       const rawUpdated = String(item.last_updated ?? "").trim();
       const updated = rawUpdated ? Date.parse(normalizeProviderTimestamp(rawUpdated) ?? "") : null;
       if (!Number.isFinite(started) || started > now || (Number.isFinite(ended) && ended <= now)) return false;
-      if (updated !== null && (!Number.isFinite(updated) || updated > now)) {
+      if (rawUpdated && !Number.isFinite(updated)) {
+        malformedTimestamps += 1;
+        return false;
+      }
+      if (updated !== null && Number.isFinite(updated) && updated > now) {
         postCutoffUpdates += 1;
         return false;
       }
       return true;
     });
     if (!alerts.length) {
-      const status = postCutoffUpdates ? "partial" : "live";
+      const status = postCutoffUpdates || malformedTimestamps ? "partial" : "live";
       return {
-        envelope: source({ status, data: [], fetchedAt, errorCode: postCutoffUpdates ? "post-cutoff-update" : null }),
-        gaps: postCutoffUpdates ? [gap(
-          "bathing",
-          "post-cutoff-update",
-          `${postCutoffUpdates} active bathing notice${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
-        )] : []
+        envelope: source({ status, data: [], fetchedAt, errorCode: postCutoffUpdates ? "post-cutoff-update" : malformedTimestamps ? "malformed-timestamp" : null }),
+        gaps: [
+          ...(postCutoffUpdates ? [gap(
+            "bathing",
+            "post-cutoff-update",
+            `${postCutoffUpdates} active bathing notice${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+          )] : []),
+          ...(malformedTimestamps ? [gap(
+            "bathing",
+            "malformed-timestamp",
+            `${malformedTimestamps} active bathing notice${malformedTimestamps === 1 ? " carried" : "s carried"} an unparseable update timestamp and was omitted rather than stored with unknown provenance.`
+          )] : [])
+        ]
       };
     }
     const indexState = compactLocations && compactLocations.index instanceof Map ? compactLocations : null;
@@ -470,18 +512,18 @@ export async function collectBathing(fetcher, now, compactLocations = null) {
         : irishGridToLonLat(east, north);
       return [{
       id: `bathing-${alert.incident_id}`,
-      name: String(alert.beach_name ?? "Bathing location"),
-      county: String(alert.county_name ?? ""),
+      name: text(alert.beach_name, TEXT_LIMITS.shortLabel) || "Bathing location",
+      county: text(alert.county_name, TEXT_LIMITS.shortLabel),
       ...coordinates,
-      restriction: String(alert.bathing_restriction_type ?? "Bathing alert"),
-      description: String(alert.incident_description ?? ""),
+      restriction: text(alert.bathing_restriction_type, TEXT_LIMITS.headline) || "Bathing alert",
+      description: text(alert.incident_description, TEXT_LIMITS.narrative),
       startedAt: normalizeProviderTimestamp(alert.incident_start_date) ?? "",
       endsAt: normalizeProviderTimestamp(alert.incident_end_date),
       updatedAt: normalizeProviderTimestamp(alert.last_updated) ?? "",
       noticeUrl: providerHttpsUrl(alert.bathing_notice_pdf)
       }];
     }).sort((a, b) => a.id.localeCompare(b.id));
-    const status = archived.length === alerts.length && (!indexState || indexState.status === "current") && !postCutoffUpdates
+    const status = archived.length === alerts.length && (!indexState || indexState.status === "current") && !postCutoffUpdates && !malformedTimestamps
       ? "live"
       : "partial";
     const missing = alerts.length - archived.length;
@@ -495,6 +537,11 @@ export async function collectBathing(fetcher, now, compactLocations = null) {
           "bathing",
           "post-cutoff-update",
           `${postCutoffUpdates} active bathing notice${postCutoffUpdates === 1 ? " was" : "s were"} updated after the scheduled capture cutoff and omitted because the earlier version was unavailable.`
+        )] : []),
+        ...(malformedTimestamps ? [gap(
+          "bathing",
+          "malformed-timestamp",
+          `${malformedTimestamps} active bathing notice${malformedTimestamps === 1 ? " carried" : "s carried"} an unparseable update timestamp and was omitted rather than stored with unknown provenance.`
         )] : []),
         ...(indexGap ? [indexGap] : []),
         ...(missing ? [gap("bathing", "missing-location", `${missing} active bathing alerts had no current authoritative map location and were omitted.`, "provider")] : [])
@@ -518,7 +565,7 @@ export async function collectEarthquakes(fetcher, now) {
       const observed = Number(feature.properties?.time);
       return [longitude, latitude, depthKm, observed].every(Number.isFinite) && observed <= now && observed >= now - 7 * 24 * 60 * 60_000 && magnitude !== null ? [{
         id: String(feature.id), longitude, latitude, depthKm, magnitude,
-        place: String(feature.properties?.place ?? "Near Ireland"),
+        place: text(feature.properties?.place, TEXT_LIMITS.headline) || "Near Ireland",
         observedAt: new Date(observed).toISOString(), detailUrl: providerHttpsUrl(feature.properties?.url) ?? ""
       }] : [];
     }).sort((first, second) =>
@@ -564,25 +611,15 @@ export const summarizeTransit = (vehicles, status, capturedAt) => {
     byRoute: [...byRoute].map(([route, count]) => ({ route, count })).sort((a, b) => a.route.localeCompare(b.route)),
     attribution: {
       provider: "National Transport Authority",
-      copyright: `© ${new Date().getFullYear()} NTA`,
+      // Derived from the capture instant, not render time: replayed historical
+      // summaries must not re-stamp their attribution with the current year.
+      copyright: `© ${new Date(capturedAt).getUTCFullYear()} NTA`,
       source: "NTA Developer Portal",
       license: "CC BY 4.0",
       adapted: true,
       changes: "Route identifiers were normalized and vehicle records were aggregated by A Day in Ireland.",
       disclaimer: "Provided as-is; NTA is not responsible for and does not endorse this service."
     }
-  };
-};
-
-export const summarizeRail = (trains, status, capturedAt, includeRail) => {
-  if (!includeRail) return null;
-  if (status !== "live") return null;
-  return {
-    status,
-    capturedAt,
-    total: (Array.isArray(trains) ? trains : []).length,
-    running: (Array.isArray(trains) ? trains : []).filter((train) => train.status === "running").length,
-    notStarted: (Array.isArray(trains) ? trains : []).filter((train) => train.status !== "running").length
   };
 };
 

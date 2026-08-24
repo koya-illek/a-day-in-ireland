@@ -18,6 +18,7 @@ import {
   collectScopedSources,
   summarizeTransit
 } from "./history-sources.js";
+import { IRISH_RAIL_ENDPOINT } from "./river-source.js";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -69,7 +70,7 @@ const emptySnapshot = (capturedAt) => ({
   satellite: null, earthquakes: [], transit: [], transitStatus: "unavailable",
   solar: null, forecast: null,
   sourceProvenance: {
-    trains: unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
+    trains: unavailableProvenance("Irish Rail", IRISH_RAIL_ENDPOINT, capturedAt),
     rivers: unavailableProvenance("OPW waterlevel.ie", "https://waterlevel.ie/geojson/latest/", capturedAt)
   },
   contextStatus: {
@@ -145,7 +146,15 @@ export async function buildHistoryCapture({
   const transitSummary = suppliedTransitAggregate ?? summarizeTransit(transitVehicles, transitStatus, capturedAt);
   const rivers = (Array.isArray(living.rivers) ? living.rivers : []).filter(observedAtOrBeforeCapture);
   const requestedRiverStatus = living.sourceStatus?.rivers ?? "unavailable";
-  const riverStatus = usable(requestedRiverStatus) && rivers.length ? requestedRiverStatus : "unavailable";
+  // A stale-but-populated river feed keeps its "stale" label in stored
+  // history: the readings are real observations past their freshness window,
+  // which is a different fact from the provider being unavailable. Collapsing
+  // it to "unavailable" would contradict the retained data array and erase
+  // the distinction the rest of the system preserves.
+  const knownRiverStatus = contextStatus(requestedRiverStatus);
+  const riverStatus = rivers.length && (usable(knownRiverStatus) || knownRiverStatus === "stale")
+    ? knownRiverStatus
+    : "unavailable";
   const boundedProvenance = (provenance, fallback) => ({
     ...fallback,
     ...(provenance ?? {}),
@@ -205,7 +214,7 @@ export async function buildHistoryCapture({
     solar: null,
     forecast: null,
     sourceProvenance: {
-      trains: unavailableProvenance("Irish Rail", "https://api.irishrail.ie/realtime/realtime.asmx/getCurrentTrainsXML", capturedAt),
+      trains: unavailableProvenance("Irish Rail", IRISH_RAIL_ENDPOINT, capturedAt),
       rivers: boundedProvenance(living.sourceProvenance?.rivers, {
         ...unavailableProvenance("OPW waterlevel.ie", "https://waterlevel.ie/geojson/latest/", capturedAt, riverStatus),
         latestObservedAt: riverLatestObservedAt
@@ -224,7 +233,7 @@ export async function buildHistoryCapture({
       windiest: weather.summary?.windiest ?? null,
       reporting: usable(sources.weather?.status) ? weather.summary?.reporting ?? null : null,
       runningTrains: railSummary?.running ?? null,
-      riverStations: usable(riverStatus) ? rivers.length : null
+      riverStations: usable(riverStatus) || riverStatus === "stale" ? rivers.length : null
     },
     timeline: weather.timeline ?? []
   };

@@ -61,9 +61,39 @@ export const gzipJson = async (value) => {
   return { json, compressed, uncompressedBytes: uncompressed.byteLength };
 };
 
+// Legitimate rows stay under MAX_COMPRESSED_ROW_BYTES compressed; even at an
+// extreme compression ratio their expanded form stays far below this ceiling.
+// A corrupted or hostile BLOB must not be able to make the Worker buffer an
+// unbounded decompression bomb inside a request path.
+export const MAX_DECOMPRESSED_ROW_BYTES = 32_000_000;
+
 export const gunzipJson = async (value) => {
-  const decompressed = await transformBytes(byteArray(value), new DecompressionStream("gzip"));
-  return JSON.parse(textDecoder.decode(decompressed));
+  const source = new ReadableStream({
+    start(controller) {
+      controller.enqueue(byteArray(value));
+      controller.close();
+    }
+  });
+  const reader = source.pipeThrough(new DecompressionStream("gzip")).getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value: chunk } = await reader.read();
+    if (done) break;
+    total += chunk.byteLength;
+    if (total > MAX_DECOMPRESSED_ROW_BYTES) {
+      await reader.cancel();
+      throw new RangeError(`Decompressed history payload exceeds ${MAX_DECOMPRESSED_ROW_BYTES} bytes; refusing to buffer it`);
+    }
+    chunks.push(chunk);
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(textDecoder.decode(merged));
 };
 
 export const sha256Hex = async (value) => {

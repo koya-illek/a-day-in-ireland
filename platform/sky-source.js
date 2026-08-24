@@ -448,8 +448,6 @@ export const fetchMetForecast = async ({ now = Date.now(), fetcher = fetch } = {
   return result;
 };
 
-export const forecastFreshnessFor = forecastFreshness;
-
 export const acceptClientSolar = (value, now = Date.now()) => {
   if (!value || typeof value !== "object") return null;
   const row = value;

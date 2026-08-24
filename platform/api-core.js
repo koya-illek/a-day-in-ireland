@@ -661,17 +661,24 @@ const fetchEarthquakes = async () => {
   const response = await fetch(url, { cf: { cacheEverything: true, cacheTtl: 900 } });
   if (!response.ok) throw new Error(`USGS earthquakes returned ${response.status}`);
   const body = (await readBoundedJsonResponse(response, "usgs-earthquakes", 512_000)).body;
-  return (body.features ?? []).slice(0, 30).flatMap((feature) => {
+  // Validate every feature before capping, and never let one malformed record
+  // throw: Number(undefined) is NaN and toISOString on it would fail the whole
+  // source. Mirrors the history collector's filter-then-cap discipline.
+  const nowMs = Date.now();
+  const windowStartMs = nowMs - 7 * 24 * 60 * 60 * 1000;
+  return (Array.isArray(body.features) ? body.features : []).flatMap((feature) => {
     const [longitude, latitude, depthKm] = feature.geometry?.coordinates ?? [];
     const magnitude = numeric(feature.properties?.mag);
-    if (![longitude, latitude, depthKm].every(Number.isFinite) || magnitude === null) return [];
+    const observed = Number(feature.properties?.time);
+    if (![longitude, latitude, depthKm, observed].every(Number.isFinite) || magnitude === null) return [];
+    if (observed > nowMs || observed < windowStartMs) return [];
     return [{
       id: String(feature.id), longitude, latitude, depthKm, magnitude,
-      place: String(feature.properties?.place ?? "Near Ireland"),
-      observedAt: new Date(Number(feature.properties?.time)).toISOString(),
+      place: String(feature.properties?.place ?? "Near Ireland").slice(0, 300),
+      observedAt: new Date(observed).toISOString(),
       detailUrl: providerHttpsUrl(feature.properties?.url) ?? ""
     }];
-  });
+  }).slice(0, 30);
 };
 
 const fetchIssTle = async () => {
