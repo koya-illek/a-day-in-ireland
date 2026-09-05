@@ -5,7 +5,7 @@ import type { LiveSnapshot } from "../lib/types";
 import type { HistoryEnvelope, HistoryGap } from "../lib/history";
 import type { Layer, LayerGroup, Preset, TimeMode } from "./experience-model";
 import { provenanceLabel } from "./experience-model";
-import { historyResolutionLabel } from "./HistoryControls";
+import { historyResolutionLabel } from "../lib/history";
 
 const historicalLayerDetail = (layer: Layer, detail: string) => {
   if (layer === "trains") return "Historical rail positions are not retained; only an aggregate appears when permission and coverage allow.";

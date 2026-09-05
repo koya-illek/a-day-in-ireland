@@ -1,0 +1,144 @@
+/* Daily portrait layout. Component state and forced-colour rules remain in globals.css. */
+:root {
+  --chart-temperature: #d6ac66;
+  --chart-rain: #85bdd5;
+  --surface-line: rgba(180, 198, 179, .25);
+}
+html[data-theme="light"] {
+  --chart-temperature: #84601f;
+  --chart-rain: #286982;
+  --surface-line: #b7c7b9;
+}
+.experience .utility-label { display: none; }
+.experience .topbar { position: relative; padding: .7rem 1.25rem; box-shadow: none; gap: .65rem; }
+.experience .brand small { display: none; }
+.experience .header-actions { display: flex; width: auto; justify-self: end; }
+.experience .header-actions button { border-radius: .4rem; min-width: 44px; min-height: 44px; padding: .5rem .65rem; }
+.experience .dashboard-shell { display: block; max-width: 80rem; padding: 0 1.25rem 1.5rem; }
+.experience .section-rail { position: static; background: transparent; border: 0; box-shadow: none; padding: .35rem 0; margin: 0; border-radius: 0; }
+.experience .section-nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+.experience .section-nav a { display: flex; align-items: center; min-height: 44px; min-width: 0; width: auto; background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: .4rem .1rem; box-shadow: none; }
+.experience .section-nav a[aria-current="location"] { border-bottom-color: var(--green); color: var(--ink); background: transparent; }
+.experience .section-nav small { display: none; }
+.experience .section-nav b { font-size: .9rem; }
+.experience .map-workspace { display: flex; flex-direction: column; gap: 1.1rem; }
+.experience :is(.workspace-heading,.place-context,.freshness-strip,.official-notices,.what-matters-now,.dayline,.map-stage,.sky-light-strip,.forecast-strip) {
+  border-radius: .5rem; background: transparent; box-shadow: none; border: 0; padding: 1rem 0; margin: 0;
+}
+.experience .workspace-heading { display: block; order: 0; padding-bottom: 0; }
+.experience .workspace-heading h1 { font-family: var(--font-serif), Georgia, serif; font-size: clamp(1.7rem, 3.6vw, 2.8rem); letter-spacing: -.025em; line-height: 1.15; margin: .25rem 0; }
+.experience .briefing-date { color: var(--muted); font-size: .83rem; margin: 0; }
+.experience .hero-sentence { font-family: var(--font-sans), sans-serif; font-size: 1.08rem; line-height: 1.55; max-width: 60rem; margin: .6rem 0 0; }
+.experience .workspace-heading .moment-summary { display: block; margin: .3rem 0 0; font-size: .8rem; line-height: 1.4; }
+.experience .workspace-facts { display: none; }
+.experience .place-context { order: 1; padding-top: 0; }
+.experience .place-picker-compact { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 1.3fr); gap: 1rem; align-items: center; }
+.experience .place-picker h2 { font-size: 1.2rem; margin: 0; }
+.experience .place-context-summary { font-size: .87rem; line-height: 1.45; margin: .25rem 0; }
+.experience .place-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
+.experience .place-controls .locate-button { min-height: 44px; border: 1px solid var(--surface-line); border-radius: .35rem; padding: .5rem .7rem; color: var(--ink); background: var(--panel-soft); }
+.place-search { position: relative; flex: 1 1 12rem; min-width: 0; }
+.place-search label { display: block; font-size: .8rem; margin-bottom: .3rem; }
+.place-search input { width: 100%; min-height: 44px; border: 1px solid var(--surface-line); border-radius: .35rem; background: var(--panel); color: var(--ink); padding: .55rem .7rem; font: inherit; }
+.place-search-results { position: absolute; inset: 100% 0 auto; z-index: 40; border: 1px solid var(--surface-line); border-radius: .35rem; background: var(--panel); box-shadow: 0 6px 18px #0003; }
+.place-search-results ul { list-style: none; padding: 0; margin: 0; max-height: 18rem; overflow-y: auto; }
+.place-search-results li { padding: .65rem; min-height: 44px; cursor: pointer; }
+.place-search-results li[aria-selected="true"] { background: var(--green); color: #11261d; }
+html[data-theme="light"] .place-search-results li[aria-selected="true"] { color: white; }
+.place-search-results p { padding: .5rem .65rem; margin: 0; font-size: .8rem; }
+.experience .place-coverage { margin-top: .35rem; font-size: .8rem; line-height: 1.5; }
+.experience .place-coverage summary { min-height: 28px; cursor: pointer; }
+.experience .place-coverage p { margin: .5rem 0; }
+.experience .map-stage { order: 2; display: grid; grid-template-columns: 1fr auto; gap: .5rem .8rem; padding: .6rem 0 0; border-top: 1px solid var(--surface-line); }
+.experience .map-explorer-heading { grid-column: 1; order: 0; align-self: center; }
+.experience .map-explorer-heading h2 { font-size: 1.05rem; margin: 0; }
+.experience .map-explorer-heading p { display: none; }
+.experience .history-controls { order: 0; grid-column: 2; padding: 0; margin: 0; background: transparent; border: 0; }
+.experience.is-history .history-controls { grid-column: 1 / -1; order: 1; }
+.experience .history-mode-row > div:first-child:not(.history-mode-toggle) { display: none; }
+.experience .history-mode-row { margin: 0; padding: 0; }
+.experience .history-mode-toggle { background: transparent; border: 1px solid var(--surface-line); border-radius: .35rem; }
+.experience .history-mode-toggle button { min-width: 54px; min-height: 44px; padding: .45rem .7rem; border: 0; color: var(--ink); background: transparent; }
+.experience .history-mode-toggle button[aria-pressed="true"] { color: #13291e; background: #c2d4b8; box-shadow: none; }
+.experience #live-map .map-presets { order: 2; grid-column: 1 / -1; position: static; display: flex; flex-wrap: wrap; overflow: visible; width: auto; max-width: none; padding: 0; gap: .35rem; background: transparent; border: 0; border-radius: 0; }
+.experience #live-map .map-presets button { flex: 0 1 auto; font-size: .85rem; min-height: 44px; min-width: 0; padding: .4rem .7rem; border: 1px solid var(--surface-line); border-radius: .35rem; background: transparent; color: var(--ink); }
+.experience #live-map .map-presets button.active { color: #13291e; background: #c2d4b8; border-color: #8fa78c; }
+.experience #live-map .map-presets button:nth-child(4) { display: none; }
+.experience #live-map > :is(.map-canvas,.map-caption,.map-legend,.map-notice,.map-context-disclosure,.radar-controls) { grid-column: 1 / -1; }
+.experience .map-canvas { order: 3; aspect-ratio: auto; height: clamp(380px, 66vh, 680px); min-height: 0; border-radius: .5rem; padding: 0; box-shadow: none; background: var(--panel-soft); }
+.experience .map-canvas .ireland-map { width: 100%; height: 100%; }
+.experience .map-navigation { top: auto; bottom: .5rem; right: .5rem; padding: .2rem; border-radius: .35rem; box-shadow: none; }
+.experience .map-navigation button, .experience .map-navigation .zoom-readout { border-radius: .25rem; }
+.experience .map-caption { order: 4; display: block; font-size: .75rem; padding: .2rem 0; }
+.experience .map-caption .compass { display: none; }
+.experience .map-legend { order: 5; border-radius: .35rem; padding: .5rem; }
+.ireland-map .marker-symbol, .ireland-map .place-symbol { transform: scale(var(--marker-scale)); transform-origin: 0 0; }
+.experience .ireland-map .marker-symbol text, .experience .ireland-map .place-symbol text { font-size: 12px; }
+.experience .ireland-map .wind-marker:not([data-map-marker]) text { display: none; }
+.experience .road-network path { opacity: .35; }
+.experience .road-network path.motorway { filter: none; }
+.experience .what-matters-now { order: 3; border-top: 1px solid var(--surface-line); }
+.experience .sky-light-strip { order: 4; }
+.experience .forecast-strip { order: 5; }
+.experience .freshness-strip { order: 6; font-size: .8rem; }
+.experience .official-notices { order: 7; border-top: 1px solid var(--surface-line); }
+.experience .dayline { max-width: 77.5rem; margin: 0 auto; padding: 1rem 0 2rem; border-top: 1px solid var(--surface-line); }
+.experience :is(.what-matters-heading,.dayline-heading) h2 { font-size: 1.65rem; }
+.experience .pulse-card { border: 1px solid var(--surface-line); background: var(--panel-soft); box-shadow: none; border-radius: .4rem; }
+.experience .pulse-card b { color: var(--green); }
+.experience :is(.feed-coverage,.morning-comparison,.activity-context,.history-coverage) { margin-top: .75rem; }
+.experience :is(.feed-coverage,.morning-comparison,.activity-context,.history-coverage) > summary { min-height: 44px; cursor: pointer; padding: .6rem 0; }
+.experience :is(.history-shortcuts,.timeline-actions) { display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0; }
+.experience :is(.save-briefing,.briefing-comparison button,.history-shortcuts button,.timeline-actions button) { border: 1px solid var(--surface-line); background: var(--panel-soft); color: var(--ink); border-radius: .35rem; padding: .5rem .75rem; min-height: 44px; font: inherit; }
+.experience .history-coverage { font-size: .85rem; line-height: 1.6; }
+.experience .history-view-coverage { padding: .7rem; border-left: 3px solid var(--green); font-size: .9rem; }
+.experience .timeline-legend { flex-wrap: wrap; }
+.experience .timeline-legend i.temperature { background: var(--chart-temperature); height: 3px; width: 1.2rem; }
+.experience .timeline-legend i.rain { background: var(--chart-rain); box-shadow: none; }
+.experience .timeline-chart { position: relative; }
+.experience .timeline-temperature-line { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% - 2.25rem); pointer-events: none; overflow: visible; }
+.experience .timeline-temperature-line line { stroke: var(--chart-temperature); stroke-width: 2; }
+.experience .timeline-bars { position: relative; }
+.experience .temperature-dot { position: absolute; width: 6px; height: 6px; background: var(--chart-temperature); border-radius: 50%; left: calc(50% - 3px); transform: translateY(50%); }
+.experience .timeline-bars .bar.rain { background: var(--chart-rain); opacity: .7; width: 45%; box-shadow: none; }
+.experience footer { max-width: 80rem; margin: 0 auto; padding: 1rem 1.25rem; border-radius: 0; box-shadow: none; }
+@media (max-width: 780px) {
+  .experience .topbar { display: flex; flex-wrap: wrap; padding: .5rem .8rem; }
+  .experience .brand { flex: 1 1 auto; }
+  .experience .brand b { font-size: 1rem; }
+  .experience .brand-mark { display: none; }
+  .experience .live-state { display: none; }
+  .experience .header-actions { gap: .25rem; }
+  .experience .header-actions button { font-size: .75rem; padding: .3rem .4rem; }
+  .experience .dashboard-shell { padding: 0 .85rem 1rem; }
+  .experience .section-rail .section-nav { display: flex; gap: 1rem; width: auto; }
+  .experience .section-rail .section-nav a { flex: 0 1 auto; width: auto; min-width: 0; padding: .4rem 0; }
+  .experience .section-rail .section-nav b { font-size: .8rem; }
+  .experience .map-workspace { gap: .7rem; }
+  .experience .hero-sentence { font-size: .96rem; line-height: 1.45; }
+  .experience .place-picker-compact { display: block; }
+  .experience .place-compact-copy { display: none; }
+  .experience .place-controls { flex-wrap: nowrap; gap: .4rem; }
+  .experience .place-controls .locate-button { font-size: .75rem; }
+  .experience .place-search { flex-basis: 9rem; }
+  .experience .map-canvas { height: 380px; }
+  .experience #live-map .map-presets button { padding: .4rem .55rem; font-size: .77rem; }
+  .experience .dayline { margin: 0 .85rem; }
+  .experience .what-matters-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (forced-colors: active) {
+  .experience .timeline-temperature-line line { stroke: CanvasText; }
+  .experience .temperature-dot, .experience .timeline-legend i.temperature { background: CanvasText; }
+  .experience .timeline-bars .bar.rain, .experience .timeline-legend i.rain { background: LinkText; }
+  .experience .history-mode-toggle button[aria-pressed="true"], .experience #live-map .map-presets button.active { border: 2px solid Highlight; }
+}
+/* Reset legacy mobile control direction and top-anchored map controls. */
+.experience .header-actions { flex-direction: row; flex-wrap: nowrap; }
+.experience .header-actions button { width: auto; }
+.experience .place-controls { flex-direction: row; }
+.experience .place-controls .locate-button { width: auto; flex: 0 0 auto; }
+.experience #live-map .map-canvas .map-navigation { top: auto; bottom: .5rem; left: auto; right: .5rem; height: auto; width: auto; max-width: calc(100% - 1rem); display: flex; }
+.experience .workspace-heading .workspace-copy .briefing-date { display: block; }
+
+.experience .ireland-map .marker-symbol text, .experience .ireland-map .place-symbol text { fill: var(--ink); stroke: var(--panel); stroke-width: 3px; paint-order: stroke; stroke-linejoin: round; }
+.experience .timeline-x-axis { position: sticky; left: 0; text-align: center; }

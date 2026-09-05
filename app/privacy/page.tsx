@@ -3,7 +3,7 @@ import { infoPageMetadata } from "../../lib/info-metadata";
 
 export const metadata = infoPageMetadata({
   title: "Privacy",
-  description: "How A Day in Ireland handles privacy: no accounts, no tracking and no personal profiles.",
+  description: "How A Day in Ireland handles privacy: local preferences, optional location and aggregate analytics.",
   path: "/privacy"
 });
 
@@ -13,7 +13,7 @@ export default function PrivacyPage() {
       current="privacy"
       sectionLabel="Privacy"
       title="No account. No personal profile."
-      introduction="The public map does not ask you to sign in, create an account or submit personal information. If you choose to use your browser location, the app uses it to select the nearest mapped place."
+      introduction="The public map does not ask you to sign in, create an account or submit personal information. If you choose to use your browser location, the app uses your coordinates for nearby observations during this session. Coordinates are not stored or included in shared links."
     >
       <section>
         <h2>What your browser stores</h2>

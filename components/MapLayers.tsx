@@ -80,8 +80,7 @@ export function MapMarker({
           vectorEffect="non-scaling-stroke"
         />
       ))}
-      <circle className="map-marker-focus-ring" r={focusRadius} aria-hidden="true" />
-      {children}
+      <g className="marker-symbol"><circle className="map-marker-focus-ring" r={focusRadius} aria-hidden="true" />{children}</g>
     </g>
   );
 }

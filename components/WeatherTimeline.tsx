@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { ServiceDisplayState } from "../lib/data-state";
 import type { LiveSnapshot } from "../lib/types";
 import type { TimeMode } from "./experience-model";
@@ -19,6 +20,12 @@ export function WeatherTimeline({
   selection: string | null;
   onSelect: (time: string) => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const latestTime = timeline.at(-1)?.time;
+  useEffect(() => {
+    const chart = scrollRef.current;
+    if (chart && selection === null) chart.scrollLeft = chart.scrollWidth;
+  }, [latestTime, selection]);
   const selectedPoint = timeline.find((point) => point.time === selection) ?? null;
   const temperatures = timeline
     .map((point) => point.temperature)
@@ -41,6 +48,8 @@ export function WeatherTimeline({
       </div>
       {timeline.length ? (
         <>
+          <div className="timeline-actions"><button type="button" onClick={() => { if (scrollRef.current) scrollRef.current.scrollLeft = 0; }}>Start of day</button>
+            <button type="button" onClick={() => { if (scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth; }}>Latest hours</button></div>
           <div className="timeline-legend">
             <span><i aria-hidden="true" className="temperature" />Average temperature (°C)</span>
             <span><i aria-hidden="true" className="rain" />Average observed rain per station (mm)</span>
@@ -49,6 +58,7 @@ export function WeatherTimeline({
             <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
           )}
           <div
+            ref={scrollRef}
             className="timeline-plot-scroll"
             role="region"
             aria-label="Scrollable hourly chart"
@@ -63,13 +73,22 @@ export function WeatherTimeline({
                 <span>{temperatureMin !== null ? `${temperatureMin}°C` : "–"}</span>
               </div>
               <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
+            <svg className="timeline-temperature-line" viewBox={`0 0 ${timeline.length * 48} 100`} preserveAspectRatio="none" aria-hidden="true">
+              {timeline.map((point, index) => {
+                const previous = timeline[index - 1];
+                if (point.temperature === null || temperatureMax === null || !previous || previous.temperature === null) return null;
+                return <line key={point.time} x1={(index - .5) * 48} x2={(index + .5) * 48}
+                  y1={(temperatureMax - previous.temperature) / temperatureRange * 100}
+                  y2={(temperatureMax - point.temperature) / temperatureRange * 100} vectorEffect="non-scaling-stroke" />;
+              })}
+            </svg>
             {timeline.map((point) => {
               const temperatureHeight = point.temperature === null || temperatureMin === null
                 ? 4
-                : 12 + ((point.temperature - temperatureMin) / temperatureRange) * 76;
+                : ((point.temperature - temperatureMin) / temperatureRange) * 100;
               const rainHeight = point.rainfall === null || point.rainfall <= 0
                 ? 0
-                : Math.max(5, (point.rainfall / rainMax) * 88);
+                : (point.rainfall / rainMax) * 100;
               return (
                 <button
                   type="button"
@@ -80,7 +99,7 @@ export function WeatherTimeline({
                   onClick={() => onSelect(point.time)}
                 >
                   <span className="timeline-bars" aria-hidden="true">
-                    <span className="bar temperature" style={{ height: `${temperatureHeight}%` }} />
+                    {point.temperature !== null && <span className="temperature-dot" style={{ bottom: `${temperatureHeight}%` }} />}
                     <span className="bar rain" style={{ height: `${rainHeight}%` }} />
                   </span>
                   <small>{point.time}</small>

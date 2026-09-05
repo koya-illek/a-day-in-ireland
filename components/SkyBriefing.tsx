@@ -62,7 +62,7 @@ export function SkyLightStrip({ solar, status, now }: {
       <div className="sky-light-heading">
         <p className="utility-label">Sky & light · Dublin time</p>
         <h2 id="sky-light-heading">{next ? `${next.label} at ${formatTime(new Date(next.at!))}` : "No later light transition today"}</h2>
-        <p>{next ? "The next authoritative change in Ireland’s light." : "The remaining event horizon has no later supplied transition."}</p>
+        <p>{next ? "Upcoming light for central Ireland. Local times vary across the island." : "No later light event is available from this source."}</p>
       </div>
       <dl className="sky-light-facts">
         <div><dt>Sunset</dt><dd>{solar.sunset ? formatTime(new Date(solar.sunset)) : "Unavailable"}</dd></div>
@@ -89,18 +89,18 @@ export function ForecastStrip({ forecast, status, now }: {
       </section>
     );
   }
-  const firstSentenceEnd = selected.copy.search(/[.!?](?:["’”])?(?:\s|$)/);
-  const sentence = firstSentenceEnd >= 0 ? selected.copy.slice(0, firstSentenceEnd + 1).trim() : "";
-  const excerpt = sentence && sentence.length <= 360
-    ? sentence
-    : selected.copy.length <= 360
-      ? selected.copy
-      : `${selected.copy.slice(0, 357).replace(/\s+\S*$/, "").trimEnd()}…`;
+  // Keep the provider wording. At a later hour show the relevant sentence
+  // instead of presenting a morning opener as what happens next.
+  const hour = Number(new Intl.DateTimeFormat("en-IE", { hour: "numeric", hour12: false, timeZone: "Europe/Dublin" }).format(now));
+  const sentences = selected.copy.match(/[^.!?]+[.!?]+(?:["’”])?|[^.!?]+$/g)?.map((sentence) => sentence.trim()) ?? [selected.copy];
+  const relevant = hour >= 18 ? /(?:tonight|overnight|evening)/i : hour >= 12 ? /(?:afternoon|evening|later today)/i : /(?:morning|today)/i;
+  const sentence = sentences.find((sentence) => relevant.test(sentence)) ?? null;
+  const excerpt = sentence && sentence.length <= 360 ? sentence : selected.copy.length <= 360 ? selected.copy : `${selected.copy.slice(0, 357).replace(/\s+\S*$/, "").trimEnd()}…`;
   return (
     <section className="forecast-strip" aria-labelledby="forecast-heading">
       <div className="forecast-strip-heading">
         <p className="utility-label">FORECAST · Met Éireann · {selected.period}</p>
-        <h2 id="forecast-heading">Next across Ireland</h2>
+        <h2 id="forecast-heading">Official outlook for Ireland</h2>
         <p>Issued {formatTime(new Date(forecast.issued))} Irish time · official copy</p>
       </div>
       <div className="forecast-copy-region">

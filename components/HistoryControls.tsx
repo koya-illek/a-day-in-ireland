@@ -4,18 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   formatIrelandHistoryTime,
+  historyResolutionLabel,
   irelandInputParts,
   irelandWallTimeCandidates,
   type HistoryEnvelope,
   type HistoryRange
 } from "../lib/history";
 import type { HistoryComparisonState, HistoryLoadState, TimeMode } from "./experience-model";
-
-export const historyResolutionLabel = (minutes: number) => minutes >= 1440
-  ? "daily summary"
-  : minutes >= 60
-    ? `${Math.round(minutes / 60)}-hour representative snapshot`
-    : `${minutes}-minute snapshot`;
 
 const historySummaryMetric = (value: number | null, suffix = "") => value === null
   ? "Unavailable"
@@ -56,6 +51,7 @@ const historyMetricRows = (past: HistoryEnvelope, comparison: HistoryEnvelope) =
 
 export function HistoryControls({
   mode,
+  movementView = false,
   range,
   history,
   comparison,
@@ -65,6 +61,7 @@ export function HistoryControls({
   onCompare
 }: {
   mode: TimeMode;
+  movementView?: boolean;
   range: HistoryRange | null;
   history: HistoryLoadState;
   comparison: HistoryComparisonState;
@@ -187,6 +184,27 @@ export function HistoryControls({
 
       {mode === "past" && (
         <>
+          <div className="history-shortcuts">
+            <button type="button" disabled={!hasRange || history.status === "loading"} onClick={() => {
+              const current = irelandInputParts(new Date().toISOString());
+              const previousDate = new Date(`${current.date}T12:00:00Z`);
+              previousDate.setUTCDate(previousDate.getUTCDate() - 1);
+              const date = previousDate.toISOString().slice(0, 10);
+              setDateInput(date); setTimeInput(current.time);
+              setChosenCandidate(""); setAmbiguousCandidates([]); setWallTimeError("");
+              const candidates = irelandWallTimeCandidates(date, current.time);
+              const candidate = candidates[0];
+              if (candidates.length !== 1 || !candidate) {
+                setWallTimeError("Choose the intended time below; yesterday's clock may have changed for daylight saving.");
+                setAmbiguousCandidates(candidates); return;
+              }
+              if (Date.parse(candidate) < rangeStart || Date.parse(candidate) > rangeEnd) {
+                setWallTimeError("Yesterday at this time is outside the available history range."); return;
+              }
+              onRequest(candidate);
+            }}>Yesterday at this time</button>
+            <button type="button" disabled={!hasRange || history.status === "loading"} onClick={() => range?.availableTo && onRequest(range.availableTo)}>Latest stored</button>
+          </div>
           <div className="history-picker">
             <label>Date in Ireland<input type="date" aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={dateInput} min={range?.availableFrom ? irelandInputParts(range.availableFrom).date : undefined} max={range?.availableTo ? irelandInputParts(range.availableTo).date : undefined} onChange={(event) => { setDateInput(event.target.value); setChosenCandidate(""); setAmbiguousCandidates([]); setWallTimeError(""); }} /></label>
             <label>Time in Ireland<input type="time" step={Math.max(60, pickerResolutionMinutes * 60)} aria-invalid={wallTimeError ? true : undefined} aria-describedby={wallTimeError ? "history-wall-time-error" : undefined} value={timeInput} onChange={(event) => { setTimeInput(event.target.value); setChosenCandidate(""); setAmbiguousCandidates([]); setWallTimeError(""); }} /></label>
@@ -239,9 +257,15 @@ export function HistoryControls({
             {history.status === "ready" && history.envelope?.resolvedAt && resolutionMinutes >= 1440 && (
               <p><b>Showing the retained daily summary for {formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt, false)}</b>{periodEndAt ? ` · full retained period ${formatIrelandHistoryTime(periodStartAt ?? history.envelope.resolvedAt)} to ${formatIrelandHistoryTime(periodEndAt)}` : ""}. This is a whole-day summary, not conditions at the selected clock time, and it can include representatives later than that time. Daily summaries do not reconstruct a point-by-point map.</p>
             )}
-            {gaps.length > 0 && <p><b>Recorded gaps:</b> {gaps.map((gap) => gap.detail).join(" ")}</p>}
+            {gaps.length > 0 && <p>{gaps.length} sources have missing or limited historical detail.</p>}
             {history.status === "ready" && <p><Link href="/data">Review sources, retention and attribution</Link>.</p>}
           </div>
+
+          {movementView && <p className="history-view-coverage">Individual train and bus positions are not stored. Transport summaries are available where captured; the map cannot replay vehicle movement.</p>}
+          {gaps.length > 0 && <details className="history-coverage"><summary>Historical coverage and source details</summary>
+            <ul>{gaps.map((gap, index) => <li key={`${gap.source}-${index}`}>{gap.detail}</li>)}</ul>
+            <Link href="/data">Full retention and attribution</Link>
+          </details>}
 
           {history.status === "ready" && resolutionMinutes >= 1440 && periodSummary && (
             <section className="history-period-summary" aria-labelledby="history-period-summary-heading">

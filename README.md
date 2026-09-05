@@ -1,6 +1,6 @@
 # A Day in Ireland 2.0
 
-A living, near-real-time portrait of weather, water, energy and movement across Ireland.
+A daily, near-real-time portrait of weather, water, energy and movement across Ireland.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the frontend, Worker, Durable Object,
 history, source coordination, data-flow, and third-party provider architecture.
@@ -78,3 +78,7 @@ npm run build
 npm run check:html
 npm run check:budgets
 ```
+
+## Experience and operations
+
+See [September experience changes](docs/experience-review.md) for the daily briefing, town directory and history decisions. Use [the operations guide](docs/production/operations.md) for read-only provider and capture checks.

@@ -362,3 +362,9 @@ export function formatIrelandHistoryTime(value: string | Date, includeZone = tru
     ...(includeZone ? { timeZoneName: "short" as const } : {})
   }).format(date);
 }
+
+export const historyResolutionLabel = (minutes: number) => minutes >= 1440
+  ? "daily summary"
+  : minutes >= 60
+    ? `${Math.round(minutes / 60)}-hour representative snapshot`
+    : `${minutes}-minute snapshot`;

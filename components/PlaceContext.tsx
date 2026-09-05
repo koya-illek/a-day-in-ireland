@@ -1,3 +1,4 @@
+import { PlacePicker } from "./PlacePicker";
 import type { AirQualityReading, RiverReading, StationReading } from "../lib/types";
 import { formatIrelandHistoryTime } from "../lib/history";
 import {
@@ -31,6 +32,7 @@ export function PlaceContext({
   placeOptions,
   placeMessage,
   onChoosePlace,
+  onSearch,
   onLocate,
   localStation,
   localRiver,
@@ -52,6 +54,7 @@ export function PlaceContext({
   placeOptions: Place[];
   placeMessage: string;
   onChoosePlace: (placeId: string) => void;
+  onSearch: () => void;
   onLocate: () => void;
   localStation: NearbyReading<StationReading> | null;
   localRiver: NearbyReading<RiverReading> | null;
@@ -70,18 +73,17 @@ export function PlaceContext({
 }) {
   const placeControls = (
     <>
-      <label htmlFor="place-select">Nearby context</label>
       <div className="place-controls">
-        <select id="place-select" value={selectedPlace.id} onChange={(event) => onChoosePlace(event.target.value)}>
-          {selectedPlaceIsEphemeral && <option value="nearby">Your area · this session</option>}
-          {placeOptions.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
-        </select>
+        <PlacePicker places={placeOptions} selected={selectedPlace} onChoose={onChoosePlace} onSearch={onSearch} />
         <button type="button" className="locate-button" onClick={onLocate}><span aria-hidden="true">⌖</span> Use my location</button>
       </div>
-      <small id="place-message" aria-live="polite">{placeMessage || "Saved as a place ID; GPS coordinates are never stored or shared."}</small>
-      <small className="place-limits">{selectedPlaceIsEphemeral
-        ? "Session-only location: nearest available readings are shown with distance; the share link remains an Ireland view."
-        : `Nearby limits: weather ${NEARBY_RADIUS_KM.weather} km · rivers ${NEARBY_RADIUS_KM.river} km · air ${NEARBY_RADIUS_KM.air} km.`}</small>
+      {placeMessage && <small id="place-message" aria-live="polite">{placeMessage}</small>}
+      <details className="place-coverage"><summary>Coverage &amp; location privacy</summary>
+        <p>Town centres locate nearby readings. Weather, river and air coverage varies by provider, particularly in Northern Ireland.</p>
+        <p>Weather within {NEARBY_RADIUS_KM.weather} km, rivers within {NEARBY_RADIUS_KM.river} km, air within {NEARBY_RADIUS_KM.air} km. A station reading describes its location.</p>
+        <p>{selectedPlaceIsEphemeral ? "Your coordinates are used for this session only; shared links show Ireland." : "Only your chosen town ID is saved. GPS coordinates are never stored or shared."}</p>
+        <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">Town locations: GeoNames, CC BY 4.0</a>
+      </details>
     </>
   );
 
@@ -94,16 +96,16 @@ export function PlaceContext({
       {selectedPlace.id === "island" ? (
         <div className="place-picker place-picker-compact">
           <div className="place-compact-copy">
-            <p className="utility-label">My Place</p>
-            <h2 id="my-place-heading">What’s it like near you?</h2>
-            <p className="place-context-summary">Choose a place or use your location for nearby weather, river and air observations.</p>
+
+            <h2 id="my-place-heading">Your part of Ireland</h2>
+            <p className="place-context-summary">Find nearby weather, river and air observations.</p>
           </div>
           <div className="place-compact-controls">{placeControls}</div>
         </div>
       ) : (
         <>
           <div className="place-picker">
-            <p className="utility-label">My Place</p>
+
             <h2 id="my-place-heading">{selectedPlace.name}</h2>
             <p className="place-context-summary">{selectedPlaceIsEphemeral
               ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."

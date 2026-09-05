@@ -17,7 +17,8 @@
     "check:release": "node scripts/check-release-state.mjs",
     "check:deployment": "node scripts/check-deployment.mjs",
     "deploy:cloudflare": "npm run check:release && npm run build && wrangler deploy --config wrangler.api.toml",
-    "deploy:cloudflare:api": "npm run check:release && wrangler deploy --config wrangler.api.toml"
+    "deploy:cloudflare:api": "npm run check:release && wrangler deploy --config wrangler.api.toml",
+    "check:operations": "node scripts/check-operations.mjs"
   },
   "dependencies": {
     "d3-geo": "^3.1.1",

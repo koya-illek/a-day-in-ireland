@@ -2,6 +2,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type CSSProperties,
   type Ref
 } from "react";
 import type { TimeMode } from "./experience-model";
@@ -10,6 +11,7 @@ export function MapCanvas({
   mapRef,
   timeMode,
   mapView,
+  dimensions,
   isDenseView,
   markerCount,
   pointObservationCount,
@@ -27,6 +29,7 @@ export function MapCanvas({
   mapRef: Ref<SVGSVGElement>;
   timeMode: TimeMode;
   mapView: { scale: number; x: number; y: number };
+  dimensions: { width: number; height: number };
   isDenseView: boolean;
   markerCount: number;
   pointObservationCount: number;
@@ -41,6 +44,7 @@ export function MapCanvas({
   onReset: () => void;
   children: ReactNode;
 }) {
+  const markerStyle: CSSProperties & { "--marker-scale": number } = { "--marker-scale": 1 / (Math.max(.1, Math.min(dimensions.width / 1000, dimensions.height / 900)) * mapView.scale) };
   return (
     <div className="map-canvas">
       <svg
@@ -48,6 +52,7 @@ export function MapCanvas({
         className={`ireland-map ${mapView.scale > 1 ? "is-zoomed" : ""} ${isDenseView ? "is-dense-map" : ""}`}
         data-visible-markers={markerCount}
         data-point-observations={pointObservationCount}
+        style={markerStyle}
         viewBox="0 0 1000 900"
         role="group"
         aria-labelledby="map-title map-description"

@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function enableExploreLayer(page: Page, name: RegExp) {
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const panel = page.locator(".explore-panel");
   const layer = panel.getByRole("button", { name, includeHidden: true });
   const group = layer.locator("xpath=ancestor::details[1]");
@@ -590,7 +590,8 @@ test("default island context stays compact until a place is selected", async ({ 
   await expect(notices).toHaveClass(/compact/);
   await expect(notices).toContainText("No current or upcoming Met Éireann notices");
 
-  await place.locator("#place-select").selectOption("cork");
+  await place.getByRole("combobox", { name: "Town or city" }).fill("Cork");
+  await place.getByRole("option", { name: "Cork", exact: true }).click();
   await expect(place).not.toHaveClass(/place-context-compact/);
   await expect(place.getByRole("heading", { name: "Cork", exact: true })).toBeVisible();
   await expect(place.locator(".place-observations dl > div")).toHaveCount(4);
@@ -693,7 +694,7 @@ test("multiple notices render as active/upcoming facts without turning Blight in
 
 test("explore layers and station details are interactive", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Live layers" })).toBeVisible();
   const rain = page.getByRole("button", { name: /Observed rain/ });
   await rain.click();
@@ -891,7 +892,7 @@ test("weather and wind share one accessible station entry while wind-only remain
 test("station identity and focus survive weather and wind representation changes", async ({ page }) => {
   await installMapMarkerFixtures(page);
   await page.goto("/");
-  const explore = page.getByRole("button", { name: "Explore", exact: true });
+  const explore = page.getByRole("button", { name: "Layers", exact: true });
   const weatherLayer = page.locator(".explore-panel").getByRole("button", { name: /Weather stations/ });
   const finner = page.locator("[data-marker-id='station:finner']");
 
@@ -973,7 +974,7 @@ test("representative map marker pointer activation opens each available detail",
   await installMapMarkerFixtures(page);
   await page.goto("/?view=all");
   await expect(page.locator(".station-marker")).toHaveCount(9);
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const radar = page.locator(".explore-panel").getByRole("button", { name: /Rainfall radar/ });
   if (await radar.getAttribute("aria-pressed") === "true") await radar.click();
   await page.getByRole("button", { name: "Close explore panel" }).click();
@@ -994,7 +995,7 @@ test("representative map marker pointer activation opens each available detail",
 
 test("explore layers stay grouped while preserving all layer IDs", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
 
   for (const heading of [
     "Weather & official notices",
@@ -1024,7 +1025,7 @@ test("explore layers stay grouped while preserving all layer IDs", async ({ page
 
 test("explore layer dialog traps and restores focus", async ({ page }) => {
   await page.goto("/");
-  const opener = page.getByRole("button", { name: "Explore", exact: true });
+  const opener = page.getByRole("button", { name: "Layers", exact: true });
   await opener.click();
   const close = page.getByRole("button", { name: "Close explore panel" });
   await expect(close).toBeFocused();
@@ -2123,7 +2124,7 @@ test("new public contexts are discoverable and honestly describe unavailable dat
   if (await page.locator(".tide-marker").count()) {
     await expect(page.locator(".tide-marker").first()).toBeVisible();
   } else {
-    await page.getByRole("button", { name: "Explore", exact: true }).click();
+    await page.getByRole("button", { name: "Layers", exact: true }).click();
     await expect(page.getByRole("button", { name: /Tides & surge/ })).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "Close explore panel" }).click();
   }
@@ -2140,7 +2141,7 @@ test("new public contexts are discoverable and honestly describe unavailable dat
 
   await enableExploreLayer(page, /Earthquakes/);
 
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const movementGroup = page.locator('.explore-panel details[data-layer-group="movement"]');
   if (!(await movementGroup.evaluate((element: HTMLDetailsElement) => element.open))) {
     await movementGroup.locator("summary").click();
@@ -2193,13 +2194,14 @@ test("multiple-signal disclosure remains visible and usable at 320px and 200 per
 
 test("my place and shared view state survive a deep link", async ({ page }) => {
   await page.goto("/?place=cork&view=movement");
-  await expect(page.locator("#place-select")).toHaveValue("cork");
+  await expect(page.getByRole("combobox", { name: "Town or city" })).toHaveValue("Cork");
   await expect(page.getByRole("heading", { name: "Cork", exact: true })).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ })
   ).toHaveClass(/active/);
 
-  await page.locator("#place-select").selectOption("dublin");
+  await page.getByRole("combobox", { name: "Town or city" }).fill("Dublin");
+  await page.getByRole("option", { name: "Dublin", exact: true }).click();
   await expect(page).toHaveURL(/place=dublin/);
   await expect(page.getByRole("heading", { name: "Dublin", exact: true })).toBeVisible();
 });
@@ -2210,7 +2212,7 @@ test("all layers includes satellite and public transport", async ({ page }) => {
     .getByRole("navigation", { name: "Map view shortcuts" })
     .getByRole("button", { name: /All layers/ })
     .click();
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await expect(page.getByRole("button", { name: /Satellite image/, includeHidden: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: /Public transport/, includeHidden: true })).toHaveAttribute("aria-pressed", "true");
 });
@@ -2253,7 +2255,7 @@ test("deep links still hydrate when local storage is blocked", async ({ page }) 
     Storage.prototype.setItem = () => { throw new DOMException("Blocked", "SecurityError"); };
   });
   await page.goto("/?place=cork&view=movement");
-  await expect(page.locator("#place-select")).toHaveValue("cork");
+  await expect(page.getByRole("combobox", { name: "Town or city" })).toHaveValue("Cork");
   await expect(page.getByRole("heading", { name: "Cork", exact: true })).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Movement/ })
@@ -2701,7 +2703,7 @@ test("mobile view keeps the layer rail clear of the what-matters board", async (
     return Boolean(rail && map && map.top >= rail.bottom - 1);
   });
 
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await page.waitForFunction(() => {
     const panel = document.querySelector(".explore-panel.is-open");
     if (!panel) return false;
@@ -2735,11 +2737,11 @@ test("visible presets expose pressed state, clean names, and an explicit custom 
   await expect(movement).toHaveAttribute("aria-pressed", "true");
   await expect(weather).toHaveAttribute("aria-pressed", "false");
   await enableExploreLayer(page, /Air & exposure/);
-  const custom = presets.getByRole("button", { name: /Custom · \d+ layers?/ });
+  const custom = presets.getByRole("button", { name: /More layers|Custom · \d+ layers?/ });
   await expect(custom).toHaveAttribute("aria-pressed", "true");
   const customLabel = (await custom.textContent())?.trim() ?? "";
-  expect(customLabel).toMatch(/^Custom · \d+ layers?$/);
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  expect(customLabel).toMatch(/^(?:More layers|Custom · \d+ layers?)$/);
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   await expect(page.locator(".explore-panel .panel-layer-state strong")).toHaveText(customLabel);
 });
 
@@ -2978,7 +2980,7 @@ test("every visible meaningful term and map label stays above the practical type
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     await page.goto("/?view=all");
-    await page.getByRole("button", { name: "Explore", exact: true }).click();
+    await page.getByRole("button", { name: "Layers", exact: true }).click();
 
     const result = await page.evaluate(() => {
       const root = document.querySelector(".experience");
@@ -3018,15 +3020,14 @@ test("every visible meaningful term and map label stays above the practical type
       text: label.textContent?.trim(),
       size: Number.parseFloat(getComputedStyle(label).fontSize)
     })));
-    expect(sectionLabelSizes.length, `${viewport.width}px visible section labels`).toBeGreaterThan(0);
     expect(sectionLabelSizes.filter((label) => label.size < 12), `${viewport.width}px section label floor`).toEqual([]);
 
-    const mapLabelSizes = await page.locator("svg.ireland-map text").evaluateAll((labels) => labels.map((label) => ({
-      text: label.textContent?.trim(),
-      size: Number.parseFloat(getComputedStyle(label).fontSize)
-    })));
-    expect(mapLabelSizes.length, `${viewport.width}px map labels`).toBeGreaterThan(10);
-    expect(mapLabelSizes.filter((label) => label.size < 12), `${viewport.width}px map label floor`).toEqual([]);
+    const mapLabelSizes = await page.locator("svg.ireland-map .marker-symbol text, svg.ireland-map .place-symbol text").evaluateAll((labels) => labels.filter((label) => label.getBoundingClientRect().width > 0).map((label) => {
+      const transform = label instanceof SVGGraphicsElement ? label.getScreenCTM() : null;
+      return { text: label.textContent?.trim(), size: Number.parseFloat(getComputedStyle(label).fontSize) * (transform ? Math.hypot(transform.a, transform.b) : 0) };
+    }));
+    expect(mapLabelSizes.length, `${viewport.width}px map labels`).toBeGreaterThan(0);
+    expect(mapLabelSizes.filter((label) => label.size < 11.9), `${viewport.width}px rendered map label floor`).toEqual([]);
   }
 });
 

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { DM_Sans, Newsreader } from "next/font/google";
 import "./globals.css";
+import "./experience.css";
 
 const dmSans = DM_Sans({
   subsets: ["latin"],

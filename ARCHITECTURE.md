@@ -52,7 +52,7 @@ flowchart LR
 | Layer | Responsibility | Primary source |
 | --- | --- | --- |
 | Static frontend | Next.js static export, page metadata, manifest, informational pages, map assets, and generated transit dictionary | `app/`, `components/`, `public/` |
-| Browser data client | Refreshes browser-compatible weather and monitored-air sources, merges responses, retains valid last-good evidence, enriches transit destinations, and handles offline state | `lib/browser-live.ts`, `lib/live-data.ts`, `lib/data-state.ts` |
+| Browser data client | Refreshes browser-compatible weather and monitored-air sources, merges responses, retains valid last-good evidence, enriches transit destinations, and handles offline state | `lib/browser-live.ts`, ``lib/data-state.ts` |
 | Experience model | Controls layers, place context, map projections, selections, movement clustering, history mode, accessibility, and presentation semantics | `components/IrelandExperience.tsx`, `components/experience-model.ts` |
 | Cloudflare Worker | Serves static assets and API routes, enforces method boundaries, merges provider results, dispatches history, and handles scheduled capture | `platform/cloudflare-entry.js`, `platform/server-entry.js` |
 | Shared Worker API core | One implementation of provider acquisition, context refresh state, HTTP contract, and `/api/*` dispatch for every hosting adapter; entrypoints contribute only bindings and static serving | `platform/api-core.js` |
@@ -87,7 +87,7 @@ flowchart LR
 
 | Interface | Purpose |
 | --- | --- |
-| `GET /api/health` | Cheap runtime, binding liveness, and deployed-build provenance read from the served assets; no provider fan-out |
+| `GET /api/health` | Cheap runtime, binding presence, and deployed-build provenance read from the served assets; no provider fan-out |
 | `GET /api/living` | Current rail and river evidence with provenance |
 | `GET /api/contexts` | Weather, water, energy, air, bathing, earth, sky, and related context |
 | `GET /api/transit` | Coordinated NTA live vehicle positions |

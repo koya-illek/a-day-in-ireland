@@ -9,7 +9,7 @@ import {
   type HistoryLoadState,
   type TimeMode
 } from "./experience-model";
-import { historyResolutionLabel } from "./HistoryControls";
+import { historyResolutionLabel } from "../lib/history";
 
 export function FreshnessStrip({
   timeMode,

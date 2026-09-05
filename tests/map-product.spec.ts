@@ -685,7 +685,7 @@ test("radar and whole-island context controls stay outside the map canvas at con
 test("custom layer state, legend, grouped disclosure, and URL restoration stay explicit", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "State restoration is viewport-independent.");
   await page.goto("/");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const panel = page.locator(".explore-panel");
   await expect(panel.locator(".panel-layer-state")).toContainText("Weather preset · 5 layers");
   const weather = panel.locator('details[data-layer-group="weather"]');
@@ -711,7 +711,7 @@ test("custom layer state, legend, grouped disclosure, and URL restoration stay e
 
   await page.goto(restoredUrl);
   await expect(page.locator("#live-map .map-presets .custom")).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Explore", exact: true }).click();
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
   const restoredMovement = page.locator('.explore-panel details[data-layer-group="movement"]');
   await restoredMovement.locator("summary").click();
   await expect(restoredMovement.getByRole("button", { name: /Public transport/ })).toHaveAttribute("aria-pressed", "true");
@@ -762,7 +762,7 @@ test("session-only coordinates use exact rural context without entering storage 
   await expect(page.getByRole("heading", { name: "Cork", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Use my location" }).click();
   await expect(page.getByRole("heading", { name: "Your area", exact: true })).toBeVisible();
-  await expect(page.locator("#place-select")).toHaveValue("nearby");
+  await expect(page.getByRole("combobox", { name: "Town or city" })).toHaveValue("Your area");
   await expect(page.locator("#place-message")).toContainText("session only");
   await expect(page.locator(".place-limits")).toContainText("share link remains an Ireland view");
   const nearestLabels = await page.locator(".place-observations small").allTextContents();

@@ -18,8 +18,8 @@ export function WorkspaceHeading({
   return (
     <div className="workspace-heading" id="ireland-now">
       <div className="workspace-copy">
-        <p className="utility-label">{formatDate(now)}<span className="moment-time"> · {formatTime(now)} Irish time</span></p>
-        <h2 id="moment-heading">Ireland {timeMode === "past" ? "then" : "now"}.</h2>
+        <p className="briefing-date">{formatDate(now)}<span className="moment-time"> · {formatTime(now)} Irish time</span></p>
+        <h1 id="moment-heading">{timeMode === "past" ? "Ireland at that moment." : "A daily portrait of Ireland."}</h1>
         <p className="hero-sentence">{heroSentence}</p>
         <p className="moment-summary">{heroSecondary}</p>
       </div>

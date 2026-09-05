@@ -1194,6 +1194,7 @@ export const healthResponse = (env, provenance = null) => {
       transitDataSha256: env.BUILD_DATA_SHA256 ?? provenance?.generatedData?.sha256 ?? "unknown",
       deploymentId: env.DEPLOYMENT_ID ?? fileDeploymentId ?? "unknown"
     },
+    checks: { scope: "process-and-binding-presence", providerHealth: "not-checked", storageRead: "not-checked" },
     storage: {
       historyDb: Boolean(env.HISTORY_DB),
       ntaCoordinator: Boolean(env.NTA_FEED),

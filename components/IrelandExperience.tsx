@@ -16,6 +16,9 @@ import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
+import { PRESET_LAYERS, LAYER_GROUPS } from "../lib/map-presets";
+import { dailyBriefing } from "../lib/daily-briefing";
+import { PLACES, PLACE_OPTIONS } from "../lib/places";
 import islandBoundary from "../public/map/island.json";
 import type {
   AirQualityReading,
@@ -58,7 +61,6 @@ import {
   type HistoryComparisonState,
   type HistoryLoadState,
   type Layer,
-  type LayerGroup,
   type MapSelection,
   type MovementSelection,
   type MovementStack,
@@ -95,8 +97,10 @@ import {
   type RadarTileStatus,
   type RadarTileStatusReporter
 } from "./MapLayers";
-import { HistoryControls, historyResolutionLabel } from "./HistoryControls";
-import { ExplorePanel } from "./ExplorePanel";
+import { historyResolutionLabel } from "../lib/history";
+const HistoryControls = dynamic(() => import("./HistoryControls").then((module) => module.HistoryControls));
+const BriefingComparison = dynamic(() => import("./BriefingComparison").then((module) => module.BriefingComparison));
+const ExplorePanel = dynamic(() => import("./ExplorePanel").then((module) => module.ExplorePanel));
 import { OfficialNotices } from "./OfficialNotices";
 import { WeatherTimeline } from "./WeatherTimeline";
 import { MapCanvas } from "./MapCanvas";
@@ -183,21 +187,6 @@ function deduplicateMovementRecords<T extends MovementRecord>(records: readonly 
   return [...byId.values()].sort((first, second) => compareStableIds(first.id, second.id));
 }
 
-const PLACES = [
-  { id: "dublin", name: "Dublin", lon: -6.2603, lat: 53.3498 },
-  { id: "belfast", name: "Belfast", lon: -5.9301, lat: 54.5973 },
-  { id: "cork", name: "Cork", lon: -8.4756, lat: 51.8985 },
-  { id: "galway", name: "Galway", lon: -9.0568, lat: 53.2707 },
-  { id: "limerick", name: "Limerick", lon: -8.6267, lat: 52.6638 },
-  { id: "waterford", name: "Waterford", lon: -7.1119, lat: 52.2593 },
-  { id: "derry", name: "Derry", lon: -7.309, lat: 54.9966 }
-] satisfies Place[];
-
-const PLACE_OPTIONS: Place[] = [
-  { id: "island", name: "Ireland", lon: -8.05, lat: 53.45 },
-  ...PLACES
-];
-
 const EXPERIENCE_SECTIONS: { id: string; key: ExperienceSection; label: string; detail: string; }[] = [
   { id: "live-map", key: "map", label: "Map", detail: "Living island view" },
   { id: "official-notices", key: "notices", label: "Notices", detail: "Official warnings" },
@@ -220,81 +209,6 @@ const storePlace = (placeId: string) => {
     // URL state remains available when browser storage is blocked.
   }
 };
-
-const PRESET_LAYERS: Record<Exclude<Preset, "custom">, Layer[]> = {
-  weather: ["weather", "rain", "wind", "warnings", "places"],
-  movement: ["trains", "transit", "places"],
-  water: ["rain", "rivers", "sea", "tides", "bathing", "warnings", "places"],
-  all: [
-    "weather", "rain", "wind", "warnings", "places", "sea", "trains", "rivers",
-    "radar", "grid", "air", "aurora", "tides", "bathing", "iss", "satellite",
-    "earthquakes", "transit"
-  ]
-};
-
-const LAYER_GROUPS: LayerGroup[] = [
-  {
-    id: "weather",
-    label: "Weather & official notices",
-    detail: "Conditions, rain and Met Éireann notices",
-    layers: [
-      ["weather", "Weather stations", "Temperature and current conditions"],
-      ["rain", "Observed rain", "Measured recent rainfall around stations"],
-      ["wind", "Observed wind", "Met Éireann direction and speed in km/h"],
-      ["warnings", "Met Éireann notices", "Current official Met Éireann warnings and advisories"],
-      ["radar", "Rainfall radar", "Met Éireann precipitation tiles, checked when the layer is displayed"]
-    ]
-  },
-  {
-    id: "movement",
-    label: "Movement",
-    detail: "Rail and public transport positions",
-    layers: [
-      ["trains", "Moving trains", "Current Iarnród Éireann train positions"],
-      ["transit", "Public transport", "TFI live bus, Luas and other vehicle positions when API access is configured"]
-    ]
-  },
-  {
-    id: "water",
-    label: "Water & coast",
-    detail: "Gauges, sea conditions and bathing alerts",
-    layers: [
-      ["rivers", "River levels", "Latest fresh OPW readings; stale gauges expire automatically"],
-      ["sea", "Sea conditions", "Near-real-time Marine Institute buoys and coastal observatories"],
-      ["tides", "Tides & surge", "Fresh gauges, predicted high and low water, and surge anomaly"],
-      ["bathing", "Bathing alerts", "Current EPA restrictions and pollution advisories only"]
-    ]
-  },
-  {
-    id: "air-sky-earth",
-    label: "Air, sky & earth",
-    detail: "Exposure, space imagery and detected events",
-    layers: [
-      ["air", "Air & exposure", "EEA monitoring stations plus regional CAMS model estimates"],
-      ["aurora", "Aurora probability", "NOAA OVATION overhead probability guidance"],
-      ["iss", "ISS passes", "Current orbit and locally calculated passes over Ireland"],
-      ["satellite", "Satellite image", "NASA VIIRS previous-day archive frame; not a live camera"],
-      ["earthquakes", "Earthquakes", "USGS detections around Ireland during the past seven days"]
-    ]
-  },
-  {
-    id: "across-ireland",
-    label: "Across Ireland",
-    detail: "Whole-island operational context",
-    layers: [
-      ["grid", "Electricity grid", "Current all-island EirGrid demand, wind, carbon and frequency"]
-    ]
-  },
-  {
-    id: "places",
-    label: "Places",
-    detail: "Major towns and cities for map orientation",
-    layers: [
-      ["places", "Places", "Major towns and cities"]
-    ]
-  }
-];
-
 
 const irelandHour = (date: Date) =>
   Number.parseInt(
@@ -501,6 +415,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const [activePreset, setActivePreset] = useState<Preset>("weather");
   const [servicesRefreshing, setServicesRefreshing] = useState(() => initialSnapshot.stations.length === 0);
   const [initialRefreshComplete, setInitialRefreshComplete] = useState(() => initialSnapshot.lastSuccessAt !== null);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
   const [showAllNotables, setShowAllNotables] = useState(false);
   const [mapNotice, setMapNotice] = useState<{ title: string; detail: string; focus?: ContextFocus } | null>(null);
   const [radarFrameIndex, setRadarFrameIndex] = useState(() => Math.max(0, initialSnapshot.radar.length - 1));
@@ -517,6 +432,21 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
   const [shareStatus, setShareStatus] = useState<"idle" | "copied">("idle");
+  const [placeOptions, setPlaceOptions] = useState(PLACE_OPTIONS);
+  const [directoryError, setDirectoryError] = useState(false);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+  const loadPlaceDirectory = useCallback(async () => {
+    try {
+      const { default: towns } = await import("../lib/towns.json");
+      setPlaceOptions([...PLACE_OPTIONS, ...towns.filter((town) => !PLACES.some((city) => city.name.toLowerCase() === town.name.toLowerCase()))]);
+      setDirectoryLoaded(true);
+      setDirectoryError(false);
+    } catch {
+      setDirectoryError(true);
+      setPlaceMessage("The town directory could not be loaded. The main cities remain available; focus the search to try again.");
+      setDirectoryLoaded(true);
+    }
+  }, []);
   const [selectedPlaceId, setSelectedPlaceId] = useState(DEFAULT_PLACE_ID);
   const [ephemeralPlace, setEphemeralPlace] = useState<Place | null>(null);
   const [placeMessage, setPlaceMessage] = useState("");
@@ -1056,9 +986,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const projection = useMemo(
     () => geoMercator()
       .center([-8.05, 53.45])
-      .scale(mapDimensions.width <= 430 ? 5750 : mapDimensions.width <= 600 ? 5550 : 5350)
+      .scale(6100)
       .translate([500, 462]),
-    [mapDimensions.width]
+    []
   );
   const islandPaths = useMemo(() => {
     const path = geoPath(projection);
@@ -1109,9 +1039,9 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       (station) => (station.rainfall ?? 0) > 0 ? 20 : 0
     ),
     deferredMapViewport,
-    isDenseView ? (activePreset === "all" ? 38 : 30) : 0,
+    isDenseView ? 70 : 60,
     activeMarkerId
-  ).map(({ item }) => item), [activeMarkerId, activePreset, deferredMapViewport, isDenseView, layers, projection, snapshot.sourceStatus, snapshot.stations, snapshotReadable]);
+  ).map(({ item }) => item), [activeMarkerId, deferredMapViewport, isDenseView, layers, projection, snapshot.sourceStatus, snapshot.stations, snapshotReadable]);
   const displayedRivers = useMemo(() => selectDeclutteredPoints(
     projectReadings(
       snapshotReadable && (snapshot.sourceProvenance?.rivers.status === "live" || snapshot.sourceProvenance?.rivers.status === "partial" || snapshot.sourceProvenance?.rivers.status === "fallback")
@@ -1399,7 +1329,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   const isNight = currentSolar
     ? dayPhase === "night"
     : currentHour < 6 || currentHour >= 21;
-  const selectedPlace = ephemeralPlace ?? PLACE_OPTIONS.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
+  const selectedPlace = ephemeralPlace ?? placeOptions.find((place) => place.id === selectedPlaceId) ?? PLACE_OPTIONS[0]!;
   const selectedPlaceIsEphemeral = selectedPlace.id === "nearby";
   const selectedPlacePoint = selectedPlace.id === "island"
     ? null
@@ -1778,6 +1708,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     windiestStation,
     weatherDisplayStatus
   });
+  const briefingLines = dailyBriefing(snapshot, weatherNotableCurrent, gridNotableCurrent);
   const heroFacts = buildHeroFacts({
     warningsCurrent,
     warningsUsable,
@@ -1957,12 +1888,14 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
   useEffect(() => {
     if (viewHydrationStartedRef.current) return;
+    const desiredPlace = new URLSearchParams(window.location.search).get("place") ?? readStoredPlace();
+    if (desiredPlace?.startsWith("gn-") && !directoryLoaded) { void loadPlaceDirectory(); return; }
     viewHydrationStartedRef.current = true;
     const params = new URLSearchParams(window.location.search);
     const storedPlace = readStoredPlace();
-    const parsedView = parseViewState(window.location.search, PLACE_OPTIONS.map((place) => place.id));
+    const parsedView = parseViewState(window.location.search, placeOptions.map((place) => place.id));
     const requestedPlace = params.has("place") ? parsedView.placeId : storedPlace;
-    if (requestedPlace && PLACE_OPTIONS.some((place) => place.id === requestedPlace)) {
+    if (requestedPlace && placeOptions.some((place) => place.id === requestedPlace)) {
       setSelectedPlaceId(requestedPlace);
     }
 
@@ -2000,7 +1933,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       void fetchHistoryRange().then(setHistoryRange).catch(() => undefined);
     }
     setViewHydrated(true);
-  }, [loadHistoryAt, projection, setMapView]);
+  }, [directoryLoaded, loadPlaceDirectory, placeOptions, loadHistoryAt, projection, setMapView]);
 
   // Centre a pending hash deep link against the current projection. The first
   // application necessarily uses the hydration-default projection; the target
@@ -2035,7 +1968,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   useEffect(() => {
     if (!viewHydrated) return;
     const restoreTimeView = () => {
-      const parsed = parseViewState(window.location.search, PLACE_OPTIONS.map((place) => place.id));
+      const parsed = parseViewState(window.location.search, placeOptions.map((place) => place.id));
       if (parsed.at) {
         initialHistoryAtRef.current = parsed.at;
         setTimeMode("past");
@@ -2046,7 +1979,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     };
     window.addEventListener("popstate", restoreTimeView);
     return () => window.removeEventListener("popstate", restoreTimeView);
-  }, [loadHistoryAt, returnToNow, timeMode, viewHydrated]);
+  }, [placeOptions, loadHistoryAt, returnToNow, timeMode, viewHydrated]);
 
   useEffect(() => {
     if (!viewHydrated) return;
@@ -2283,11 +2216,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
   }, [rememberVisibleMapAnchor]);
 
   const choosePlace = useCallback((placeId: string) => {
-    if (!PLACE_OPTIONS.some((place) => place.id === placeId)) return;
+    if (!placeOptions.some((place) => place.id === placeId)) return;
     setEphemeralPlace(null);
     setSelectedPlaceId(placeId);
     setPlaceMessage("");
-  }, []);
+  }, [placeOptions]);
 
   const useMyLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -2496,7 +2429,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             }}
             aria-expanded={panelOpen}
           >
-            Explore <span aria-hidden="true">⌁</span>
+            Layers <span aria-hidden="true">⌁</span>
           </button>
         </nav>
       </header>
@@ -2515,12 +2448,48 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               </a>
             ))}
           </nav>
-          <p className="section-rail-note">{timeMode === "past"
-            ? "Move between the retained map, notices, national briefing and the recorded shape of the day."
-            : "Map presets stay with the map. Explore opens the full layer drawer without repeating the main view controls."}</p>
+
         </aside>
 
         <div className="map-workspace">
+          <WorkspaceHeading
+            now={now}
+            timeMode={timeMode}
+            heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
+            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. Checked ${formatTime(lastCheckedAt)} Irish time.` : heroSecondary}
+            facts={heroFacts}
+            onFact={(action) => {
+              if (action === "notices") {
+                document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+                return;
+              }
+              focusContext(action);
+            }}
+          />
+          <PlaceContext
+            selectedPlace={selectedPlace}
+            selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
+            placeOptions={placeOptions}
+            onSearch={() => { if (!directoryLoaded || directoryError) void loadPlaceDirectory(); }}
+            placeMessage={placeMessage}
+            onChoosePlace={choosePlace}
+            onLocate={useMyLocation}
+            localStation={localStation}
+            localRiver={localRiver}
+            localAir={localAir}
+            timeMode={timeMode}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            weatherAvailable={snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"}
+            riversAvailable={riversLive || riversPartial || riversFallback}
+            riversCached={riversCached}
+            airAvailable={snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback"}
+            weatherGap={historyGapForFocus(historyGaps, "weather")?.detail ?? null}
+            riverGap={historyGapForFocus(historyGaps, "rivers")?.detail ?? null}
+            airGap={historyGapForFocus(historyGaps, "air")?.detail ?? null}
+            now={now}
+          />
+
       <section
         id="live-map"
         className="map-stage"
@@ -2531,12 +2500,13 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         <div className="map-explorer-heading">
           <div>
             <p className="utility-label">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
-            <h1>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h1>
+            <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
             <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
           </div>
         </div>
-        <HistoryControls
+        {timeMode === "past" ? <HistoryControls
           mode={timeMode}
+          movementView={layers.has("trains") || layers.has("transit")}
           range={historyRange}
           history={historyState}
           comparison={historyComparison}
@@ -2544,7 +2514,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           onPast={() => void enterPast()}
           onRequest={(at) => void loadHistoryAt(at)}
           onCompare={() => void compareHistoryWithNow()}
-        />
+        /> : <section className="history-controls" aria-label="Time view"><div className="history-mode-row"><div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
+          <button type="button" aria-pressed="true" onClick={returnToNow}>Now</button>
+          <button type="button" aria-pressed="false" onClick={() => void enterPast()}>Past</button>
+        </div></div></section>}
         <nav className="map-presets" aria-label="Map view shortcuts">
           <button type="button" className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" /><span className="preset-label">Weather</span></button>
           <button type="button" className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" /><span className="preset-label">Movement</span></button>
@@ -2558,10 +2531,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
               setPanelOpen(true);
             }}
           >
-            <span className="preset-label">Custom · {layers.size} layers</span>
+            <span className="preset-label">{activePreset === "custom" ? `Custom · ${layers.size} layers` : "More layers"}</span>
           </button>
         </nav>
-        <small className="preset-scroll-hint">Swipe for more views →</small>
+
         <details className="map-legend">
           <summary>Legend · {layers.size} layers shown</summary>
           <div className="map-legend-content">
@@ -2601,6 +2574,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           mapRef={mapRef}
           timeMode={timeMode}
           mapView={mapView}
+          dimensions={mapDimensions}
           isDenseView={isDenseView}
           markerCount={markerIds.length}
           pointObservationCount={rawPointMarkerCount}
@@ -2663,12 +2637,12 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
                 const point = projection([station.longitude, station.latitude]);
                 return point ? <circle key={`rain-${station.id}`} className="rain-cloud" cx={point[0]} cy={point[1]} r={45 + Math.min(65, (station.rainfall ?? 0) * 18)} /> : null;
               })}
-            {layers.has("places") && PLACES.map((place, index) => {
+            {layers.has("places") && PLACES.filter((_, index) => mapView.scale >= 1.8 || index < 3).map((place, index) => {
               const point = projection([place.lon, place.lat]);
               return point ? (
                 <g className={`place ${index < 3 ? "priority-major" : "priority-secondary"}`} key={place.name} transform={`translate(${point[0]} ${point[1]})`}>
-                  <circle r="2.5" />
-                  <text x="7" y="4">{place.name}</text>
+                  <g className="place-symbol"><circle r="2.5" />
+                  <text x="7" y="4">{place.name}</text></g>
                 </g>
               ) : null;
             })}
@@ -2976,106 +2950,6 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
       </section>
 
-          <WorkspaceHeading
-            now={now}
-            timeMode={timeMode}
-            heroSentence={heroSentence}
-            heroSecondary={heroSecondary}
-            facts={heroFacts}
-            onFact={(action) => {
-              if (action === "notices") {
-                document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
-                return;
-              }
-              focusContext(action);
-            }}
-          />
-          <PlaceContext
-            selectedPlace={selectedPlace}
-            selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
-            placeOptions={PLACE_OPTIONS}
-            placeMessage={placeMessage}
-            onChoosePlace={choosePlace}
-            onLocate={useMyLocation}
-            localStation={localStation}
-            localRiver={localRiver}
-            localAir={localAir}
-            timeMode={timeMode}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            online={online}
-            weatherAvailable={snapshot.sourceStatus === "live" || snapshot.sourceStatus === "partial"}
-            riversAvailable={riversLive || riversPartial || riversFallback}
-            riversCached={riversCached}
-            airAvailable={snapshot.contextStatus.measuredAir === "live" || snapshot.contextStatus.measuredAir === "fallback" || snapshot.contextStatus.modelledAir === "live" || snapshot.contextStatus.modelledAir === "fallback"}
-            weatherGap={historyGapForFocus(historyGaps, "weather")?.detail ?? null}
-            riverGap={historyGapForFocus(historyGaps, "rivers")?.detail ?? null}
-            airGap={historyGapForFocus(historyGaps, "air")?.detail ?? null}
-            now={now}
-          />
-          <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
-          <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
-          <FreshnessStrip
-            timeMode={timeMode}
-            historyState={historyState}
-            historyGaps={historyGaps}
-            connectionStatus={connectionStatus}
-            serviceDisplayState={serviceDisplayState}
-            lastSuccessLabel={lastSuccessLabel}
-            connectionLabel={connectionLabel}
-            lastCheckedAt={lastCheckedAt}
-            now={now}
-            online={online}
-            servicesRefreshing={servicesRefreshing}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            snapshot={snapshot}
-            weatherDisplayStatus={weatherDisplayStatus}
-            trainDisplayStatus={trainDisplayStatus}
-            riverDisplayStatus={riverDisplayStatus}
-            latestWeatherObs={latestWeatherObs}
-            weatherStale={weatherStale}
-            transitStale={transitStale}
-            riverDataStale={riverDataStale}
-            onRefresh={() => void refreshAllRef.current()}
-          />
-          <OfficialNotices
-            timeMode={timeMode}
-            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && warningsCurrent && visibleWarnings.length === 0}
-            layers={layers}
-            visibleWarnings={visibleWarnings}
-            activeWarning={activeWarning}
-            warningsUnavailable={warningsUnavailable}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            online={online}
-            snapshot={snapshot}
-            now={now}
-            lastSuccessLabel={lastSuccessLabel}
-            historyGaps={historyGaps}
-            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
-          />
-        </div>
-      </section>
-
-      {selected && createPortal(
-        <div className="detail-modal-layer" onClick={(event) => {
-          if (event.target === event.currentTarget) setSelected(null);
-        }}>
-          <DeferredDetailCard
-            selected={selected}
-            historical={timeMode === "past"}
-            onClose={() => setSelected(null)}
-            openerRef={markerOpenerRef}
-            onFocusFallback={parkMapFocusAfterDetailClose}
-            onStackChange={(index) => {
-              setSelected((current) => current?.type === "movement-stack"
-                ? { ...current, index }
-                : current
-              );
-            }}
-          />
-        </div>,
-        document.body
-      )}
-
       <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" tabIndex={-1} aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
           <div>
@@ -3122,6 +2996,23 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <p className="signal-assessment"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
         )}
 
+        <p className="briefing-introduction">{briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
+        {timeMode === "now" && <details className="morning-comparison" onToggle={(event) => setComparisonOpen(event.currentTarget.open)}>
+          <summary>What changed since morning?</summary>
+          {comparisonOpen && <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} />}
+        </details>}
+        <button type="button" className="save-briefing" onClick={() => void import("../lib/download-briefing").then(({ downloadBriefing }) => downloadBriefing({
+          date: `${formatDate(now)}, ${formatTime(now)} Irish time`,
+          summary: timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence,
+          facts: heroFacts.map((fact) => `${fact.label}: ${fact.value}. ${fact.detail}`),
+          status: timeMode === "past" ? "Historical observations" : connectionLabel,
+          sourceTimes: [
+            `Weather: ${snapshot.sourceStatus}; latest observation ${latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : "unavailable"}.`,
+            `Electricity: ${snapshot.contextStatus.grid}; observed ${snapshot.grid?.observedAt ?? "unavailable"}.`,
+            `Official notices: ${warningsCurrent ? "current source" : "unconfirmed"}. Check Met Éireann for the complete notice and timing.`
+          ]
+        }))}>Save this briefing</button>
+        <details className="feed-coverage"><summary>Explore electricity, transport and river coverage</summary>
         <div className="what-matters-grid">
         <button type="button" className="pulse-card grid" onClick={() => focusContext("grid")}>
           <span><i>ϟ</i> All-island electricity</span>
@@ -3155,6 +3046,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </button>
         </div>
 
+        </details>
         <details className="activity-context">
           <summary>{timeMode === "past" ? "Historical guidance note" : "Activity context"}</summary>
           {timeMode === "past" ? (
@@ -3220,6 +3112,70 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </details>
       </section>
 
+          <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
+          <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
+          <FreshnessStrip
+            timeMode={timeMode}
+            historyState={historyState}
+            historyGaps={historyGaps}
+            connectionStatus={connectionStatus}
+            serviceDisplayState={serviceDisplayState}
+            lastSuccessLabel={lastSuccessLabel}
+            connectionLabel={connectionLabel}
+            lastCheckedAt={lastCheckedAt}
+            now={now}
+            online={online}
+            servicesRefreshing={servicesRefreshing}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            snapshot={snapshot}
+            weatherDisplayStatus={weatherDisplayStatus}
+            trainDisplayStatus={trainDisplayStatus}
+            riverDisplayStatus={riverDisplayStatus}
+            latestWeatherObs={latestWeatherObs}
+            weatherStale={weatherStale}
+            transitStale={transitStale}
+            riverDataStale={riverDataStale}
+            onRefresh={() => void refreshAllRef.current()}
+          />
+          <OfficialNotices
+            timeMode={timeMode}
+            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && warningsCurrent && visibleWarnings.length === 0}
+            layers={layers}
+            visibleWarnings={visibleWarnings}
+            activeWarning={activeWarning}
+            warningsUnavailable={warningsUnavailable}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            snapshot={snapshot}
+            now={now}
+            lastSuccessLabel={lastSuccessLabel}
+            historyGaps={historyGaps}
+            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
+          />
+        </div>
+      </section>
+
+      {selected && createPortal(
+        <div className="detail-modal-layer" onClick={(event) => {
+          if (event.target === event.currentTarget) setSelected(null);
+        }}>
+          <DeferredDetailCard
+            selected={selected}
+            historical={timeMode === "past"}
+            onClose={() => setSelected(null)}
+            openerRef={markerOpenerRef}
+            onFocusFallback={parkMapFocusAfterDetailClose}
+            onStackChange={(index) => {
+              setSelected((current) => current?.type === "movement-stack"
+                ? { ...current, index }
+                : current
+              );
+            }}
+          />
+        </div>,
+        document.body
+      )}
+
       <WeatherTimeline
         timeMode={timeMode}
         timeline={snapshot.timeline}
@@ -3244,7 +3200,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </footer>
     </main>
 
-    <ExplorePanel
+    {panelOpen && <ExplorePanel
       open={panelOpen}
       onOpenChange={setExplorePanelOpen}
       openerRef={panelOpenerRef}
@@ -3258,7 +3214,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       snapshot={snapshot}
       historyEnvelope={historyState.envelope}
       historyGaps={historyGaps}
-    />
+    />}
     </>
   );
 }
