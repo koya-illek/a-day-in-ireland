@@ -260,3 +260,10 @@
 .atlas.atlas .historyControls :global(.history-picker input) { width: 100%; }
 .atlas.atlas .historyControls :global(.history-apply) { grid-column: 1 / -1; }
 .atlas.atlas .notices :global(.official-notices-empty), .atlas.atlas .notices :global(.official-notices-caveat) { background: #eeefe4; color: #536650; border-color: #ccd3bf; box-shadow: none; }
+.atlas.atlas .sources :global(.freshness-details > summary) { background: #eeefe4; color: #2e5140; border-color: #bcc9b0; font-family: var(--font-sans), sans-serif; text-transform: none; }
+.atlas.atlas .sources :global(.freshness-details > summary)::after { color: #456b43; }
+.atlas.atlas .historyControls :global(.history-picker label), .atlas.atlas .historyControls :global(.history-scrubber > span) { color: #233b38; }
+.atlas.atlas .historyControls :global(.history-result), .atlas.atlas .historyControls :global(.history-comparison), .atlas.atlas .historyControls :global(.history-period-summary) { background: #eeefe4; color: #233b38; border-color: #bcc9b0; }
+.atlas.atlas .historyControls :global(.history-period-summary) { grid-template-columns: minmax(0, 1fr); }
+.atlas.atlas .historyControls :global(.history-period-summary dd), .atlas.atlas .historyControls :global(.history-result a) { color: #2e5140; }
+.atlas.atlas .historyControls :global(.history-error), .atlas.atlas .historyControls :global(.history-result.error), .atlas.atlas .historyControls :global(.history-result.gap) { color: #843b22; border-color: #ac7343; }
