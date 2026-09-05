@@ -25,6 +25,7 @@ const formatWarningDate = (value: string) => {
 export function OfficialNotices({
   timeMode,
   compact,
+  condensed = false,
   layers,
   visibleWarnings,
   activeWarning,
@@ -39,6 +40,7 @@ export function OfficialNotices({
 }: {
   timeMode: TimeMode;
   compact: boolean;
+  condensed?: boolean;
   layers: ReadonlySet<Layer>;
   visibleWarnings: WeatherWarning[];
   activeWarning: WeatherWarning | null;
@@ -90,6 +92,7 @@ export function OfficialNotices({
                 const timing = warningTiming(warning, now.getTime());
                 const isActive = timing === "active";
                 const warningIdentity = warning.id || warning.capId || `${warning.headline}-${warningIndex}`;
+                const NoticeContent = condensed ? "details" : "div";
                 return (
                   <aside
                     id={isActive && warning === activeWarning ? "active-warning" : undefined}
@@ -98,8 +101,8 @@ export function OfficialNotices({
                     aria-label={`Official Met Éireann ${isActive ? "active" : "upcoming"} notice ${timeMode === "past" ? "at the selected time " : ""}for ${warningScopeText(warning)}`}
                   >
                     <span className="warning-badge">{timeMode === "past" ? isActive ? "Active at capture" : "Upcoming at capture" : isActive ? "Official notice" : "Upcoming notice"}</span>
-                    <div className="warning-copy">
-                      <h3>{warning.headline}</h3>
+                    <NoticeContent className="warning-copy" open={condensed && ["red", "orange"].includes(warning.level?.toLowerCase() ?? "") ? true : undefined}>
+                      {condensed ? <summary><h3>{warning.headline}</h3></summary> : <h3>{warning.headline}</h3>}
                       <dl className="warning-key-facts">
                         <div><dt>Scope</dt><dd>{warningScopeText(warning)}</dd></div>
                         <div>
@@ -115,7 +118,7 @@ export function OfficialNotices({
                           <p>Met Éireann · {warning.level || "Unspecified"} level · severity {warning.severity || "not specified"} · issued {formatWarningDate(warning.issued)} · updated {formatWarningDate(warning.updated)}</p>
                         </details>
                       </div>
-                    </div>
+                    </NoticeContent>
                   </aside>
                 );
               })}

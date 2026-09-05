@@ -72,7 +72,7 @@ export function WeatherTimeline({
                 <strong>Temperature</strong>
                 <span>{temperatureMin !== null ? `${temperatureMin}°C` : "–"}</span>
               </div>
-              <div className="timeline-chart" role="group" aria-label={`${timeMode === "past" ? "Stored" : sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
+              <div className="timeline-chart" style={{ minWidth: timeline.length * 48, display: "grid", gridTemplateColumns: `repeat(${timeline.length}, minmax(0, 1fr))`, gap: 0 }} role="group" aria-label={`${timeMode === "past" ? "Stored" : sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
             <svg className="timeline-temperature-line" viewBox={`0 0 ${timeline.length * 48} 100`} preserveAspectRatio="none" aria-hidden="true">
               {timeline.map((point, index) => {
                 const previous = timeline[index - 1];

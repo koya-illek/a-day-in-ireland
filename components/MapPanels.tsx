@@ -22,7 +22,8 @@ export function DetailCard({
   onStackChange,
   openerRef,
   onFocusFallback,
-  historical = false
+  historical = false,
+  embedded = false
 }: {
   selected: MapSelection;
   onClose: () => void;
@@ -30,6 +31,7 @@ export function DetailCard({
   openerRef: { current: SVGElement | null };
   onFocusFallback?: () => void;
   historical?: boolean;
+  embedded?: boolean;
 }) {
   const stack = selected.type === "movement-stack" ? selected : null;
   const resolved: Selection = selected.type === "movement-stack"
@@ -87,19 +89,20 @@ export function DetailCard({
     openerRef.current = null;
     const dialog = dialogRef.current;
     const previousOverflow = document.documentElement.style.overflow;
-    document.documentElement.style.overflow = "hidden";
+    if (!embedded) document.documentElement.style.overflow = "hidden";
     closeRef.current?.focus({ preventScroll: true });
     if (!dialog) {
       document.documentElement.style.overflow = previousOverflow;
       return undefined;
     }
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (embedded && !dialog.contains(document.activeElement)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         onCloseRef.current();
         return;
       }
-      if (event.key !== "Tab") return;
+      if (embedded || event.key !== "Tab") return;
       const focusable = [...dialog.querySelectorAll<HTMLElement>(
         "button, a[href], input, select, textarea, [tabindex]:not([tabindex='-1'])"
       )].filter((element) => !element.hasAttribute("disabled") && element.getClientRects().length > 0);
@@ -131,15 +134,15 @@ export function DetailCard({
         focusFallback();
       }
     };
-  }, [openerRef]);
+  }, [openerRef, embedded]);
 
   return (
     <aside
       ref={dialogRef}
       className={`station-card detail-${type} ${stack ? "has-movement-browser" : ""}`}
-      aria-modal="true"
+      aria-modal={embedded ? undefined : true}
       aria-labelledby="map-detail-title"
-      role="dialog"
+      role={embedded ? "region" : "dialog"}
       tabIndex={-1}
     >
       <button type="button" ref={closeRef} onClick={onClose} aria-label="Close map details">×</button>

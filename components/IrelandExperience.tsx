@@ -102,6 +102,9 @@ const HistoryControls = dynamic(() => import("./HistoryControls").then((module) 
 const BriefingComparison = dynamic(() => import("./BriefingComparison").then((module) => module.BriefingComparison));
 const ExplorePanel = dynamic(() => import("./ExplorePanel").then((module) => module.ExplorePanel));
 import { OfficialNotices } from "./OfficialNotices";
+const AtlasFrame = dynamic(() => import("./atlas/AtlasFrame"));
+
+import { PlacePicker } from "./PlacePicker";
 import { WeatherTimeline } from "./WeatherTimeline";
 import { MapCanvas } from "./MapCanvas";
 import { WorkspaceHeading } from "./WorkspaceHeading";
@@ -388,7 +391,7 @@ const historyGapForFocus = (gaps: HistoryGap[], focus: ContextFocus) => {
 };
 
 
-export default function IrelandExperience({ initialSnapshot }: { initialSnapshot: LiveSnapshot }) {
+export default function IrelandExperience({ initialSnapshot, atlas = false }: { initialSnapshot: LiveSnapshot; atlas?: boolean }) {
   const [interfaceTheme, setInterfaceTheme] = useState<"dark" | "light">("dark");
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
   const [wallClockNow, setWallClockNow] = useState(() => new Date(initialSnapshot.generatedAt));
@@ -666,7 +669,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     const map = mapRef.current;
     if (!map || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return;
+      if (!entry || entry.contentRect.width <= 0 || entry.contentRect.height <= 0) return;
       const width = Math.max(1, Math.round(entry.contentRect.width));
       const height = Math.max(1, Math.round(entry.contentRect.height));
       setMapDimensions((current) => current.width === width && current.height === height
@@ -915,10 +918,10 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     // The detail card and the explore drawer are both modal surfaces. While
     // either is open, everything behind it is inert so pointer and
     // screen-reader browse mode cannot reach hidden content.
-    if (!selected && !panelOpen) return;
+    if ((!selected || atlas) && !panelOpen) return;
     experience.setAttribute("inert", "");
     return () => experience.removeAttribute("inert");
-  }, [selected, panelOpen]);
+  }, [selected, panelOpen, atlas]);
 
   useEffect(() => {
     // A detail card must describe something still on the map: provider health
@@ -2292,6 +2295,11 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         ? historyState.envelope?.resolvedAt ?? historyState.requestedAt
         : null
     });
+    const shareUrl = new URL(url);
+    if (atlas && selected) {
+      const reading = selected.type === "movement-stack" ? selected.items[selected.index] : selected;
+      if (reading) shareUrl.searchParams.set("reading", `${reading.type}:${reading.item.id}`);
+    }
     const shareData = {
       title: "A Day in Ireland",
       text: timeMode === "past" && (historyState.envelope?.resolvedAt ?? historyState.requestedAt)
@@ -2299,7 +2307,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         : selectedPlace.id === "island" || selectedPlaceIsEphemeral
           ? "See weather, movement, water and energy across Ireland, happening now."
           : `See what is happening around ${selectedPlace.name} right now.`,
-      url
+      url: shareUrl.toString()
     };
     try {
       if (navigator.share) {
@@ -2319,7 +2327,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         window.prompt("Copy this link", shareData.url);
       }
     }
-  }, [activePreset, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, scheduleShareReset, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
+  }, [activePreset, atlas, selected, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, scheduleShareReset, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
 
   useLayoutEffect(() => {
     let storedTheme: string | null = null;
@@ -2347,126 +2355,43 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
     });
   }, []);
 
-  // The explore drawer renders outside <main> so the modal-inert effect can
-  // hide the page behind it without also inerting the drawer itself.
-  return (
-    <>
-    <main
-      ref={experienceRef}
-      className={`experience ${isNight ? "is-night" : ""} ${timeMode === "past" ? "is-history" : "is-now"}`}
-      data-day-phase={dayPhase}
-    >
-      <a className="skip-link" href="#live-map">Skip to {timeMode === "past" ? "historical" : "live"} map</a>
-      <header className="topbar">
-        <Link className="brand" href="/" aria-label="A Day in Ireland, home">
-          <span className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32">
-              <path className="brand-sun" d="M11 15a5 5 0 0 1 10 0" />
-              <path className="brand-horizon" d="M5 18h22M8 22h16" />
-            </svg>
-          </span>
-          <span><b>A Day in Ireland</b><small>{timeMode === "past"
-            ? "Historical island view"
-            : serviceDisplayState === "offline" || serviceDisplayState === "cached" || serviceDisplayState === "stale"
-              ? "Saved island view"
-              : serviceDisplayState === "unavailable"
-                ? "Island view"
-                : "Live island view"}</small></span>
-        </Link>
-        <div
-          className="live-state"
-          data-connection-status={connectionStatus}
-          data-service-state={serviceDisplayState}
-          title={timeMode === "past"
-            ? `${connectionLabel}. Stored record ${lastSuccessLabel}.`
-            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. Checked ${formatTime(lastCheckedAt)}.`}
-        >
-          {/* Only the state words are a live region; the volatile clock text
-              below would re-read the whole strip every refresh otherwise. */}
-          <span role="status" aria-live="polite" aria-atomic="true" className="live-state-summary">
-            <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} aria-hidden="true" />
-            <span className="network-state">{connectionLabel}</span>
-            <span>{timeMode === "past"
-              ? historyState.status === "ready"
-                ? isDailyHistorySummary ? "Stored daily summary" : "Stored observations"
-                : historyState.status === "loading" ? "Loading history" : "History unavailable"
-              : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
-          </span>
-          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}</time>
-        </div>
-        <nav className="header-actions" aria-label="Experience controls">
-          <button
-            type="button"
-            className="theme-button"
-            aria-label="Dark mode"
-            aria-pressed={interfaceTheme === "dark"}
-            onClick={toggleInterfaceTheme}
-          >
-            <span aria-hidden="true">{interfaceTheme === "dark" ? "☼" : "☾"}</span>
-            {interfaceTheme === "dark" ? "Light" : "Dark"}
-          </button>
-          <button
-            type="button"
-            className="share-button"
-            data-share-place-id={selectedPlace.id}
-            aria-label={`Share this view for ${selectedPlace.name}`}
-            onClick={() => void shareExperience()}
-          >
-            {shareStatus === "copied" ? "Copied" : "Share"}
-            {/* Single announcement channel on purpose: swapping the accessible
-               name as well made screen readers hear "copied" twice. */}
-            <span className="sr-only" role="status" aria-live="polite">
-              {shareStatus === "copied" ? "Share link copied to clipboard." : ""}
-            </span>
-          </button>
-          <button
-            ref={panelOpenerRef}
-            type="button"
-            className="panel-button"
-            onClick={(event) => {
-              panelOpenerRef.current = event.currentTarget;
-              setPanelOpen((value) => !value);
-            }}
-            aria-expanded={panelOpen}
-          >
-            Layers <span aria-hidden="true">⌁</span>
-          </button>
-        </nav>
-      </header>
+  const saveBriefing = () => void import("../lib/download-briefing").then(({ downloadBriefing }) => downloadBriefing({
+          date: `${formatDate(now)}, ${formatTime(now)} Irish time`,
+          summary: timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence,
+          facts: heroFacts.map((fact) => `${fact.label}: ${fact.value}. ${fact.detail}`),
+          status: timeMode === "past" ? "Historical observations" : connectionLabel,
+          sourceTimes: [
+            `Weather: ${snapshot.sourceStatus}; latest observation ${latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : "unavailable"}.`,
+            `Electricity: ${snapshot.contextStatus.grid}; observed ${snapshot.grid?.observedAt ?? "unavailable"}.`,
+            `Official notices: ${warningsCurrent ? "current source" : "unconfirmed"}. Check Met Éireann for the complete notice and timing.`
+          ]
+        }));
 
-      <section className="dashboard-shell">
-        <aside className="section-rail" aria-label="Section shortcuts">
-          <nav className="section-nav" aria-label="Section shortcuts">
-            {EXPERIENCE_SECTIONS.map((section) => (
-              <a
-                key={section.key}
-                href={`#${section.id}`}
-                aria-current={activeSection === section.key ? "location" : undefined}
-              >
-                <b>{section.label}</b>
-                <small>{section.detail}</small>
-              </a>
-            ))}
-          </nav>
+  const comparisonUrl = new URL(serializeViewState(`https://day.illek.ie${atlas ? "/" : "/v2"}`, {
+    placeId: selectedPlaceIsEphemeral ? DEFAULT_PLACE_ID : selectedPlace.id,
+    view: activePreset, layers, zoom: mapView.scale, panX: mapView.x, panY: mapView.y,
+    at: timeMode === "past" ? historyState.envelope?.resolvedAt ?? historyState.requestedAt : null
+  }));
+  const comparisonHref = comparisonUrl.pathname + comparisonUrl.search;
 
-        </aside>
-
-        <div className="map-workspace">
-          <WorkspaceHeading
-            now={now}
-            timeMode={timeMode}
-            heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
-            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. Checked ${formatTime(lastCheckedAt)} Irish time.` : heroSecondary}
-            facts={heroFacts}
-            onFact={(action) => {
-              if (action === "notices") {
-                document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
-                return;
-              }
-              focusContext(action);
-            }}
-          />
-          <PlaceContext
+  const historySurface = (
+timeMode === "past" ? <HistoryControls
+          mode={timeMode}
+          movementView={layers.has("trains") || layers.has("transit")}
+          range={historyRange}
+          history={historyState}
+          comparison={historyComparison}
+          onNow={returnToNow}
+          onPast={() => void enterPast()}
+          onRequest={(at) => void loadHistoryAt(at)}
+          onCompare={() => void compareHistoryWithNow()}
+        /> : <section className="history-controls" aria-label="Time view"><div className="history-mode-row"><div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
+          <button type="button" aria-pressed="true" onClick={returnToNow}>Now</button>
+          <button type="button" aria-pressed="false" onClick={() => void enterPast()}>Past</button>
+        </div></div></section>
+  );
+  const placeSurface = (
+<PlaceContext
             selectedPlace={selectedPlace}
             selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
             placeOptions={placeOptions}
@@ -2489,35 +2414,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             airGap={historyGapForFocus(historyGaps, "air")?.detail ?? null}
             now={now}
           />
-
-      <section
-        id="live-map"
-        className="map-stage"
-        ref={mapSectionRef}
-        tabIndex={-1}
-        aria-label={`${timeMode === "past" ? "Historical" : "Live"} map of Ireland`}
-      >
-        <div className="map-explorer-heading">
-          <div>
-            <p className="utility-label">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
-            <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
-            <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
-          </div>
-        </div>
-        {timeMode === "past" ? <HistoryControls
-          mode={timeMode}
-          movementView={layers.has("trains") || layers.has("transit")}
-          range={historyRange}
-          history={historyState}
-          comparison={historyComparison}
-          onNow={returnToNow}
-          onPast={() => void enterPast()}
-          onRequest={(at) => void loadHistoryAt(at)}
-          onCompare={() => void compareHistoryWithNow()}
-        /> : <section className="history-controls" aria-label="Time view"><div className="history-mode-row"><div className="history-mode-toggle" role="group" aria-label="Choose current or historical conditions">
-          <button type="button" aria-pressed="true" onClick={returnToNow}>Now</button>
-          <button type="button" aria-pressed="false" onClick={() => void enterPast()}>Past</button>
-        </div></div></section>}
+  );
+  const themeSurface = (
         <nav className="map-presets" aria-label="Map view shortcuts">
           <button type="button" className={activePreset === "weather" ? "active" : ""} aria-pressed={activePreset === "weather"} onClick={() => showPreset("weather")}><span className="preset-dot weather" aria-hidden="true" /><span className="preset-label">Weather</span></button>
           <button type="button" className={activePreset === "movement" ? "active" : ""} aria-pressed={activePreset === "movement"} onClick={() => showPreset("movement")}><span className="preset-dot movement" aria-hidden="true" /><span className="preset-label">Movement</span></button>
@@ -2534,6 +2432,24 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
             <span className="preset-label">{activePreset === "custom" ? `Custom · ${layers.size} layers` : "More layers"}</span>
           </button>
         </nav>
+  );
+  const mapSurface = (
+<section
+        id="live-map"
+        className={atlas ? "atlas-map" : "map-stage"}
+        ref={mapSectionRef}
+        tabIndex={-1}
+        aria-label={`${timeMode === "past" ? "Historical" : "Live"} map of Ireland`}
+      >
+        <div className="map-explorer-heading">
+          <div>
+            <p className="utility-label">Living map · {timeMode === "past" ? "stored conditions" : "near real time"}</p>
+            <h2>Ireland {timeMode === "past" ? "at the selected time" : "on the map"}</h2>
+            <p>{timeMode === "past" ? "Choose a stored time, then explore only the observations retained for that record. Missing detail is never replaced with live data or inferred as zero." : "The map keeps one set of presets, one layer drawer and the original source meaning of every signal."}</p>
+          </div>
+        </div>
+        {!atlas && historySurface}
+{!atlas && themeSurface}
 
         <details className="map-legend">
           <summary>Legend · {layers.size} layers shown</summary>
@@ -2949,6 +2865,260 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         </div>
 
       </section>
+  );
+  const freshnessSurface = (
+<FreshnessStrip
+            timeMode={timeMode}
+            historyState={historyState}
+            historyGaps={historyGaps}
+            connectionStatus={connectionStatus}
+            serviceDisplayState={serviceDisplayState}
+            lastSuccessLabel={lastSuccessLabel}
+            connectionLabel={connectionLabel}
+            lastCheckedAt={lastCheckedAt}
+            now={now}
+            online={online}
+            servicesRefreshing={servicesRefreshing}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            snapshot={snapshot}
+            weatherDisplayStatus={weatherDisplayStatus}
+            trainDisplayStatus={trainDisplayStatus}
+            riverDisplayStatus={riverDisplayStatus}
+            latestWeatherObs={latestWeatherObs}
+            weatherStale={weatherStale}
+            transitStale={transitStale}
+            riverDataStale={riverDataStale}
+            onRefresh={() => void refreshAllRef.current()}
+          />
+  );
+  const noticesSurface = (
+<OfficialNotices
+            condensed={atlas}
+            timeMode={timeMode}
+            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && warningsCurrent && visibleWarnings.length === 0}
+            layers={atlas ? new Set<Layer>(["warnings"]) : layers}
+            visibleWarnings={visibleWarnings}
+            activeWarning={activeWarning}
+            warningsUnavailable={warningsUnavailable}
+            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+            online={online}
+            snapshot={snapshot}
+            now={now}
+            lastSuccessLabel={lastSuccessLabel}
+            historyGaps={historyGaps}
+            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
+          />
+  );
+  const timelineSurface = (
+<WeatherTimeline
+        timeMode={timeMode}
+        timeline={snapshot.timeline}
+        sourceStatus={snapshot.sourceStatus}
+        serviceDisplayState={serviceDisplayState}
+        isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
+        selection={timelineSelection}
+        onSelect={setTimelineSelection}
+      />
+  );
+  const layersSurface = (
+panelOpen && <ExplorePanel
+      open={panelOpen}
+      onOpenChange={setExplorePanelOpen}
+      openerRef={panelOpenerRef}
+      onFocusFallback={parkMapFocusAfterDetailClose}
+      timeMode={timeMode}
+      activePreset={activePreset}
+      layers={layers}
+      layerGroups={LAYER_GROUPS}
+      onShowPreset={showPreset}
+      onToggleLayer={toggleLayer}
+      snapshot={snapshot}
+      historyEnvelope={historyState.envelope}
+      historyGaps={historyGaps}
+    />
+  );
+  if (atlas) return <>
+    <AtlasFrame
+      comparisonHref={comparisonHref}
+      experienceRef={experienceRef}
+      timeMode={timeMode}
+      preset={activePreset}
+      placeName={selectedPlace.name}
+      placeId={selectedPlace.id}
+      dateLabel={formatDate(now)}
+      timeLabel={timeMode === "past" ? `Stored ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}
+      statusLabel={timeMode === "past" ? "Stored observations" : serviceDisplayState === "live" ? "Live observations" : connectionLabel}
+      summary={timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence}
+      search={<PlacePicker places={placeOptions} selected={selectedPlace} onChoose={choosePlace} onSearch={() => { if (!directoryLoaded || directoryError) void loadPlaceDirectory(); }} />}
+      themes={themeSurface}
+      map={mapSurface}
+      place={placeSurface}
+      history={historySurface}
+      freshness={freshnessSurface}
+      notices={noticesSurface}
+      timeline={timelineSurface}
+      sky={<><SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} /><ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} /></>}
+      movement={<dl>
+        <div><dt>Trains reporting</dt><dd>{historyState.envelope?.movementSummary.rail?.total ?? "Unavailable"}</dd></div>
+        <div><dt>Trains running</dt><dd>{historyState.envelope?.movementSummary.rail?.running ?? "Unavailable"}</dd></div>
+        <div><dt>Public transport vehicles</dt><dd>{historyState.envelope?.movementSummary.transit?.vehicles ?? "Unavailable"}</dd></div>
+        <div><dt>Routes represented</dt><dd>{historyState.envelope?.movementSummary.transit?.routes ?? "Unavailable"}</dd></div>
+      </dl>}
+      national={<DeferredGridPanel historical={timeMode === "past"} grid={online && retainedContextStatuses.has(snapshot.contextStatus.grid) ? snapshot.grid : null} status={snapshot.contextStatus.grid} />}
+      changes={timeMode === "now" ? <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} /> : null}
+      onNow={returnToNow}
+      onPast={() => void enterPast()}
+      onSave={saveBriefing}
+      onShare={() => void shareExperience()}
+      shareLabel={shareStatus === "copied" ? "Link copied" : "Share view"}
+      selected={selected}
+      onSelect={setSelected}
+      observations={[
+        ...(layers.has("weather") || layers.has("wind") ? displayedStations.map((item): MapSelection => ({ type: "station", item })) : []),
+        ...(layers.has("rivers") ? displayedRivers.map((item): MapSelection => ({ type: "river", item })) : []),
+        ...(layers.has("tides") ? displayedTides.map((item): MapSelection => ({ type: "tide", item })) : []),
+        ...(layers.has("air") ? displayedAirQuality.map((item): MapSelection => ({ type: "air", item })) : []),
+        ...(layers.has("sea") ? displayedMarine.map((item): MapSelection => ({ type: "buoy", item })) : []),
+        ...(layers.has("bathing") ? displayedBathingAlerts.map((item): MapSelection => ({ type: "bathing", item })) : []),
+        ...(layers.has("earthquakes") ? displayedEarthquakes.map((item): MapSelection => ({ type: "earthquake", item })) : []),
+        ...movementStacks.flatMap(stack => stack.items)
+      ]}
+      detail={selected ? <DeferredDetailCard
+        embedded
+        selected={selected}
+        historical={timeMode === "past"}
+        onClose={() => setSelected(null)}
+        openerRef={markerOpenerRef}
+        onFocusFallback={parkMapFocusAfterDetailClose}
+        onStackChange={(index) => setSelected(current => current?.type === "movement-stack" ? { ...current, index } : current)}
+      /> : null}
+    />
+    {layersSurface}
+  </>;
+
+  // The explore drawer renders outside <main> so the modal-inert effect can
+  // hide the page behind it without also inerting the drawer itself.
+  return (
+    <>
+    <main
+      ref={experienceRef}
+      className={`experience ${isNight ? "is-night" : ""} ${timeMode === "past" ? "is-history" : "is-now"}`}
+      data-day-phase={dayPhase}
+    >
+      <a className="skip-link" href="#live-map">Skip to {timeMode === "past" ? "historical" : "live"} map</a>
+      <header className="topbar">
+        <Link className="brand" href="/" aria-label="A Day in Ireland, home">
+          <span className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path className="brand-sun" d="M11 15a5 5 0 0 1 10 0" />
+              <path className="brand-horizon" d="M5 18h22M8 22h16" />
+            </svg>
+          </span>
+          <span><b>A Day in Ireland</b><small>{timeMode === "past"
+            ? "Historical island view"
+            : serviceDisplayState === "offline" || serviceDisplayState === "cached" || serviceDisplayState === "stale"
+              ? "Saved island view"
+              : serviceDisplayState === "unavailable"
+                ? "Island view"
+                : "Live island view"}</small></span>
+        </Link>
+        <div
+          className="live-state"
+          data-connection-status={connectionStatus}
+          data-service-state={serviceDisplayState}
+          title={timeMode === "past"
+            ? `${connectionLabel}. Stored record ${lastSuccessLabel}.`
+            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. Checked ${formatTime(lastCheckedAt)}.`}
+        >
+          {/* Only the state words are a live region; the volatile clock text
+              below would re-read the whole strip every refresh otherwise. */}
+          <span role="status" aria-live="polite" aria-atomic="true" className="live-state-summary">
+            <span className={`live-dot ${serviceDisplayState === "offline" ? "offline" : serviceDisplayState === "live" ? "live" : "partial"}`} aria-hidden="true" />
+            <span className="network-state">{connectionLabel}</span>
+            <span>{timeMode === "past"
+              ? historyState.status === "ready"
+                ? isDailyHistorySummary ? "Stored daily summary" : "Stored observations"
+                : historyState.status === "loading" ? "Loading history" : "History unavailable"
+              : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
+          </span>
+          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}</time>
+        </div>
+        <nav className="header-actions" aria-label="Experience controls">
+          <Link href={comparisonHref} prefetch={false} className="share-button">Try v2</Link>
+          <button
+            type="button"
+            className="theme-button"
+            aria-label="Dark mode"
+            aria-pressed={interfaceTheme === "dark"}
+            onClick={toggleInterfaceTheme}
+          >
+            <span aria-hidden="true">{interfaceTheme === "dark" ? "☼" : "☾"}</span>
+            {interfaceTheme === "dark" ? "Light" : "Dark"}
+          </button>
+          <button
+            type="button"
+            className="share-button"
+            data-share-place-id={selectedPlace.id}
+            aria-label={`Share this view for ${selectedPlace.name}`}
+            onClick={() => void shareExperience()}
+          >
+            {shareStatus === "copied" ? "Copied" : "Share"}
+            {/* Single announcement channel on purpose: swapping the accessible
+               name as well made screen readers hear "copied" twice. */}
+            <span className="sr-only" role="status" aria-live="polite">
+              {shareStatus === "copied" ? "Share link copied to clipboard." : ""}
+            </span>
+          </button>
+          <button
+            ref={panelOpenerRef}
+            type="button"
+            className="panel-button"
+            onClick={(event) => {
+              panelOpenerRef.current = event.currentTarget;
+              setPanelOpen((value) => !value);
+            }}
+            aria-expanded={panelOpen}
+          >
+            Layers <span aria-hidden="true">⌁</span>
+          </button>
+        </nav>
+      </header>
+
+      <section className="dashboard-shell">
+        <aside className="section-rail" aria-label="Section shortcuts">
+          <nav className="section-nav" aria-label="Section shortcuts">
+            {EXPERIENCE_SECTIONS.map((section) => (
+              <a
+                key={section.key}
+                href={`#${section.id}`}
+                aria-current={activeSection === section.key ? "location" : undefined}
+              >
+                <b>{section.label}</b>
+                <small>{section.detail}</small>
+              </a>
+            ))}
+          </nav>
+
+        </aside>
+
+        <div className="map-workspace">
+          <WorkspaceHeading
+            now={now}
+            timeMode={timeMode}
+            heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
+            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. Checked ${formatTime(lastCheckedAt)} Irish time.` : heroSecondary}
+            facts={heroFacts}
+            onFact={(action) => {
+              if (action === "notices") {
+                document.getElementById("official-notices")?.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "start" });
+                return;
+              }
+              focusContext(action);
+            }}
+          />
+{placeSurface}
+
+{mapSurface}
 
       <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" tabIndex={-1} aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
@@ -3001,17 +3171,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
           <summary>What changed since morning?</summary>
           {comparisonOpen && <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} />}
         </details>}
-        <button type="button" className="save-briefing" onClick={() => void import("../lib/download-briefing").then(({ downloadBriefing }) => downloadBriefing({
-          date: `${formatDate(now)}, ${formatTime(now)} Irish time`,
-          summary: timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence,
-          facts: heroFacts.map((fact) => `${fact.label}: ${fact.value}. ${fact.detail}`),
-          status: timeMode === "past" ? "Historical observations" : connectionLabel,
-          sourceTimes: [
-            `Weather: ${snapshot.sourceStatus}; latest observation ${latestWeatherObs > 0 ? new Date(latestWeatherObs).toISOString() : "unavailable"}.`,
-            `Electricity: ${snapshot.contextStatus.grid}; observed ${snapshot.grid?.observedAt ?? "unavailable"}.`,
-            `Official notices: ${warningsCurrent ? "current source" : "unconfirmed"}. Check Met Éireann for the complete notice and timing.`
-          ]
-        }))}>Save this briefing</button>
+        <button type="button" className="save-briefing" onClick={saveBriefing}>Save this briefing</button>
         <details className="feed-coverage"><summary>Explore electricity, transport and river coverage</summary>
         <div className="what-matters-grid">
         <button type="button" className="pulse-card grid" onClick={() => focusContext("grid")}>
@@ -3114,44 +3274,8 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
 
           <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
           <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
-          <FreshnessStrip
-            timeMode={timeMode}
-            historyState={historyState}
-            historyGaps={historyGaps}
-            connectionStatus={connectionStatus}
-            serviceDisplayState={serviceDisplayState}
-            lastSuccessLabel={lastSuccessLabel}
-            connectionLabel={connectionLabel}
-            lastCheckedAt={lastCheckedAt}
-            now={now}
-            online={online}
-            servicesRefreshing={servicesRefreshing}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            snapshot={snapshot}
-            weatherDisplayStatus={weatherDisplayStatus}
-            trainDisplayStatus={trainDisplayStatus}
-            riverDisplayStatus={riverDisplayStatus}
-            latestWeatherObs={latestWeatherObs}
-            weatherStale={weatherStale}
-            transitStale={transitStale}
-            riverDataStale={riverDataStale}
-            onRefresh={() => void refreshAllRef.current()}
-          />
-          <OfficialNotices
-            timeMode={timeMode}
-            compact={timeMode !== "past" && layers.has("warnings") && !isConnectingWithoutSnapshot && warningsCurrent && visibleWarnings.length === 0}
-            layers={layers}
-            visibleWarnings={visibleWarnings}
-            activeWarning={activeWarning}
-            warningsUnavailable={warningsUnavailable}
-            isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-            online={online}
-            snapshot={snapshot}
-            now={now}
-            lastSuccessLabel={lastSuccessLabel}
-            historyGaps={historyGaps}
-            historyGapDetail={(gaps) => historyGapForFocus(gaps, "warnings")?.detail}
-          />
+{freshnessSurface}
+{noticesSurface}
         </div>
       </section>
 
@@ -3176,15 +3300,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
         document.body
       )}
 
-      <WeatherTimeline
-        timeMode={timeMode}
-        timeline={snapshot.timeline}
-        sourceStatus={snapshot.sourceStatus}
-        serviceDisplayState={serviceDisplayState}
-        isConnectingWithoutSnapshot={isConnectingWithoutSnapshot}
-        selection={timelineSelection}
-        onSelect={setTimelineSelection}
-      />
+{timelineSurface}
 
       <footer>
         <div>
@@ -3200,21 +3316,7 @@ export default function IrelandExperience({ initialSnapshot }: { initialSnapshot
       </footer>
     </main>
 
-    {panelOpen && <ExplorePanel
-      open={panelOpen}
-      onOpenChange={setExplorePanelOpen}
-      openerRef={panelOpenerRef}
-      onFocusFallback={parkMapFocusAfterDetailClose}
-      timeMode={timeMode}
-      activePreset={activePreset}
-      layers={layers}
-      layerGroups={LAYER_GROUPS}
-      onShowPreset={showPreset}
-      onToggleLayer={toggleLayer}
-      snapshot={snapshot}
-      historyEnvelope={historyState.envelope}
-      historyGaps={historyGaps}
-    />}
+{layersSurface}
     </>
   );
 }

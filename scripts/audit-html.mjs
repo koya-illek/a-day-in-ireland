@@ -4,6 +4,7 @@ import { join } from "node:path";
 const root = process.argv[2] ?? join(process.cwd(), "dist", "client");
 const canonicalOrigin = "https://day.illek.ie";
 const documents = [
+  { file: "v2.html", path: "/v2", indexable: false },
   { file: "index.html", path: "", indexable: true },
   { file: "about.html", path: "/about", indexable: true },
   { file: "data.html", path: "/data", indexable: true },
@@ -74,7 +75,7 @@ for (const document of documents) {
       fail(document.file, "non-indexable document must declare noindex");
     }
     if (/<meta\b[^>]*\bproperty="og:url"[^>]*\bcontent="https:\/\/day\.illek\.ie\/?"/i.test(html)) {
-      fail(document.file, "404 document must not inherit the homepage Open Graph URL");
+      fail(document.file, "non-indexable document must not inherit the homepage Open Graph URL");
     }
   }
 
