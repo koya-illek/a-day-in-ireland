@@ -181,3 +181,9 @@ npm run check:budgets
 ## Experience and operations
 
 See [September experience changes](docs/experience-review.md) for the daily briefing, town directory and history decisions. Use [the operations guide](docs/production/operations.md) for read-only provider and capture checks.
+
+## License
+
+MIT © Koya Illek. See [LICENSE](LICENSE).
+
+Live service: [day.illek.ie](https://day.illek.ie).
