@@ -1,5 +1,7 @@
 # A Day in Ireland 2.0
 
+An Illek project.
+
 A daily, near-real-time portrait of weather, water, energy and movement across Ireland.
 
 ![A luminous living map of Ireland at night](public/social/day-in-ireland.jpg)
