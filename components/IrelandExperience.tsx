@@ -210,8 +210,8 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   const [activeSection, setActiveSection] = useState<ExperienceSection>("map");
   const [viewHydrated, setViewHydrated] = useState(false);
   const viewHydrationStartedRef = useRef(false);
-  // A hash deep link (#lat=…&lng=…&zoom=…) must be centred against the final
-  // projection, whose scale depends on the measured viewport width.
+  // A hash deep link (#lat=…&lng=…&zoom=…) is centred against the island
+  // Mercator projection (scale 6100). That scale is independent of CSS width.
   const pendingHashViewRef = useRef<{ latitude: number; longitude: number; zoom: number } | null>(null);
   const [timelineSelection, setTimelineSelection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("online");
@@ -1677,9 +1677,6 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       const hashLng = Number(hashParams.get("lng"));
       const hashZoom = Number(hashParams.get("zoom"));
       if (Number.isFinite(hashLat) && Number.isFinite(hashLng) && Number.isFinite(hashZoom) && hashZoom > 1 && hashZoom <= 4) {
-        // The projection scale depends on the measured viewport width, which
-        // is not settled during hydration. Record the target and let the
-        // projection effect centre it once the final scale is known.
         pendingHashViewRef.current = { latitude: hashLat, longitude: hashLng, zoom: hashZoom };
       }
     }
@@ -1692,12 +1689,9 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     setViewHydrated(true);
   }, [directoryLoaded, loadPlaceDirectory, placeOptions, loadHistoryAt, projection, setMapView]);
 
-  // Centre a pending hash deep link against the current projection. The first
-  // application necessarily uses the hydration-default projection; the target
-  // stays pending until the projection changes identity after ResizeObserver
-  // measurement (a different width bucket, or simply a fresh instance), then
-  // recentres once and clears. When the measured width matches the default
-  // exactly, no change ever fires and the first application is already right.
+  // Centre a pending hash deep link against the island projection. The
+  // projection identity is stable (fixed scale 6100), so the first application
+  // is the settled centre.
   const hashViewAppliedProjectionRef = useRef<unknown>(null);
   useEffect(() => {
     const pending = pendingHashViewRef.current;
