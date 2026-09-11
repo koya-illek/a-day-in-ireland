@@ -3,7 +3,7 @@ import { infoPageMetadata } from "../../lib/info-metadata";
 
 export const metadata = infoPageMetadata({
   title: "Privacy",
-  description: "How A Day in Ireland handles privacy: local preferences, optional location and aggregate analytics.",
+  description: "How A Day in Ireland handles privacy: local preferences, optional location and infrastructure logs.",
   path: "/privacy"
 });
 
@@ -33,8 +33,8 @@ export default function PrivacyPage() {
         <p>The map requests some public imagery and data from external providers. Opening an official-source link takes you to that provider’s website and privacy practices.</p>
       </section>
       <section>
-        <h2>Aggregate analytics</h2>
-        <p>Cloudflare Web Analytics measures aggregate page usage and performance. It does not use advertising cookies or create cross-site advertising profiles. Advertising trackers are not part of the experience.</p>
+        <h2>No product analytics beacon</h2>
+        <p>The site does not load Cloudflare Web Analytics, advertising pixels or a first-party usage beacon. Cloudflare may still record standard request logs to operate the Worker. Advertising trackers are not part of the experience.</p>
       </section>
     </InfoPage>
   );

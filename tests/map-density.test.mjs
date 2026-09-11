@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { performance } from "node:perf_hooks";
+import { importStandaloneTypeScript } from "./import-ts.mjs";
 
 const {
   clusterProjectedPoints,
   projectToViewport,
   selectDeclutteredPoints
-} = await import("../lib/map-density.ts");
+} = await importStandaloneTypeScript("../lib/map-density.ts");
 
 const viewport = (overrides = {}) => ({
   scale: 1,

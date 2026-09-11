@@ -26,6 +26,16 @@ Weather, radar and the additional island contexts refresh every five minutes; tr
 
 The NTA integration is credential-aware: without `NTA_API_KEY`, the UI explains that developer access is required and never substitutes scheduled or historical positions. Create a free key at [developer.nationaltransport.ie](https://developer.nationaltransport.ie/), then store it as an encrypted deployment secret.
 
+The checked-in transit destination dictionary is a legacy generated artifact: `feedVersion` and `archiveSha256` in `public/data/transit-destinations.manifest.json` are null until rebuilt. Rebuild from a dated NTA GTFS archive with:
+
+```bash
+NTA_API_KEY=… npm run refresh:transit
+# or
+NTA_GTFS_ARCHIVE=/path/to/gtfs.zip npm run refresh:transit
+```
+
+The same `NTA_API_KEY` Wrangler secret used for live vehicles is required; this repository does not commit it.
+
 ## Cloudflare deployment
 
 The Cloudflare production architecture uses:
@@ -33,10 +43,12 @@ The Cloudflare production architecture uses:
 - A static export in `dist/client`, served through the Worker asset binding.
 - A Worker custom domain on `day.illek.ie` that serves the API and static assets. Development and preview hostnames remain disabled.
 - A SQLite-backed Durable Object as the single global NTA refresh coordinator.
+- A SQLite-backed Durable Object as the shared `/api/contexts` snapshot, so browsers do not fan out independently. Optional `sources` filters are applied before upstream refresh, and expensive misses are rate-limited per IP.
+- `/api/health` reports Cloudflare's Worker version id (`CF_VERSION_METADATA.id`) as `build.deploymentId` when deployed.
 - A 65-second upstream refresh floor and 60-second edge response cache, satisfying the NTA token limit across Cloudflare locations.
 - Independent weather, living and context state merges plus two-attempt browser refreshes prevent a single slow upstream from clearing unrelated healthy layers. Failed providers are marked unavailable instead of being kept live by a stale whole-response cache.
 - Browser-side EEA monitoring-station retrieval, keeping heavy CSV processing outside the Worker context endpoint.
-- Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error. Treat Browser Run as a temporary fetch path, not a second origin of truth.
+- Direct OPW river retrieval where supported, with a globally coordinated 15-minute Cloudflare Browser Run fallback because `waterlevel.ie` currently rejects ordinary Cloudflare Worker HTTPS requests with a contradictory-scheme proxy error. Treat Browser Run as a temporary fetch path, not a second origin of truth. The coordinator skips Browser Rendering while a usable snapshot remains, so a blocked origin cannot burn a session every refresh.
 - The non-Cloudflare server adapter supports an operator-configured river bridge for that same OPW fallback (`RIVER_BRIDGE_URL`, HTTPS only, disabled unless set); treat any such bridge as an operational dependency rather than an origin of truth for the data.
 
 The checked-in Worker candidate is configured for Workers Paid, with one direct `*/15` history Cron and a 1,000 ms CPU ceiling. This describes the local deployment configuration only; it does not imply that the candidate has been deployed. Requests on the custom hostname pass through the Worker, while content-hashed generated data assets are cached for a year at the edge; HTML documents carry no explicit edge caching rule.
@@ -45,11 +57,11 @@ The Worker serves the exported frontend directly from its static asset binding o
 
 Both hosting adapters share one Worker API core (`platform/api-core.js`): provider acquisition, the context refresh state machine, cache tiers, error contracts, and API dispatch are defined exactly once, so endpoint behaviour cannot drift between the Cloudflare production adapter and the alternate hosting adapter.
 
-`/api/health` reports the deployed build's provenance (commit, build time, config and data hashes) by reading `build-provenance.json`, which every build writes into the served assets. Missing or unreadable provenance degrades to `unknown`; it never fails the endpoint.
+`/api/health` reports the deployed build's provenance (commit, build time, config and data hashes, and Cloudflare version id) by reading `build-provenance.json` plus the `CF_VERSION_METADATA` binding. Missing or unreadable provenance degrades to `unknown`; it never fails the endpoint.
 
 The build generates a per-page script CSP: after the static export lands in `dist/client`, `scripts/write-csp-headers.mjs` removes the global template policy and gives each document a `Content-Security-Policy` whose `script-src` lists sha256 hashes of only that page's inline scripts (one policy per document, because Cloudflare's `_headers` format caps line length). `public/_headers` stays valid on its own if that step is skipped.
 
-The API surface is self-describing: `/api/openapi.json` serves an OpenAPI 3.1 document, `/mcp` (mirrored at `/api/mcp`) exposes the same data as read-only MCP tools, and the human-readable contract lives on the `/developers` page.
+The API surface is self-describing: `/api/openapi.json` serves an OpenAPI 3.1 document, and the human-readable contract lives on the `/developers` page. There is no MCP transport.
 
 Decorative road geometry is not part of the JavaScript bundle or the pre-rendered HTML. The map fetches `/map/major-roads.json` once after mount; the URL carries a content-hash version query computed at configure time, and the asset is cached immutably.
 

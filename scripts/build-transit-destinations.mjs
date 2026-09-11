@@ -34,10 +34,18 @@ const parseCsvRow = (row) => {
   return fields;
 };
 
-const trips = execFileSync("unzip", ["-p", archive, "trips.txt"], {
-  encoding: "utf8",
-  maxBuffer: 32 * 1024 * 1024
-}).split(/\r?\n/);
+const unzipText = (name) => {
+  try {
+    return execFileSync("unzip", ["-p", archive, name], {
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024
+    });
+  } catch {
+    return "";
+  }
+};
+
+const trips = unzipText("trips.txt").split(/\r?\n/);
 const headers = parseCsvRow(trips.shift() ?? "");
 const tripIndex = headers.indexOf("trip_id");
 const destinationIndex = headers.indexOf("trip_headsign");
@@ -60,6 +68,16 @@ const asset = JSON.stringify(destinations);
 writeFileSync(output, asset);
 const archiveBytes = readFileSync(archive);
 const generatedAt = new Date().toISOString();
+const feedInfoRows = unzipText("feed_info.txt").split(/\r?\n/).filter(Boolean);
+const feedInfoHeaders = parseCsvRow(feedInfoRows.shift() ?? "");
+const feedVersionIndex = feedInfoHeaders.indexOf("feed_version");
+const feedStartIndex = feedInfoHeaders.indexOf("feed_start_date");
+const parsedFeedVersion = feedVersionIndex >= 0
+  ? parseCsvRow(feedInfoRows[0] ?? "")[feedVersionIndex]?.trim() || null
+  : null;
+const parsedFeedStart = feedStartIndex >= 0
+  ? parseCsvRow(feedInfoRows[0] ?? "")[feedStartIndex]?.trim() || null
+  : null;
 const manifest = {
   schemaVersion: 1,
   assetPath: `/data/${output.split(/[\\/]/).at(-1)}`,
@@ -67,12 +85,12 @@ const manifest = {
   source: {
     name: "NTA GTFS timetable feed",
     url: process.env.NTA_GTFS_SOURCE_URL ?? "https://developer.nationaltransport.ie/",
-    feedVersion: process.env.NTA_GTFS_FEED_VERSION ?? null,
+    feedVersion: process.env.NTA_GTFS_FEED_VERSION ?? parsedFeedVersion ?? parsedFeedStart ?? null,
     archiveSha256: sha256(archiveBytes)
   },
   generatedAt,
-  parserVersion: "1.1.0",
-  rowCount: trips.length,
+  parserVersion: "1.2.0",
+  rowCount: trips.filter(Boolean).length,
   destinationCount: Object.keys(destinations).length,
   collisionCount,
   assetSha256: sha256(asset)

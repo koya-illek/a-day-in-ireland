@@ -22,14 +22,15 @@ test("section shortcuts land their target below the sticky topbar", async ({ pag
   expect(targetTop).toBeGreaterThanOrEqual(barBottom - 1);
 });
 
-const expectedCentre = (viewportWidth: number, latitude: number, longitude: number, zoom: number) => {
-  // The map renders translate(x y) scale(s), so a projected point p appears
-  // at screen position s·p + offset. Centring the linked place therefore
-  // requires offset = centre − s·p, clamped to the pan bounds. This encodes
-  // the geometric contract directly so it cannot silently mirror a component
-  // regression.
-  const scale = viewportWidth <= 430 ? 5750 : viewportWidth <= 600 ? 5550 : 5350;
-  const projection = geoMercator().center([-8.05, 53.45]).scale(scale).translate([500, 462]);
+const expectedCentre = (latitude: number, longitude: number, zoom: number) => {
+  // Must match IrelandExperience's island Mercator: center([-8.05, 53.45]),
+  // scale(6100), translate([500, 462]). The map renders translate(x y) scale(s),
+  // so a projected point p appears at screen position s·p + offset. Centring
+  // the linked place therefore requires offset = centre − s·p, clamped to the
+  // pan bounds. Pan bounds are in map units (1000×900), so CSS viewport width
+  // does not change the offset. Hard-coding the scale here means a projection
+  // regression cannot silently pass by sharing a constant with the component.
+  const projection = geoMercator().center([-8.05, 53.45]).scale(6100).translate([500, 462]);
   const [pointX, pointY] = projection([longitude, latitude])!;
   return {
     point: [pointX, pointY] as const,
@@ -65,7 +66,7 @@ test("a hash deep link centres against the settled viewport projection", async (
       await page.goto(`/#lat=${latitude}&lng=${longitude}&zoom=${zoom}`);
       await page.waitForTimeout(600);
       const view = await readMapView(page);
-      const expected = expectedCentre(width, latitude, longitude, zoom);
+      const expected = expectedCentre(latitude, longitude, zoom);
       expect(view.scale).toBeCloseTo(zoom, 0);
       expect(view.x).toBeCloseTo(expected.x, 0);
       expect(view.y).toBeCloseTo(expected.y, 0);

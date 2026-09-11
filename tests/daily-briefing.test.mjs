@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareBriefings, dailyBriefing } from "../lib/daily-briefing.ts";
+import { importStandaloneTypeScript } from "./import-ts.mjs";
+
+const { compareBriefings, dailyBriefing } = await importStandaloneTypeScript("../lib/daily-briefing.ts");
 
 const snapshot = (observedAt, temperature, overrides = {}) => ({
   sourceStatus: "live", contextStatus: { grid: "live" },

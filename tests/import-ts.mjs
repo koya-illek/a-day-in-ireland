@@ -33,5 +33,8 @@ const remappedLibUrl = async (relativePath) => {
   return `data:text/javascript,${encodeURIComponent(output)}`;
 };
 
+export const importLibTypeScript = async (relativePath) =>
+  import(await remappedLibUrl(relativePath));
+
 export const importBrowserLive = async () =>
   import(await remappedLibUrl("../lib/browser-live.ts"));

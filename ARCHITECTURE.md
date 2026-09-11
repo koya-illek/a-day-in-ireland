@@ -32,7 +32,7 @@ flowchart LR
     Sources[Irish and international public-data providers]
     BrowserSources[Browser-compatible live sources]
     Worker[Cloudflare Worker API and assets]
-    Coordinators[Transit and river Durable Objects]
+    Coordinators[Transit, river, and context Durable Objects]
     Context[Per-source refresh, cache, and stale-if-error state]
     History[(Cloudflare D1 history)]
     Assets[Static export and immutable generated data]
@@ -53,12 +53,13 @@ flowchart LR
 | --- | --- | --- |
 | Static frontend | Next.js static export, page metadata, manifest, informational pages, map assets, and generated transit dictionary | `app/`, `components/`, `public/` |
 | Browser data client | Refreshes browser-compatible weather and monitored-air sources, merges responses, retains valid last-good evidence, enriches transit destinations, and handles offline state | `lib/browser-live.ts`, ``lib/data-state.ts` |
-| Experience model | Controls layers, place context, map projections, selections, movement clustering, history mode, accessibility, and presentation semantics | `components/IrelandExperience.tsx`, `components/experience-model.ts` |
+| Experience model | Controls layers, place context, map projections, selections, movement clustering, history mode, accessibility, and presentation semantics | `components/IrelandExperience.tsx`, `components/experience-helpers.ts`, `components/experience-model.ts`, `components/atlas/AtlasFrame.tsx` |
 | Cloudflare Worker | Serves static assets and API routes, enforces method boundaries, merges provider results, dispatches history, and handles scheduled capture | `platform/cloudflare-entry.js`, `platform/server-entry.js` |
 | Shared Worker API core | One implementation of provider acquisition, context refresh state, HTTP contract, and `/api/*` dispatch for every hosting adapter; entrypoints contribute only bindings and static serving | `platform/api-core.js` |
 | Source adapters | Normalize bounded provider payloads into typed internal evidence | `platform/history-sources.js`, `platform/live-normalize.js`, `platform/sky-source.js`, `platform/river-source.js` |
 | NTA coordinator | Globally coalesces credentialed GTFS-Realtime vehicle refreshes and protects the provider token budget | Durable Object `NtaFeedCoordinator` |
-| River coordinator | Coordinates direct OPW retrieval and Cloudflare Browser Rendering fallback | Durable Object `RiverFeedCoordinator` |
+| River coordinator | Coordinates direct OPW retrieval and Cloudflare Browser Rendering fallback, skipping Browser Rendering while a usable snapshot remains | Durable Object `RiverFeedCoordinator` |
+| Context coordinator | Serves a shared `/api/contexts` snapshot, honours `sources` before fan-out, and rate-limits expensive misses | Durable Object `ContextFeedCoordinator` |
 | History store | Writes compact snapshots and summaries and reads historical ranges | `platform/history-store.js`, `platform/history.js`, D1 `HISTORY_DB` |
 | Build pipeline | Generates static export, source provenance, content-hashed transit data, hash-based inline script CSP, and performance-budget checks | `scripts/` |
 
@@ -70,9 +71,10 @@ flowchart LR
 4. Each source receives its own TTL, deterministic jitter, in-flight coalescing, retry state, circuit backoff, stale-if-error handling, generation ordering, and provenance.
 5. A partial source does not clear healthy unrelated layers. Last-good evidence remains visible only within source-specific freshness rules.
 6. NTA vehicle requests go through the global Durable Object coordinator. Without `NTA_API_KEY`, the API reports `credential-required` and does not invent positions.
-7. Transit destinations are loaded lazily from a small manifest and immutable content-hashed GTFS dictionary only when live trips need schedule metadata.
-8. OPW river data uses direct retrieval where possible. The production Cloudflare adapter can use Browser Rendering as a coordinated fallback when the origin rejects normal Worker requests.
-9. The map renders observations, models, forecasts, calculations, stale values, and unavailable values with separate presentation semantics.
+7. Context requests go through the global context Durable Object. Optional `sources` filters are applied before any upstream refresh.
+8. Transit destinations are loaded lazily from a small manifest and immutable content-hashed GTFS dictionary only when live trips need schedule metadata.
+9. OPW river data uses direct retrieval where possible. The production Cloudflare adapter can use Browser Rendering as a coordinated fallback when the origin rejects normal Worker requests, and skips that fallback while a usable snapshot remains.
+10. The map renders observations, models, forecasts, calculations, stale values, and unavailable values with separate presentation semantics.
 
 ## History flow
 
@@ -89,15 +91,14 @@ flowchart LR
 | --- | --- |
 | `GET /api/health` | Cheap runtime, binding presence, and deployed-build provenance read from the served assets; no provider fan-out |
 | `GET /api/living` | Current rail and river evidence with provenance |
-| `GET /api/contexts` | Weather, water, energy, air, bathing, earth, sky, and related context |
+| `GET /api/contexts` | Weather, water, energy, air, bathing, earth, sky, and related context from a shared coordinator snapshot. Optional `sources` query is applied before upstream refresh |
 | `GET /api/transit` | Coordinated NTA live vehicle positions |
 | `GET /api/history` | Historical snapshot lookup |
 | `GET /api/history/range` | Bounded history range and summary retrieval |
-| `GET /api/openapi.json` | OpenAPI 3.1 description of every path in this table and below |
-| `POST /mcp`, `POST /api/mcp` | Read-only MCP tool surface over the same route handlers (stateless Streamable HTTP) |
+| `GET /api/openapi.json` | OpenAPI 3.1 description of every path in this table |
 | `/data/transit-destinations.manifest.json` | Transit dictionary provenance and content-hashed asset pointer |
 
-Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. The MCP transport is the deliberate exception: it accepts `POST` envelopes (and answers `405` to `GET`) per the Streamable HTTP protocol. `OPTIONS` receives a minimal response where supported.
+Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. `HEAD` on expensive data routes does not fan out to providers. `OPTIONS` receives a minimal response where supported.
 
 ## Third-party data services
 
@@ -123,7 +124,7 @@ Public data APIs accept `GET` and `HEAD`; unsupported methods return `405`. The 
 | Platform or library | Role |
 | --- | --- |
 | Cloudflare Workers and Assets | Production API, routing, static application, cache behavior, Cron, and observability |
-| Cloudflare Durable Objects | Single logical coordinators for NTA and OPW refreshes |
+| Cloudflare Durable Objects | Single logical coordinators for NTA, OPW, and context refreshes |
 | Cloudflare D1 | Historical snapshots and summaries |
 | Cloudflare Browser Rendering | Temporary OPW retrieval fallback in the production Cloudflare adapter |
 | Next.js and React | Static application structure and interactive UI |
@@ -166,7 +167,7 @@ Presentation helpers turn that typed evidence into user-facing language without 
 
 ## Deployment topology
 
-Production uses one Worker custom domain at `day.illek.ie`. The Worker serves `dist/client`, routes APIs, binds `HISTORY_DB`, `NTA_FEED`, `RIVER_FEED`, and `BROWSER`, and runs the history Cron every 15 minutes. The configuration allows 1,000 ms CPU and 100 subrequests. `workers.dev`, preview URLs, and Pages are disabled.
+Production uses one Worker custom domain at `day.illek.ie`. The Worker serves `dist/client`, routes APIs, binds `HISTORY_DB`, `NTA_FEED`, `RIVER_FEED`, `CONTEXT_FEED`, `BROWSER`, and `CF_VERSION_METADATA`, and runs the history Cron every 15 minutes. The configuration allows 1,000 ms CPU and 100 subrequests. `workers.dev`, preview URLs, and Pages are disabled.
 
 Both hosting adapters (Cloudflare production and the alternate OpenAI hosting target) delegate to the same shared API core, so endpoint semantics, cache tiers, error contracts, and method boundaries cannot drift between targets. The Cloudflare adapter adds Durable Object coordinators, D1 history, build provenance, and the scheduled tick; the alternate adapter wires direct provider loaders and an SPA fallback for documents.
 
@@ -183,7 +184,8 @@ The product does not replace official warnings, emergency services, transport op
 - Built-page metadata, headings, skip links, and external-link safety: `npm run check:html`
 - Asset and request budgets: `npm run check:budgets`
 - Dead-CSS audit: `npm run check:css`
-- Public API contract and MCP transport semantics: `npm test` (tests/public-api.test.mjs, tests/build-artifacts.test.mjs)
+- Public API contract: `npm test` (tests/public-api.test.mjs, tests/build-artifacts.test.mjs, tests/review-followup.test.mjs)
+- GitHub Actions CI: `.github/workflows/ci.yml` (`npm test`, `npx tsc --noEmit`, `npm run lint`, plus a desktop Playwright subset)
 - Release provenance gate: `npm run check:release`
 - Read-only deployed-candidate provenance, CSP, and 404 verification: `npm run check:deployment`
 - D1 schema: `migrations/0001_history_v1.sql`

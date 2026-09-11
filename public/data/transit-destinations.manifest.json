@@ -13,5 +13,6 @@
   "rowCount": 139833,
   "destinationCount": 139833,
   "collisionCount": 0,
-  "assetSha256": "1b4ff23a2ef2dd2c04b5f75c30db2402bfe51de51da10ed5c321fa3dc4406722"
+  "assetSha256": "1b4ff23a2ef2dd2c04b5f75c30db2402bfe51de51da10ed5c321fa3dc4406722",
+  "followUp": "STALE: feedVersion and archiveSha256 are null until `npm run refresh:transit` runs with NTA_API_KEY or NTA_GTFS_ARCHIVE. See scripts/refresh-transit-destinations.mjs."
 }

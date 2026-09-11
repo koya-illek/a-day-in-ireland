@@ -28,8 +28,7 @@ import {
   tideQueryWindow,
   weatherBuoyQuery
 } from "./live-normalize.js";
-import { OPENAPI_PATH, openApiResponse } from "./openapi.js";
-import { handleMcpRequest, MCP_PATHS } from "./mcp-core.js";
+import { CONTEXT_SOURCE_NAMES, OPENAPI_PATH, openApiResponse } from "./openapi.js";
 
 // One shared Worker API core serves both deployment targets: the Cloudflare
 // production adapter (platform/cloudflare-entry.js) and the alternate hosting
@@ -39,6 +38,15 @@ import { handleMcpRequest, MCP_PATHS } from "./mcp-core.js";
 // their static-serving behaviour.
 
 export const COORDINATOR_RAW_BODY_LIMIT = 900_000;
+// Peak NTA GTFS-RT payloads exceed 1,200 vehicles; keep a hard cap so a
+// runaway feed cannot blow the isolate, but high enough that a normal peak
+// is not silently truncated. Truncation still reports `partial`.
+export const NTA_VEHICLE_CAP = 8_000;
+export const NTA_RAW_BODY_LIMIT = 4_000_000;
+export const CONTEXT_REFRESH_RATE = Object.freeze({
+  windowMs: 60_000,
+  maxPerIp: 30
+});
 
 // ---------------------------------------------------------------------------
 // Shared HTTP contract: every API response carries JSON content type, CORS,
@@ -69,6 +77,22 @@ export const methodResponse = (request) => {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: METHOD_HEADERS });
   return respondApiJson({ error: "Method not allowed" }, { status: 405, headers: { allow: METHOD_HEADERS.allow } });
 };
+
+const JSON_HEAD_HEADERS = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "public, max-age=15",
+  "access-control-allow-origin": "*",
+  "x-robots-tag": "noindex, nofollow",
+  allow: METHOD_HEADERS.allow
+};
+
+export const emptyJsonHeadResponse = () => new Response(null, { status: 200, headers: JSON_HEAD_HEADERS });
+
+export const responseWithoutBody = (response) => new Response(null, {
+  status: response.status,
+  statusText: response.statusText,
+  headers: response.headers
+});
 
 export const apiErrorResponse = (message) => respondApiJson({ error: message }, { status: 503 });
 
@@ -176,7 +200,7 @@ const fetchRiversThroughBrowser = async (env) => {
   }
 };
 
-export const acquireRiverRaw = async (env, fetcher = fetch) => {
+export const acquireRiverRaw = async (env, fetcher = fetch, { allowBrowserFallback = true } = {}) => {
   const fetchedAt = new Date().toISOString();
   const response = await fetcher(RIVER_ENDPOINT, {
     headers: {
@@ -204,6 +228,11 @@ export const acquireRiverRaw = async (env, fetcher = fetch) => {
   if (env?.EDGE_RUNTIME === "cloudflare") {
     // Temporary fetch path: waterlevel.ie currently rejects ordinary Worker HTTPS.
     // Browser Run is not a second dataset; provenance stays labelled fallback.
+    // Coordinators skip this path when a usable snapshot still exists so a
+    // blocked origin cannot burn a Browser Rendering session every 15 minutes.
+    if (!allowBrowserFallback || env?.RIVER_BROWSER_FALLBACK === "0") {
+      throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback skipped`);
+    }
     try {
       const body = await fetchRiversThroughBrowser(env);
       const features = Array.isArray(body?.features) ? body.features : [];
@@ -259,8 +288,8 @@ export const normalizeRiverRaw = (raw, captureNow = Date.now()) => {
   return parseRiverGeoJson(raw?.body, captureNow);
 };
 
-export const fetchRiversResult = async (env, fetcher = fetch, captureNow = Date.now()) => {
-  const raw = await acquireRiverRaw(env, fetcher);
+export const fetchRiversResult = async (env, fetcher = fetch, captureNow = Date.now(), options = {}) => {
+  const raw = await acquireRiverRaw(env, fetcher, options);
   const rivers = normalizeRiverRaw(raw, captureNow);
   if (!rivers.length) throw new Error("OPW returned no fresh river gauges");
   return {
@@ -708,14 +737,14 @@ export const acquireTransitRaw = async (env, fetcher = fetch) => {
     }
   });
   if (!response.ok) throw new Error(`NTA vehicles returned ${response.status}`);
-  const bounded = await readBoundedJsonResponse(response, "nta", COORDINATOR_RAW_BODY_LIMIT);
+  const bounded = await readBoundedJsonResponse(response, "nta", NTA_RAW_BODY_LIMIT);
   const entities = bounded.body.entity ?? bounded.body.Entity ?? bounded.body.entities ?? [];
   const sourceEntityCount = Array.isArray(entities) ? entities.length : 0;
   return {
-    entities: Array.isArray(entities) ? entities.slice(0, 1200) : [],
-    status: sourceEntityCount > 1200 ? "partial" : "acquired",
+    entities: Array.isArray(entities) ? entities.slice(0, NTA_VEHICLE_CAP) : [],
+    status: sourceEntityCount > NTA_VEHICLE_CAP ? "partial" : "acquired",
     sourceEntityCount,
-    truncated: sourceEntityCount > 1200,
+    truncated: sourceEntityCount > NTA_VEHICLE_CAP,
     bodyBytes: bounded.bodyBytes,
     acquiredAt: Date.now()
   };
@@ -755,7 +784,7 @@ export const normalizeTransitEntities = (entities, now = Date.now()) => (Array.i
       speedSource: numeric(position?.speed ?? position?.Speed) === null ? null : "reported",
       observedAt: observedAt.toISOString()
     }];
-  }).slice(0, 1200);
+  }).slice(0, NTA_VEHICLE_CAP);
 
 export const fetchTransit = async (env, fetcher = fetch, captureNow = Date.now()) => {
   const raw = await acquireTransitRaw(env, fetcher);
@@ -870,6 +899,91 @@ export const resetContextRefreshState = () => {
   contextSourceCache.clear();
   contextFetcherIdentity = globalThis.fetch;
   fetchSatelliteResolver = createSatelliteAvailabilityResolver();
+  contextRate.windowStart = 0;
+  contextRate.byIp.clear();
+};
+
+export const publicContextName = (name) =>
+  name === "bathingAlerts" ? "bathing" : name === "issTle" ? "iss" : name;
+
+export const INTERNAL_CONTEXT_NAMES = Object.freeze(Object.fromEntries(
+  CONTEXT_SOURCE_NAMES.map((name) => [
+    name,
+    name === "bathing" ? "bathingAlerts" : name === "iss" ? "issTle" : name
+  ])
+));
+
+export const CONTEXT_PAYLOAD_KEYS = Object.freeze(Object.fromEntries(
+  CONTEXT_SOURCE_NAMES.map((name) => [name, name === "bathing"
+    ? ["bathingAlerts"]
+    : name === "iss" ? ["issTle"]
+      : name === "measuredAir" || name === "modelledAir" ? ["airQuality"]
+        : [name]])
+));
+
+const AIR_ROW_KINDS = Object.freeze({ measuredAir: "measured", modelledAir: "modelled" });
+
+export const parseContextSources = (request) => {
+  const url = request instanceof Request ? new URL(request.url) : new URL(String(request), "https://day.illek.ie");
+  const raw = url.searchParams.getAll("sources").flatMap((value) => value.split(",")).map((value) => value.trim()).filter(Boolean);
+  if (!raw.length) return { names: null };
+  const unknown = [...new Set(raw.filter((name) => !CONTEXT_SOURCE_NAMES.includes(name)))];
+  if (unknown.length) {
+    return {
+      error: `Unknown source name(s): ${unknown.join(", ")}. Valid names: ${CONTEXT_SOURCE_NAMES.join(", ")}.`
+    };
+  }
+  return { names: [...new Set(raw)] };
+};
+
+export const filterContextPayload = (payload, requested) => {
+  if (!requested) return payload;
+  const wantedDataKeys = new Set(requested.flatMap((name) => CONTEXT_PAYLOAD_KEYS[name]));
+  const airKinds = new Set(requested.flatMap((name) => AIR_ROW_KINDS[name] ?? []));
+  const result = { generatedAt: payload.generatedAt };
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "generatedAt") continue;
+    if (requested.includes(key) || (key === "warningsStatus" && requested.includes("warnings"))) {
+      result[key] = value;
+      continue;
+    }
+    if (key === "contextStatus" || key === "contextProvenance") {
+      result[key] = Object.fromEntries(
+        Object.entries(value ?? {}).filter(([name]) => requested.includes(name))
+      );
+      continue;
+    }
+    if (wantedDataKeys.has(key)) {
+      if (key === "airQuality" && airKinds.size === 1) {
+        const [kind] = airKinds;
+        result[key] = (Array.isArray(value) ? value : []).filter((row) => row?.source === kind);
+        continue;
+      }
+      result[key] = value;
+    }
+  }
+  return result;
+};
+
+const contextRate = { windowStart: 0, byIp: new Map() };
+
+export const clientIpFromRequest = (request) => {
+  if (!request) return "unknown";
+  return request.headers?.get?.("cf-connecting-ip")
+    || request.headers?.get?.("x-forwarded-for")?.split(",")[0]?.trim()
+    || "unknown";
+};
+
+export const allowContextRefresh = (ip, now = Date.now(), rate = contextRate) => {
+  if (now - rate.windowStart >= CONTEXT_REFRESH_RATE.windowMs) {
+    rate.windowStart = now;
+    rate.byIp.clear();
+  }
+  const key = ip || "unknown";
+  const count = (rate.byIp.get(key) ?? 0) + 1;
+  if (count > CONTEXT_REFRESH_RATE.maxPerIp) return false;
+  rate.byIp.set(key, count);
+  return true;
 };
 
 const ensureContextFetcherIdentity = () => {
@@ -906,21 +1020,45 @@ const staleSource = (state, definition, now, errorCode) => {
   };
 };
 
-const refreshContextSource = async (name, definition, now = Date.now()) => {
-  const state = contextSourceCache.get(name) ?? {
-    value: undefined,
-    status: "unavailable",
-    fetchedAt: 0,
-    lastSuccessAt: 0,
-    staleSince: 0,
-    expiresAt: 0,
-    circuitOpenUntil: 0,
-    failures: 0,
-    refreshCount: 0,
-    latestGeneration: 0,
-    inFlight: null
-  };
-  contextSourceCache.set(name, state);
+const emptyContextState = () => ({
+  value: undefined,
+  status: "unavailable",
+  fetchedAt: 0,
+  lastSuccessAt: 0,
+  staleSince: 0,
+  expiresAt: 0,
+  circuitOpenUntil: 0,
+  failures: 0,
+  refreshCount: 0,
+  latestGeneration: 0,
+  inFlight: null
+});
+
+export const serializeContextCache = (cache) => Object.fromEntries([...cache.entries()].map(([name, state]) => {
+  const rest = { ...(state && typeof state === "object" ? state : {}) };
+  delete rest.inFlight;
+  return [name, rest];
+}));
+
+export const restoreContextCache = (record) => {
+  const cache = new Map();
+  if (!record || typeof record !== "object") return cache;
+  for (const [name, state] of Object.entries(record)) {
+    cache.set(name, { ...emptyContextState(), ...(state && typeof state === "object" ? state : {}), inFlight: null });
+  }
+  return cache;
+};
+
+export const contextSourceNeedsRefresh = (state, definition, now) => {
+  if (!state || state.value === undefined) return true;
+  if (now < state.lastSuccessAt || now >= state.expiresAt) return true;
+  if (definition.stillFresh && !definition.stillFresh(state.value, now)) return true;
+  return false;
+};
+
+const refreshContextSource = async (name, definition, now = Date.now(), cache = contextSourceCache) => {
+  const state = cache.get(name) ?? emptyContextState();
+  cache.set(name, state);
   // A per-source freshness predicate lets day-keyed sources (solar) refuse a
   // cached value whose calendar day has rolled over even while the TTL is
   // still running; the normal refresh path then replaces it.
@@ -1050,22 +1188,58 @@ export const contextDefinitions = (env, now) => ({
   }
 });
 
-export const currentContexts = async (env) => {
-  ensureContextFetcherIdentity();
-  const now = Date.now();
+export const currentContexts = async (env, options = {}) => {
+  if (!options.cache) ensureContextFetcherIdentity();
+  const now = options.now ?? Date.now();
+  const cache = options.cache ?? contextSourceCache;
+  const parsed = options.sources !== undefined
+    ? { names: options.sources }
+    : options.request ? parseContextSources(options.request) : { names: null };
+  if (parsed.error) {
+    return respondApiJson({ error: parsed.error }, { status: 400 });
+  }
   const definitions = contextDefinitions(env, now);
-  const sourceEntries = await Promise.all(Object.entries(definitions).map(async ([name, definition]) => [
+  const requestedPublic = parsed.names;
+  const selectedInternal = requestedPublic
+    ? [...new Set(requestedPublic.map((name) => INTERNAL_CONTEXT_NAMES[name]))]
+    : Object.keys(definitions);
+  const selectedDefinitions = selectedInternal.flatMap((name) => {
+    const definition = definitions[name];
+    return definition ? [[name, { ...definition, policy: CONTEXT_SOURCE_POLICIES[name] }]] : [];
+  });
+  const needsUpstream = selectedDefinitions.some(([name, definition]) =>
+    contextSourceNeedsRefresh(cache.get(name), definition, now)
+  );
+  if (needsUpstream && !options.skipRefresh) {
+    const ip = options.clientIp ?? clientIpFromRequest(options.request);
+    if (!allowContextRefresh(ip, now, options.rate)) {
+      return respondApiJson(
+        { error: "Too many context refresh requests. Retry after the advertised cache TTL." },
+        { status: 429, headers: { "retry-after": "30" } }
+      );
+    }
+  }
+  const sourceEntries = await Promise.all(selectedDefinitions.map(async ([name, definition]) => [
     name,
-    await refreshContextSource(name, { ...definition, policy: CONTEXT_SOURCE_POLICIES[name] }, now)
+    options.skipRefresh && contextSourceNeedsRefresh(cache.get(name), definition, now)
+      ? staleSource(cache.get(name) ?? emptyContextState(), definition, now, "head-no-refresh")
+      : await refreshContextSource(name, definition, now, cache)
   ]));
   const sources = Object.fromEntries(sourceEntries);
+  const missingInternal = Object.keys(definitions).filter((name) => !sources[name]);
+  for (const name of missingInternal) {
+    const definition = { ...definitions[name], policy: CONTEXT_SOURCE_POLICIES[name] };
+    sources[name] = {
+      value: definition.empty(),
+      status: "unavailable",
+      metadata: sourceMetadata(emptyContextState(), "unavailable", now, "not-requested")
+    };
+  }
   const modelled = sources.modelledAir.value?.readings ?? [];
   const measured = sources.measuredAir.value ?? [];
-  const publicName = (name) => name === "bathingAlerts" ? "bathing" : name === "issTle" ? "iss" : name === "forecast" ? "forecast" : name;
-  const contextStatus = Object.fromEntries(Object.entries(sources).map(([name, source]) => [publicName(name), source.status]));
-  const contextProvenance = Object.fromEntries(Object.entries(sources).map(([name, source]) => [publicName(name), source.metadata]));
-  const cacheable = Object.values(contextStatus).some((status) => status !== "unavailable");
-  return respondApiJson({
+  const contextStatus = Object.fromEntries(Object.entries(sources).map(([name, source]) => [publicContextName(name), source.status]));
+  const contextProvenance = Object.fromEntries(Object.entries(sources).map(([name, source]) => [publicContextName(name), source.metadata]));
+  const assembled = {
     generatedAt: new Date(now).toISOString(),
     marine: sources.marine.value?.readings ?? [],
     radar: sources.radar.value ?? [],
@@ -1083,7 +1257,16 @@ export const currentContexts = async (env) => {
     issTle: sources.issTle.value ?? null,
     contextStatus,
     contextProvenance
-  }, { cacheControl: cacheable
+  };
+  const payload = filterContextPayload(assembled, requestedPublic);
+  const statusValues = Object.values(payload.contextStatus ?? contextStatus);
+  const cacheable = statusValues.some((status) => status !== "unavailable");
+  if (typeof options.persist === "function") {
+    try { await options.persist(cache); } catch (error) {
+      console.error("Context snapshot persist failed", error);
+    }
+  }
+  return respondApiJson(payload, { cacheControl: cacheable
     ? "public, max-age=30, s-maxage=30, stale-while-revalidate=120"
     : "no-store" });
 };
@@ -1133,9 +1316,22 @@ export const transitApiRoute = async (env) => {
   }
 };
 
-export const contextsApiRoute = async (env) => {
+export const contextsApiRoute = async (env, request) => {
   try {
-    return await currentContexts(env);
+    if (env?.CONTEXT_FEED?.getByName && request) {
+      const incoming = new URL(request.url);
+      const coordinated = new URL("https://internal/contexts");
+      coordinated.search = incoming.search;
+      const response = await env.CONTEXT_FEED.getByName("island-contexts").fetch(new Request(coordinated, {
+        method: request.method,
+        headers: { "cf-connecting-ip": clientIpFromRequest(request) }
+      }));
+      if (!response.ok && response.status !== 400 && response.status !== 429) {
+        throw new Error(`context-coordinator-http-${response.status}`);
+      }
+      return response;
+    }
+    return await currentContexts(env, { request });
   } catch (error) {
     console.error("Current contexts failed", error);
     return apiErrorResponse("Current island contexts are temporarily unavailable.");
@@ -1183,6 +1379,10 @@ export const healthResponse = (env, provenance = null) => {
   const fileDeploymentId = typeof provenance?.deploymentId === "string" && provenance.deploymentId !== "not-deployed"
     ? provenance.deploymentId
     : null;
+  const versionMetadata = env?.CF_VERSION_METADATA;
+  const runtimeDeploymentId = typeof versionMetadata?.id === "string" && versionMetadata.id
+    ? versionMetadata.id
+    : env?.DEPLOYMENT_ID;
   return respondApiJson({
     status: "ok",
     service: "a-day-in-ireland",
@@ -1192,13 +1392,14 @@ export const healthResponse = (env, provenance = null) => {
       builtAt: env.BUILD_TIMESTAMP ?? provenance?.builtAt ?? "unknown",
       configSha256: env.BUILD_CONFIG_SHA256 ?? provenance?.source?.configSha256 ?? "unknown",
       transitDataSha256: env.BUILD_DATA_SHA256 ?? provenance?.generatedData?.sha256 ?? "unknown",
-      deploymentId: env.DEPLOYMENT_ID ?? fileDeploymentId ?? "unknown"
+      deploymentId: runtimeDeploymentId ?? fileDeploymentId ?? "unknown"
     },
     checks: { scope: "process-and-binding-presence", providerHealth: "not-checked", storageRead: "not-checked" },
     storage: {
       historyDb: Boolean(env.HISTORY_DB),
       ntaCoordinator: Boolean(env.NTA_FEED),
-      riverCoordinator: Boolean(env.RIVER_FEED)
+      riverCoordinator: Boolean(env.RIVER_FEED),
+      contextCoordinator: Boolean(env.CONTEXT_FEED)
     }
   });
 };
@@ -1207,45 +1408,42 @@ export const healthResponse = (env, provenance = null) => {
 // method boundary first; unknown API paths answer as JSON with the shared
 // error contract, never as an asset 404 or an HTML SPA fallback that would
 // soft-200 an API surface. Returns undefined for non-API paths so each
-// adapter applies its own static-serving behaviour. /mcp joins the API
-// namespace before the GET-only gate because its transport is POST-based.
+// adapter applies its own static-serving behaviour.
 //
 // Adapters without a history binding get discovery documents that omit the
-// history surface entirely, so no host advertises endpoints or tools it
-// cannot serve.
-
-// MCP tools deliberately consume the adapter-wired route handlers rather than
-// duplicating acquisition logic, so agents receive exactly what the site's own
-// frontend polls — same coordinators, same cache tiers, same honesty fields.
-const mcpSourcesFromAdapters = (env, adapters) => ({
-  living: () => adapters.living
-    ? adapters.living(env)
-    : Promise.reject(new Error("Living layers are not wired on this deployment.")),
-  transit: () => transitApiRoute(env),
-  contexts: () => contextsApiRoute(env),
-  historySnapshot: (at) => adapters.history
-    ? adapters.history(new Request(`https://mcp.internal/api/history?at=${encodeURIComponent(at)}`), env)
-    : Promise.reject(new Error("History storage is not wired on this deployment.")),
-  historyRange: () => adapters.history
-    ? adapters.history(new Request("https://mcp.internal/api/history/range"), env)
-    : Promise.reject(new Error("History storage is not wired on this deployment."))
-});
+// history surface entirely, so no host advertises endpoints it cannot serve.
+const EXPENSIVE_HEAD_PATHS = new Set([
+  "/api/living", "/api/contexts", "/api/transit", "/api/history", "/api/history/range"
+]);
 
 export const handleApiRequest = async (request, env, adapters) => {
   const url = new URL(request.url);
-  const isMcpPath = MCP_PATHS.includes(url.pathname);
   const historyWired = Boolean(adapters?.history);
-  if (!url.pathname.startsWith("/api/") && !isMcpPath) return undefined;
-  if (isMcpPath) return handleMcpRequest(request, mcpSourcesFromAdapters(env, adapters), { history: historyWired });
+  if (!url.pathname.startsWith("/api/")) return undefined;
   if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
     return methodResponse(request);
   }
   if (request.method === "OPTIONS") return methodResponse(request);
+  if (request.method === "HEAD" && EXPENSIVE_HEAD_PATHS.has(url.pathname)) {
+    // HEAD must not fan out to providers. Coordinated context snapshots can
+    // still answer from stored state without a refresh.
+    if (url.pathname === "/api/contexts" && env?.CONTEXT_FEED?.getByName) {
+      return responseWithoutBody(await contextsApiRoute(env, request));
+    }
+    if (url.pathname === "/api/contexts") {
+      return responseWithoutBody(await currentContexts(env, { request, skipRefresh: true }));
+    }
+    return emptyJsonHeadResponse();
+  }
   switch (url.pathname) {
-    case "/api/health":
-      return adapters.health ? adapters.health(env) : healthResponse(env);
-    case OPENAPI_PATH:
-      return openApiResponse({ history: historyWired });
+    case "/api/health": {
+      const response = adapters.health ? await adapters.health(env) : healthResponse(env);
+      return request.method === "HEAD" ? responseWithoutBody(response) : response;
+    }
+    case OPENAPI_PATH: {
+      const response = openApiResponse({ history: historyWired });
+      return request.method === "HEAD" ? responseWithoutBody(response) : response;
+    }
     case "/api/living":
       try {
         return await adapters.living(env);
@@ -1254,7 +1452,7 @@ export const handleApiRequest = async (request, env, adapters) => {
         return apiErrorResponse("Live layers are temporarily unavailable.");
       }
     case "/api/contexts":
-      return contextsApiRoute(env);
+      return contextsApiRoute(env, request);
     case "/api/transit":
       return transitApiRoute(env);
     case "/api/history":

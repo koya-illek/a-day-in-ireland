@@ -179,12 +179,21 @@ export const openApiDocument = ({ history = true } = {}) => {
       get: {
         tags: ["live"],
         summary: "All island context layers in one payload.",
-        description: "Weather warnings, radar frames, grid demand, air quality, aurora activity, tides, bathing alerts, satellite imagery availability, earthquakes, ISS orbit elements, solar day and official forecast — each with honest per-source status and provenance. Sources refresh on independent TTL state machines (5–360 minute policies) with stale-if-error windows.",
+        description: "Weather warnings, radar frames, grid demand, air quality, aurora activity, tides, bathing alerts, satellite imagery availability, earthquakes, ISS orbit elements, solar day and official forecast, each with honest per-source status and provenance. Production serves a shared Durable Object snapshot so browsers do not fan out independently. Optional `sources` query (comma-separated public names) is honoured before upstream refresh. Unrequested sources are omitted rather than fetched.",
+        parameters: [{
+          name: "sources",
+          in: "query",
+          required: false,
+          description: `Optional subset of: ${CONTEXT_SOURCE_NAMES.join(", ")}.`,
+          schema: { type: "string" }
+        }],
         responses: {
           200: jsonResponse(
             "Context layers plus contextStatus/contextProvenance maps keyed by source name.",
             "public, max-age=30, s-maxage=30, stale-while-revalidate=120 when any source is usable; no-store otherwise"
-          )
+          ),
+          400: jsonResponse("Unknown source name in the sources query.", "no-store"),
+          429: jsonResponse("Per-IP refresh budget exceeded for an expensive miss.", "no-store")
         }
       }
     },
@@ -288,7 +297,8 @@ export const openApiDocument = ({ history = true } = {}) => {
             properties: {
               historyDb: { type: "boolean" },
               ntaCoordinator: { type: "boolean" },
-              riverCoordinator: { type: "boolean" }
+              riverCoordinator: { type: "boolean" },
+              contextCoordinator: { type: "boolean" }
             }
           }
         },
@@ -368,9 +378,11 @@ export const openApiDocument = ({ history = true } = {}) => {
           stations: { type: "array", items: { type: "object" } },
           warnings: { type: "array", items: { type: "object" } },
           marine: { type: "array", items: { type: "object" } },
-          trains: { type: "array", items: { $ref: "#/components/schemas/TrainPosition" } },
           rivers: { type: "array", items: { $ref: "#/components/schemas/RiverReading" } },
-          transit: { type: "array", items: { $ref: "#/components/schemas/TransitVehicle" } },
+          transit: {
+            type: "array",
+            description: "Empty in retained snapshots. Vehicle positions are not stored; use movementSummary for aggregate NTA counts."
+          },
           transitStatus: sourceStatusSchema,
           contextStatus: { type: "object", additionalProperties: sourceStatusSchema },
           summary: { type: "object" },
