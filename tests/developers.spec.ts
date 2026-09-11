@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("the developers page documents every REST route and MCP tool", async ({ page }) => {
+test("the developers page documents every REST route and no MCP surface", async ({ page }) => {
   await page.goto("/developers");
   await expect(page).toHaveTitle(/Developers · A Day in Ireland/);
   await expect(page.locator("h1")).toHaveText("The same honest data, as an API.");
@@ -9,9 +9,9 @@ test("the developers page documents every REST route and MCP tool", async ({ pag
   for (const path of ["/api/living", "/api/contexts", "/api/transit", "/api/history?at=…", "/api/openapi.json"]) {
     await expect(endpointRows.locator(`code:has-text("${path}")`)).toBeVisible();
   }
-  const toolRows = page.locator(".api-doc-table").nth(1).locator("tbody tr");
-  await expect(toolRows).toHaveCount(5);
-  await expect(page.locator(".api-doc-code")).toHaveCount(2);
+  await expect(page.locator("body")).not.toContainText("Model Context Protocol");
+  await expect(page.locator("body")).not.toContainText("/mcp");
+  await expect(page.locator(".api-doc-code")).toHaveCount(1);
 });
 
 test("every info page's navigation reaches the developers page", async ({ page }) => {

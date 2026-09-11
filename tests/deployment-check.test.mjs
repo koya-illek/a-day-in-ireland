@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
-import { verifyDeployment } from "../scripts/check-deployment.mjs";
+import { localDeploymentExpectation, verifyDeployment } from "../scripts/check-deployment.mjs";
 
 const expected = {
   commitSha: "abc123def456",
@@ -14,10 +13,9 @@ const responseFor = ({
   cspUnsafe = false,
   branded404 = true,
   specMissing = false,
-  mcpBroken = false,
   storageMissing = false,
   dataRouteBroken = false
-} = {}) => async (url, init = {}) => {
+} = {}) => async (url) => {
   const path = new URL(url).pathname;
   if (path === "/api/health") {
     return Response.json({
@@ -30,8 +28,8 @@ const responseFor = ({
         deploymentId: "deployment-1"
       },
       storage: storageMissing
-        ? { historyDb: true, ntaCoordinator: true }
-        : { historyDb: true, ntaCoordinator: true, riverCoordinator: true }
+        ? { historyDb: true, ntaCoordinator: true, riverCoordinator: true }
+        : { historyDb: true, ntaCoordinator: true, riverCoordinator: true, contextCoordinator: true }
     }, { headers: { "x-robots-tag": "noindex, nofollow" } });
   }
   if (dataRouteBroken && path in {
@@ -67,16 +65,6 @@ const responseFor = ({
       paths: { "/api/living": {}, "/api/transit": {}, "/api/history": {} }
     }, { headers: { "content-type": "application/json" } });
   }
-  if (path === "/mcp" && init.method === "POST") {
-    if (mcpBroken) {
-      return new Response("<html>worker error</html>", { status: 500, headers: { "content-type": "text/html" } });
-    }
-    return Response.json({
-      jsonrpc: "2.0",
-      id: 1,
-      result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "a-day-in-ireland", version: "1.0.0" } }
-    }, { headers: { "content-type": "application/json" } });
-  }
   return new Response(branded404
     ? '<html><head><meta name="robots" content="noindex, follow"></head><body>That address is off the map.</body></html>'
     : "", {
@@ -85,7 +73,7 @@ const responseFor = ({
   });
 };
 
-test("deployment check pins provenance, hashed CSP, branded 404 behavior, and the agent surface", async () => {
+test("deployment check pins provenance, hashed CSP, branded 404 behavior, and the API surface", async () => {
   const result = await verifyDeployment({
     origin: "https://day.illek.ie",
     expected,
@@ -94,7 +82,7 @@ test("deployment check pins provenance, hashed CSP, branded 404 behavior, and th
   assert.equal(result.commitSha, expected.commitSha);
   assert.equal(result.cspScriptHashes, 1);
   assert.equal(result.openapiPaths, 3);
-  assert.equal(result.mcpServer, "a-day-in-ireland");
+  assert.equal(result.mcpServer, undefined);
   assert.deepEqual(result.dataEndpoints, {
     "/api/living": 200,
     "/api/transit": 200,
@@ -122,24 +110,27 @@ test("deployment check rejects unsafe-inline and a blank 404", async () => {
   );
 });
 
-test("deployment check rejects a deploy that half-landed the API or MCP surfaces", async () => {
+test("deployment check rejects a deploy that half-landed the API surface", async () => {
   await assert.rejects(
     verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ specMissing: true }) }),
     /OpenAPI document is missing/
-  );
-  await assert.rejects(
-    verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ mcpBroken: true }) }),
-    /MCP initialize returned HTTP 500/
   );
 });
 
 test("deployment check rejects unwired storage bindings and broken data routes", async () => {
   await assert.rejects(
     verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ storageMissing: true }) }),
-    /storage binding riverCoordinator/
+    /storage binding contextCoordinator/
   );
   await assert.rejects(
     verifyDeployment({ origin: "https://day.illek.ie", expected, fetcher: responseFor({ dataRouteBroken: true }) }),
     /\/api\/living did not return JSON/
   );
+});
+
+test("local deployment expectation still hashes wrangler config and transit data", () => {
+  const local = localDeploymentExpectation();
+  assert.equal(typeof local.commitSha, "string");
+  assert.equal(local.configSha256.length, 64);
+  assert.equal(local.transitDataSha256.length, 64);
 });

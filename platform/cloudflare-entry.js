@@ -1,6 +1,7 @@
 import {
   apiErrorResponse,
   createProvenanceLoader,
+  currentContexts,
   dedupedFetchTrains,
   fetchRiversResult,
   fetchTransit,
@@ -8,6 +9,8 @@ import {
   healthResponse,
   livingResponse as sharedLivingResponse,
   methodResponse,
+  restoreContextCache,
+  serializeContextCache,
   transitResponse
 } from "./api-core.js";
 import { makeRiverProvenance, makeSourceProvenance, normalizeRiverReadings } from "./river-source.js";
@@ -127,8 +130,14 @@ export class RiverFeedCoordinator {
   async refresh(snapshot) {
     const startedAt = Date.now();
     await this.state.storage.put("nextAllowedAt", startedAt + RIVER_REFRESH_MS);
+    const latestObservedAt = Array.isArray(snapshot?.rivers)
+      ? snapshot.rivers.map((river) => Date.parse(river.observedAt)).filter(Number.isFinite).sort().at(-1)
+      : null;
+    const snapshotFresh = typeof latestObservedAt === "number" && startedAt - latestObservedAt < 2.5 * 60 * 60_000;
     try {
-      const result = await fetchRiversResult(this.env, fetch, startedAt);
+      const result = await fetchRiversResult(this.env, fetch, startedAt, {
+        allowBrowserFallback: !snapshotFresh
+      });
       const value = { rivers: result.rivers, status: result.provenance.status, provenance: result.provenance };
       await this.state.storage.put("snapshot", { expiresAt: startedAt + RIVER_REFRESH_MS, ...value });
       return value;
@@ -178,6 +187,36 @@ export class RiverFeedCoordinator {
       });
     }
     return Response.json(result);
+  }
+}
+
+export class ContextFeedCoordinator {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.cache = null;
+    this.rate = { windowStart: 0, byIp: new Map() };
+  }
+
+  async ensureCache() {
+    if (this.cache) return this.cache;
+    this.cache = restoreContextCache(await this.state.storage.get("sourceCache"));
+    return this.cache;
+  }
+
+  async fetch(request) {
+    const cache = await this.ensureCache();
+    const skipRefresh = request?.method === "HEAD";
+    return currentContexts(this.env, {
+      request,
+      cache,
+      rate: this.rate,
+      skipRefresh,
+      persist: async (nextCache) => {
+        this.cache = nextCache;
+        await this.state.storage.put("sourceCache", serializeContextCache(nextCache));
+      }
+    });
   }
 }
 

@@ -534,7 +534,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 .info-content p { color: var(--muted); line-height: 1.75; margin: .6rem 0; }
 .info-content a { color: #7fe8dc; text-decoration: underline; text-decoration-color: rgba(127, 232, 220, .35); text-underline-offset: .2rem; }
 .info-email { font-size: 1.25rem; }
-/* Developers page: API and MCP documentation. */
+/* Developers page: API documentation. */
 .api-doc-table-wrap { overflow-x: auto; }
 .api-doc table { border-collapse: collapse; font-size: .85rem; min-width: 38rem; width: 100%; }
 .api-doc th,

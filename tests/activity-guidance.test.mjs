@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { importLibTypeScript } from "./import-ts.mjs";
 
-const { getActivityGuidance } = await import("../lib/activity-guidance.ts");
+const { getActivityGuidance } = await importLibTypeScript("../lib/activity-guidance.ts");
 const {
   normalizeOfficialWeatherWarnings,
   sortOfficialWeatherWarnings

@@ -63,7 +63,7 @@ export async function verifyDeployment({
   // DO migrations half-landed; the gate fails loudly rather than serving a
   // history-less product. Data endpoints are probed further below.
   const storage = healthBody?.storage ?? {};
-  for (const binding of ["historyDb", "ntaCoordinator", "riverCoordinator"]) {
+  for (const binding of ["historyDb", "ntaCoordinator", "riverCoordinator", "contextCoordinator"]) {
     if (storage[binding] !== true) {
       throw new Error(`Deployment health reports storage binding ${binding} as not wired`);
     }
@@ -79,8 +79,8 @@ export async function verifyDeployment({
     throw new Error("Deployment script-src has no inline-script SHA-256 hashes");
   }
 
-  // The release gate also proves the public API documentation and MCP agent
-  // surface shipped with this build, so a deploy can never half-land them.
+  // The release gate also proves the public API documentation shipped with
+  // this build, so a deploy can never half-land the contract.
   const spec = await request("/api/openapi.json");
   if (spec.status !== 200 || !spec.headers.get("content-type")?.toLowerCase().includes("application/json")) {
     throw new Error("Deployment OpenAPI document is missing or not JSON");
@@ -89,20 +89,8 @@ export async function verifyDeployment({
   if (specBody?.openapi !== "3.1.0" || !specBody?.paths?.["/api/living"] || !specBody?.paths?.["/api/history"]) {
     throw new Error("Deployment OpenAPI document does not describe the expected API surface");
   }
-
-  const mcp = await fetcher(new URL("/mcp", canonicalOrigin), {
-    method: "POST",
-    cache: "no-store",
-    headers: { "content-type": "application/json", "mcp-protocol-version": "2025-06-18" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })
-  });
-  if (mcp.status !== 200) throw new Error(`Deployment MCP initialize returned HTTP ${mcp.status}`);
-  if (!mcp.headers.get("content-type")?.toLowerCase().includes("application/json")) {
-    throw new Error("Deployment MCP initialize did not return JSON");
-  }
-  const mcpBody = await mcp.json();
-  if (mcpBody?.result?.serverInfo?.name !== "a-day-in-ireland") {
-    throw new Error("Deployment MCP initialize did not identify the service");
+  if (specBody?.paths?.["/mcp"] || specBody?.paths?.["/api/mcp"]) {
+    throw new Error("Deployment OpenAPI document still advertises removed MCP paths");
   }
 
   // Probe every data endpoint so routing and bindings are proven end to end.
@@ -162,7 +150,6 @@ export async function verifyDeployment({
     deploymentId: healthBody?.build?.deploymentId ?? "unknown",
     cspScriptHashes: [...scriptSrc.matchAll(/'sha256-[A-Za-z0-9+/]+=*'/g)].length,
     openapiPaths: Object.keys(specBody.paths).length,
-    mcpServer: mcpBody.result.serverInfo.name,
     dataEndpoints: dataResults,
     branded404: true
   };

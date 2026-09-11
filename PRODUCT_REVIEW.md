@@ -1,7 +1,9 @@
 # A Day in Ireland product review
 
 Review date: 2026-08-14  
-Scope: repository, deployed Cloudflare Worker, live public data, desktop and 390px mobile behavior, accessibility, UX, copy, performance, security, maintainability, and product direction. This is a read-only review. No product, deployment, database, DNS, or external state was changed.
+Follow-up: 2026-09-11 (implementation; see the matching pull request)
+
+The 2026-08-14 review below is the original read-only snapshot. Later work, including this follow-up, addressed the High items and several Medium/Low items: API methods are GET/HEAD/OPTIONS only, `/api/health` exists and reports Cloudflare version metadata, context refresh is a Durable Object snapshot with `sources` applied before fan-out, NTA vehicle truncation is raised and still labelled `partial`, transit destinations have refresh tooling and a clearly marked stale manifest, GitHub Actions runs unit/type/lint, OPW Browser Rendering is a circuit-broken fallback rather than a second dataset, OpenAPI history no longer advertises a retained rail `trains` array, and the privacy page no longer claims a Web Analytics beacon that is not shipped. MCP was removed entirely. The original findings remain below as the evidence of that review.
 
 ## Executive verdict
 

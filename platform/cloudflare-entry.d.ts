@@ -10,6 +10,11 @@ export class RiverFeedCoordinator {
   fetch(request: Request | string): Promise<Response>;
 }
 
+export class ContextFeedCoordinator {
+  constructor(state: unknown, env: unknown);
+  fetch(request: Request | string): Promise<Response>;
+}
+
 export function historyLivingSnapshot(
   env: unknown,
   captureBucketStartMs?: number

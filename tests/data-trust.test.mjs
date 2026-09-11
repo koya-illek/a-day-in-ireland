@@ -1275,7 +1275,7 @@ test("an empty NTA feed is unavailable and is not cached as live", async () => {
 });
 
 test("a truncated NTA feed stays partial through normalization and the shared cache", async () => {
-  const { fetchTransit } = await import("../platform/api-core.js");
+  const { fetchTransit, NTA_VEHICLE_CAP: cap } = await import("../platform/api-core.js");
   const { NtaFeedCoordinator } = await import("../platform/cloudflare-entry.js");
   const now = Date.now();
   const entity = (index) => ({
@@ -1287,12 +1287,12 @@ test("a truncated NTA feed stays partial through normalization and the shared ca
       timestamp: Math.floor(now / 1000)
     }
   });
-  const fetcher = async () => Response.json({ entity: Array.from({ length: 1_201 }, (_, index) => entity(index)) });
+  const fetcher = async () => Response.json({ entity: Array.from({ length: cap + 1 }, (_, index) => entity(index)) });
   const result = await fetchTransit({ NTA_API_KEY: "test-key" }, fetcher, now);
   assert.equal(result.status, "partial");
   assert.equal(result.truncated, true);
-  assert.equal(result.sourceEntityCount, 1_201);
-  assert.equal(result.vehicles.length, 1_200);
+  assert.equal(result.sourceEntityCount, cap + 1);
+  assert.equal(result.vehicles.length, cap);
 
   const state = new Map([["snapshot", { expiresAt: now + 60_000, result }]]);
   const coordinator = new NtaFeedCoordinator({
