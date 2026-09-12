@@ -1,12 +1,20 @@
 # A Day in Ireland 2.0
 
-An Illek project.
+[Open A Day in Ireland](https://day.illek.ie/v2) · [More Illek projects](https://tools.illek.ie)
 
 A daily, near-real-time portrait of weather, water, energy and movement across Ireland.
 
-![A luminous living map of Ireland at night](public/social/day-in-ireland.jpg)
+![A Day in Ireland living atlas showing weather observations and the national energy panel](docs/assets/product-screenshot.png)
 
-Live at [day.illek.ie](https://day.illek.ie). The image above is the checked-in Open Graph living-map visual, not a captured UI screenshot.
+*Live atlas interface captured on 12 September 2026. Readings and availability change over time.*
+
+## Try it
+
+Open the atlas, choose a weather marker to inspect a reading, or search for a
+town. Switch between weather, movement and water layers, and check source
+timestamps to understand how current each observation is.
+
+The original view remains available at [day.illek.ie](https://day.illek.ie).
 
 - [Experience](#experience)
 - [Architecture](#architecture)
@@ -183,6 +191,12 @@ npm run check:budgets
 ## Experience and operations
 
 See [September experience changes](docs/experience-review.md) for the daily briefing, town directory and history decisions. Use [the operations guide](docs/production/operations.md) for read-only provider and capture checks.
+
+## Feedback and contributions
+
+Found a problem? [Report a bug](https://github.com/koya-illek/a-day-in-ireland/issues/new?template=bug_report.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for fixes and feature proposals, or
+[SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ## License
 
