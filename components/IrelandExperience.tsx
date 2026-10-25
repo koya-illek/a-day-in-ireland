@@ -2143,6 +2143,8 @@ timeMode === "past" ? <HistoryControls
   );
   const placeSurface = (
 <PlaceContext
+            notices={visibleWarnings}
+            noticesCurrent={warningsCurrent}
             selectedPlace={selectedPlace}
             selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
             placeOptions={placeOptions}
@@ -2795,7 +2797,7 @@ panelOpen && <ExplorePanel
           <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : checkedLabel}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
-          <Link href={comparisonHref} prefetch={false} className="share-button">Try v2</Link>
+          <Link href={comparisonHref} prefetch={false} className="share-button" title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</Link>
           <button
             type="button"
             className="theme-button"
@@ -2856,8 +2858,8 @@ panelOpen && <ExplorePanel
           <WorkspaceHeading
             now={now}
             timeMode={timeMode}
-            heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
-            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
+            heroSentence={selectedPlace.id!=="island" ? localStation ? `${selectedPlace.name}: nearest weather observation at ${localStation.item.name}, ${localStation.distanceKm.toFixed(1)} km away. ${localStation.item.temperature===null?"Temperature unavailable":`${localStation.item.temperature}°C`}; ${localStation.item.rainfall===null?"rainfall unavailable":`${localStation.item.rainfall} mm rain`}.` : `${selectedPlace.name}: no nearby weather observation is available within the selected coverage. Check local coverage below.` : timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
+            heroSecondary={selectedPlace.id!=="island" ? localStation ? `Weather observed ${formatAge(localStation.item.observedAt,now)}. Provider age and coverage gaps are listed below; national context remains under Across Ireland.` : "Local coverage is limited. National context remains under Across Ireland." : timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
             facts={heroFacts}
             onFact={(action) => {
               if (action === "notices") {

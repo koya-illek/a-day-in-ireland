@@ -66,6 +66,7 @@ export default function AtlasFrame(props: Props) {
     if (readingRef.current) readingRef.current.scrollTop = 0;
   }, [reading, props.timeMode, props.placeId, selectedKey]);
   const [changesOpen, setChangesOpen] = useState(false);
+  const { observations, onSelect } = props;
   const [sharedReading, setSharedReading] = useState<string | null>(null);
   useEffect(() => {
     const reading = new URL(window.location.href).searchParams.get("reading");
@@ -73,9 +74,9 @@ export default function AtlasFrame(props: Props) {
   }, []);
   useEffect(() => {
     if (!sharedReading) return;
-    const found = props.observations.find(reading => reading.type !== "movement-stack" && `${reading.type}:${reading.item.id}` === sharedReading);
-    if (found) { props.onSelect(found); setSharedReading(null); }
-  }, [sharedReading, props.observations, props.onSelect]);
+    const found = observations.find(reading => reading.type !== "movement-stack" && `${reading.type}:${reading.item.id}` === sharedReading);
+    if (found) { onSelect(found); setSharedReading(null); }
+  }, [sharedReading, observations, onSelect]);
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(30);
   useEffect(() => { if (props.selected) setExpanded(true); }, [props.selected]);
@@ -94,7 +95,7 @@ export default function AtlasFrame(props: Props) {
       <div className={styles.search}>{props.search}</div>
       <nav aria-label="View controls" className={styles.actions}>
         <button onClick={props.onShare} type="button">{props.shareLabel}</button>
-        <Link href={props.comparisonHref} prefetch={false}>Original view ↗</Link>
+        <Link href={props.comparisonHref} prefetch={false} title="Full controls, theme selection and long-form context">Full view ↗</Link>
       </nav>
     </header>
     <div className={styles.workspace}>

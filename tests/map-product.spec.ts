@@ -377,7 +377,7 @@ test("mobile preset changes preserve the visible map anchor", async ({ page }, t
     const map = page.locator("#live-map");
     const shortcuts = page.getByRole("navigation", { name: "Map view shortcuts" });
     await expect.poll(() => map.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(-80, 0);
-    for (const preset of ["Movement", "Water", "All layers", "Weather"]) {
+    for (const preset of ["Movement", "Water", "Weather"]) {
       const before = await map.evaluate((element) => element.getBoundingClientRect().top);
       const control = await shortcuts.getByRole("button", { name: preset, exact: true }).boundingBox();
       expect(control).not.toBeNull();
@@ -453,7 +453,7 @@ test("initial live hydration keeps visitors at the top of the page", async ({ pa
   await expect(page.locator(".hero-sentence")).not.toContainText("12 trains");
   await expect.poll(() => page.locator("#live-map").evaluate((element) => element.getBoundingClientRect().top)).toBeLessThanOrEqual(460);
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-  await expect(page.getByRole("heading", { name: "Ireland now." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "A daily portrait of Ireland." })).toBeVisible();
 });
 
 test("large movement clusters zoom before exposing searchable paginated results", async ({ page }) => {

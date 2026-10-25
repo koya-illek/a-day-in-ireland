@@ -100,7 +100,7 @@ export function FreshnessStrip({
                     ? "Checking for newer data"
                     : connectionLabel}
               </span>
-              {lastCheckedAt ? ` · checked ${formatTime(lastCheckedAt)}` : " · not checked yet"}{" · last success "}{lastSuccessLabel}
+              {lastCheckedAt ? ` · checked ${formatTime(lastCheckedAt)} (not observation time)` : " · not checked yet"}
             </small>
           </span>
           <details className="freshness-details">

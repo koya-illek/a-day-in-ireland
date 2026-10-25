@@ -1,5 +1,5 @@
 import { PlacePicker } from "./PlacePicker";
-import type { AirQualityReading, RiverReading, StationReading } from "../lib/types";
+import type { AirQualityReading, RiverReading, StationReading, WeatherWarning } from "../lib/types";
 import { formatIrelandHistoryTime } from "../lib/history";
 import {
   aqiLabel,
@@ -23,10 +23,12 @@ const formatLocalObservation = (
       ? `observed ${formatIrelandHistoryTime(item.observedAt)}`
       : "observation time unavailable"
     : formatAge(item.observedAt, now);
-  return `${provider} · ${item.name} · ${formatDistance(distanceKm)} · ${timing}`;
+  return `${provider} · ${item.name} · ${formatDistance(distanceKm)} away · ${timing}`;
 };
 
 export function PlaceContext({
+  notices = [],
+  noticesCurrent = false,
   selectedPlace,
   selectedPlaceIsEphemeral,
   placeOptions,
@@ -49,6 +51,8 @@ export function PlaceContext({
   airGap,
   now
 }: {
+  notices?: WeatherWarning[];
+  noticesCurrent?: boolean;
   selectedPlace: Place;
   selectedPlaceIsEphemeral: boolean;
   placeOptions: Place[];
@@ -71,6 +75,7 @@ export function PlaceContext({
   airGap: string | null;
   now: Date;
 }) {
+  const relevantNotice=notices.find(notice=>notice.regions.some(region=>region.toLowerCase().includes(selectedPlace.name.toLowerCase())));
   const placeControls = (
     <>
       <div className="place-controls">
@@ -78,10 +83,10 @@ export function PlaceContext({
         <button type="button" className="locate-button" onClick={onLocate}><span aria-hidden="true">⌖</span> Use my location</button>
       </div>
       {placeMessage && <small id="place-message" aria-live="polite">{placeMessage}</small>}
-      <details className="place-coverage"><summary>Coverage &amp; location privacy</summary>
+      <details className="place-coverage place-limits"><summary>Coverage &amp; location privacy</summary>
         <p>Town centres locate nearby readings. Weather, river and air coverage varies by provider, particularly in Northern Ireland.</p>
         <p>Weather within {NEARBY_RADIUS_KM.weather} km, rivers within {NEARBY_RADIUS_KM.river} km, air within {NEARBY_RADIUS_KM.air} km. A station reading describes its location.</p>
-        <p>{selectedPlaceIsEphemeral ? "Your coordinates are used for this session only; shared links show Ireland." : "Only your chosen town ID is saved. GPS coordinates are never stored or shared."}</p>
+        <p>{selectedPlaceIsEphemeral ? "Your coordinates are used for this session only; the share link remains an Ireland view." : "Only your chosen town ID is saved. GPS coordinates are never stored or shared."}</p>
         <a href="https://www.geonames.org/" target="_blank" rel="noreferrer">Town locations: GeoNames, CC BY 4.0</a>
       </details>
     </>
@@ -107,6 +112,7 @@ export function PlaceContext({
           <div className="place-picker">
 
             <h2 id="my-place-heading">{selectedPlace.name}</h2>
+            {selectedPlace.id!=="island" && <p className="place-context-summary">{relevantNotice ? `${relevantNotice.headline} · starts ${formatIrelandHistoryTime(relevantNotice.onset)}. ${noticesCurrent?"":"Cached notice; current status unconfirmed."}` : "No notice explicitly naming this place is represented; check county scopes in official notices. This is not an all-clear."} <a href="#official-notices">Official notices</a></p>}
             <p className="place-context-summary">{selectedPlaceIsEphemeral
               ? "Nearest available observations to the coordinates you shared for this session. Distances are shown so far-away readings are never presented as local."
               : `Nearby observations for ${selectedPlace.name}. Each source has its own radius; outside it, no local reading is shown.`}</p>
