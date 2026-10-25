@@ -148,6 +148,7 @@ const DeferredIssPanel = dynamic(
 export default function IrelandExperience({ initialSnapshot, atlas = false }: { initialSnapshot: LiveSnapshot; atlas?: boolean }) {
   const [interfaceTheme, setInterfaceTheme] = useState<"dark" | "light">("dark");
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
+  const [clockReady, setClockReady] = useState(false);
   const [wallClockNow, setWallClockNow] = useState(() => new Date(initialSnapshot.generatedAt));
   const [timeMode, setTimeMode] = useState<TimeMode>("now");
   const [historyRange, setHistoryRange] = useState<HistoryRange | null>(null);
@@ -221,7 +222,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   // simply leaves the roads out; no data layer depends on them.
   const [roadFeatures, setRoadFeatures] = useState<RoadFeature[] | null>(null);
   const [mapFeedback, setMapFeedback] = useState("");
-  const [lastCheckedAt, setLastCheckedAt] = useState(() => new Date(initialSnapshot.generatedAt));
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(() => initialSnapshot.lastSuccessAt ? new Date(initialSnapshot.generatedAt) : null);
   const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
   // When a detail dialog closes and its opening marker no longer exists (the
   // item expired underneath it), park keyboard focus on a surviving marker
@@ -475,6 +476,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
 
   useLayoutEffect(() => {
     setWallClockNow(new Date());
+    setClockReady(true);
   }, []);
 
   useEffect(() => {
@@ -1344,6 +1346,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   const weatherDisplayStatus = online ? snapshot.sourceStatus : snapshot.stations.length ? "stale" : "unavailable";
   const trainDisplayStatus = online ? snapshot.sourceProvenance?.trains.status ?? "unavailable" : snapshot.trains.length ? "stale" : "unavailable";
   const riverDisplayStatus = online ? snapshot.sourceProvenance?.rivers.status ?? "unavailable" : snapshot.rivers.length ? "stale" : "unavailable";
+  const checkedLabel = lastCheckedAt ? `Checked ${formatTime(lastCheckedAt)}` : "Not checked yet";
   const lastSuccessLabel = timeMode === "past" && historyState.envelope?.resolvedAt
     ? formatIrelandHistoryTime(historyState.envelope.resolvedAt)
     : snapshot.lastSuccessAt ? formatAge(snapshot.lastSuccessAt, now) : "not yet";
@@ -2693,8 +2696,8 @@ panelOpen && <ExplorePanel
       preset={activePreset}
       placeName={selectedPlace.name}
       placeId={selectedPlace.id}
-      dateLabel={formatDate(now)}
-      timeLabel={timeMode === "past" ? `Stored ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}
+      dateLabel={timeMode === "past" || clockReady ? formatDate(now) : "Connecting…"}
+      timeLabel={timeMode === "past" ? `Stored ${lastSuccessLabel}` : checkedLabel}
       statusLabel={timeMode === "past" ? "Stored observations" : serviceDisplayState === "live" ? "Live observations" : connectionLabel}
       summary={timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence}
       search={<PlacePicker places={placeOptions} selected={selectedPlace} onChoose={choosePlace} onSearch={() => { if (!directoryLoaded || directoryError) void loadPlaceDirectory(); }} />}
@@ -2776,7 +2779,7 @@ panelOpen && <ExplorePanel
           data-service-state={serviceDisplayState}
           title={timeMode === "past"
             ? `${connectionLabel}. Stored record ${lastSuccessLabel}.`
-            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. Checked ${formatTime(lastCheckedAt)}.`}
+            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. ${checkedLabel}.`}
         >
           {/* Only the state words are a live region; the volatile clock text
               below would re-read the whole strip every refresh otherwise. */}
@@ -2789,7 +2792,7 @@ panelOpen && <ExplorePanel
                 : historyState.status === "loading" ? "Loading history" : "History unavailable"
               : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
           </span>
-          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}</time>
+          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : checkedLabel}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
           <Link href={comparisonHref} prefetch={false} className="share-button">Try v2</Link>
@@ -2854,7 +2857,7 @@ panelOpen && <ExplorePanel
             now={now}
             timeMode={timeMode}
             heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
-            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. Checked ${formatTime(lastCheckedAt)} Irish time.` : heroSecondary}
+            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
             facts={heroFacts}
             onFact={(action) => {
               if (action === "notices") {

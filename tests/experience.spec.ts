@@ -195,7 +195,7 @@ async function installMapMarkerFixtures(page: Page, { multipleSignals = false }:
   }));
 }
 
-async function installAccessibilityContentFixtures(page: Page) {
+async function installAccessibilityContentFixtures(page: Page, description = "Heavy showers may cause difficult travelling conditions.") {
   await installMapMarkerFixtures(page);
   await page.unroute("**/api/contexts");
   await page.unroute("**/api/transit");
@@ -219,7 +219,7 @@ async function installAccessibilityContentFixtures(page: Page) {
         updated: issued,
         level: "Yellow",
         headline: "Rain warning for Westmeath",
-        description: "Heavy showers may cause difficult travelling conditions.",
+        description,
         onset: issued,
         expiry
       }],
@@ -3091,4 +3091,16 @@ test("success then 503 then offline never claims erased data was retained", asyn
   await context.setOffline(false);
   await expect(connection).toContainText(/Online|Checking for newer data/);
   await expect(retry).toBeEnabled();
+});
+
+
+test("official notice provider HTML is readable text without injected elements", async ({ page }) => {
+  await installAccessibilityContentFixtures(page, '<p>Heavy rain &amp; winds.</p><ul><li>Travel disruption</li><li>Coastal flooding</li></ul><img src=x onerror="window.noticeInjected=true"><script>window.noticeInjected=true</script>');
+  await page.goto("/");
+  const description = page.locator(".official-notice .warning-description");
+  await expect(description).toBeVisible();
+  await expect(description).toHaveText("Heavy rain & winds. • Travel disruption • Coastal flooding");
+  expect(await description.innerText()).toContain("\n• Travel disruption");
+  await expect(description.locator("img, script, ul, li")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as Window & { noticeInjected?: boolean }).noticeInjected)).toBeUndefined();
 });

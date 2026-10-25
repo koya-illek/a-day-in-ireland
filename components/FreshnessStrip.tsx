@@ -41,7 +41,7 @@ export function FreshnessStrip({
   serviceDisplayState: ServiceDisplayState;
   lastSuccessLabel: string;
   connectionLabel: string;
-  lastCheckedAt: Date;
+  lastCheckedAt: Date | null;
   now: Date;
   online: boolean;
   servicesRefreshing: boolean;
@@ -100,7 +100,7 @@ export function FreshnessStrip({
                     ? "Checking for newer data"
                     : connectionLabel}
               </span>
-              {" · checked "}{formatTime(lastCheckedAt)}{" · last success "}{lastSuccessLabel}
+              {lastCheckedAt ? ` · checked ${formatTime(lastCheckedAt)}` : " · not checked yet"}{" · last success "}{lastSuccessLabel}
             </small>
           </span>
           <details className="freshness-details">

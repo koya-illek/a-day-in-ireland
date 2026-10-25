@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   humaniseWarningRegions,
+  warningDescriptionText,
   publicRouteFromNtaRouteId,
   transitPresentation
 } from "../lib/presentation.js";
@@ -75,4 +76,16 @@ test("TFI presentation states when direction is genuinely unavailable", () => {
   assert.equal(presentation.direction, "Direction unavailable from this TFI live vehicle feed");
   assert.equal(presentation.destination, "Destination unavailable from this TFI live vehicle feed");
   assert.equal(presentation.label, null);
+});
+
+
+test("official notice HTML becomes readable plain text with paragraphs and list items", () => {
+  assert.equal(warningDescriptionText("<p>Strong winds &amp; rain.</p><ul><li>Wave overtopping</li><li>Travel disruption</li></ul><p>Met &Eacute;ireann</p>"), "Strong winds & rain.\n\n• Wave overtopping\n\n• Travel disruption\n\nMet Éireann");
+  assert.equal(warningDescriptionText("Plain notice\nSecond line"), "Plain notice\nSecond line");
+  assert.equal(warningDescriptionText(null), "");
+});
+
+test("notice normalization discards executable markup without turning encoded tags into HTML", () => {
+  assert.equal(warningDescriptionText('<script>alert(1)</script><style>bad</style><p onclick="bad()">Safe &#233; &#x1F327; &lt;img src=x onerror=bad()&gt;</p>'), "Safe é 🌧 <img src=x onerror=bad()>");
+  assert.equal(warningDescriptionText("&#0; &#x110000; &#xD800;"), "� � �");
 });

@@ -4288,3 +4288,6 @@ html[data-theme="light"] .transit-marker text {
     overflow-wrap: anywhere;
   }
 }
+
+/* Provider paragraphs and list items stay readable without rendering HTML. */
+.warning-copy > .warning-description { white-space: pre-line; }
