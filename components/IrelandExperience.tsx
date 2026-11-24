@@ -125,7 +125,8 @@ const PlacePicker = dynamic(() => import("./PlacePicker").then(m => m.PlacePicke
 const WeatherTimeline = dynamic(() => import("./WeatherTimeline").then(m => m.WeatherTimeline), { ssr: false, loading: () => <section id="day-so-far" className="dayline"><h2>The shape of the day</h2><p>Loading hourly observations…</p></section> });
 import { MapCanvas } from "./MapCanvas";
 import { WorkspaceHeading } from "./WorkspaceHeading";
-const PlaceContext = dynamic(() => import("./PlaceContext").then(m => m.PlaceContext), { ssr: false });
+// Render location controls before hydration so the map keeps its place.
+const PlaceContext = dynamic(() => import("./PlaceContext").then(m => m.PlaceContext));
 const FreshnessStrip = dynamic(() => import("./FreshnessStrip").then(m => m.FreshnessStrip), { ssr: false });
 import { constrainMapView, useMapGestures } from "./use-map-gestures";
 
@@ -1826,7 +1827,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
           : riversCached
             ? riverStationCount === null ? "Saved gauge coverage is unavailable." : `${riverStationCount} gauge readings are retained from the last successful refresh; they are not current levels.`
             : riversFallback
-              ? riverStationCount === null ? "Fallback gauge coverage is unavailable." : `${riverStationCount} readings come from a temporary OPW fetch path (${snapshot.sourceProvenance?.rivers.fallback}); they are still OPW levels, not flood warnings.`
+              ? riverStationCount === null ? "Fallback gauge coverage is unavailable." : `${riverStationCount} OPW gauge readings are available; source access is limited. These are not flood warnings.`
               : "OPW river readings are unavailable, so current levels cannot be assessed."
       },
       sea: {
@@ -2978,7 +2979,7 @@ panelOpen && <ExplorePanel
         <button type="button" className="pulse-card rivers" onClick={() => focusContext("rivers")}>
           <span><i>≈</i> River network</span>
           <strong>{isConnectingWithoutSnapshot ? "…" : riversAvailable ? (riverStationCount ?? snapshot.rivers.length) || "Unavailable" : "Unavailable"}</strong>
-          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "temporary OPW fetch-path readings are present, but the gauge count is unavailable" : `temporary ${snapshot.sourceProvenance?.rivers.fallback} path · still OPW gauge levels` : "river readings unavailable; current levels cannot be assessed"}</small>
+          <small>{isConnectingWithoutSnapshot ? timeMode === "past" ? "Loading stored OPW coverage" : "Connecting to OPW river gauges" : timeMode === "past" ? riversLive && !riverDataStale ? riverStationCount === null ? "OPW observations are present, but the retained gauge count is unavailable" : "OPW gauges retained in this historical record" : historyGapForFocus(historyGaps, "rivers")?.detail ?? "River observations were not retained" : riversLive && !riverDataStale ? riverStationCount === null ? "OPW readings are present, but the gauge count is unavailable" : "fresh OPW gauges distilled into a readable view across Ireland" : riversPartial ? `${snapshot.rivers.length} recent readings · partial coverage` : riversCached ? riverStationCount === null ? "cached river readings are present, but the gauge count is unavailable" : "gauges represented in the cached snapshot; current levels are unconfirmed" : riversFallback ? riverStationCount === null ? "OPW readings are available, but gauge coverage is unconfirmed" : "OPW gauge readings · limited source access" : "river readings unavailable; current levels cannot be assessed"}</small>
           <b>See the water →</b>
         </button>
         </div>
