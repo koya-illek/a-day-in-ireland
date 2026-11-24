@@ -3123,6 +3123,30 @@ body {
   min-height: 44px;
 }
 
+.supporting-outlook {
+  margin-block: 1rem;
+  border-block: 1px solid var(--line);
+}
+.supporting-outlook > summary {
+  min-block-size: 44px;
+  align-content: center;
+  color: var(--ink);
+  cursor: pointer;
+  padding-block: .65rem;
+  font-weight: 600;
+}
+
+.section-nav a {
+  color: var(--ink);
+  text-underline-offset: .18em;
+}
+
+.place-context-summary a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: .18em;
+}
+
 .section-nav a:hover,
 .section-nav a:focus-visible {
   background: rgba(255, 248, 232, .07);

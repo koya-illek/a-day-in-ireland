@@ -77,10 +77,11 @@ html[data-theme="light"] .place-search-results li[aria-selected="true"] { color:
 .experience .ireland-map .wind-marker:not([data-map-marker]) text { display: none; }
 .experience .road-network path { opacity: .35; }
 .experience .road-network path.motorway { filter: none; }
-.experience .what-matters-now { order: 3; border-top: 1px solid var(--surface-line); }
+.experience .what-matters-now { order: 4; border-top: 1px solid var(--surface-line); }
 .experience .sky-light-strip { order: 4; }
 .experience .forecast-strip { order: 5; }
-.experience .freshness-strip { order: 6; font-size: .8rem; }
+.experience .supporting-outlook { order: 5; }
+.experience .freshness-strip { order: 3; font-size: .8rem; }
 .experience .official-notices { order: 7; border-top: 1px solid var(--surface-line); }
 .experience .dayline { max-width: 77.5rem; margin: 0 auto; padding: 1rem 0 2rem; border-top: 1px solid var(--surface-line); }
 .experience :is(.what-matters-heading,.dayline-heading) h2 { font-size: 1.65rem; }
