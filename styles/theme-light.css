@@ -1,0 +1,312 @@
+/* Incumbent light palette; the link media selects System or an explicit pin. */
+html:root {
+  --chart-temperature: #84601f;
+  --chart-rain: #286982;
+  --surface-line: #b7c7b9;
+}
+/* Bright interface theme. Live daylight and night data remain unchanged. */
+html:root {
+  --ink: #12251f;
+  --muted: #52665e;
+  --green: #3f6d4d;
+  --moss: #66825d;
+  --sea: #dcebea;
+  --deep: #edf2ea;
+  --panel: rgba(255, 255, 251, .94);
+  --line: rgba(24, 61, 49, .2);
+  --amber: #8a5e16;
+  --weather-accent: #316f92;
+  --movement-accent: #9a4f2d;
+  --water-accent: #397a9d;
+  --energy-accent: #926415;
+  --air-accent: #527844;
+  --warning-accent: #9d542f;
+  --warning-strong: #8b392a;
+  --panel-soft: rgba(255, 255, 255, .7);
+  --panel-softer: rgba(240, 247, 239, .8);
+  /* Accent text remapped for AA contrast on light surfaces. */
+  --accent-ice: #0b4a56;
+  --accent-gold: #6b4d0d;
+  --accent-warn-head: #223041;
+  --accent-table-dim: #3c4a5c;
+  --accent-cream: #5d4520;
+  background: #edf2ea;
+}
+
+html:root body {
+  background: #edf2ea;
+  color: var(--ink);
+}
+
+html:root .experience {
+  background:
+    radial-gradient(circle at 12% 4%, rgba(255, 255, 255, .98), transparent 28rem),
+    radial-gradient(circle at 88% 10%, rgba(185, 218, 213, .55), transparent 30rem),
+    linear-gradient(180deg, #f8faf4 0%, #edf3eb 42%, #e4ede7 100%);
+}
+
+html:root .experience::before {
+  background:
+    radial-gradient(circle at 76% 10%, rgba(255, 213, 132, .23), transparent 22rem),
+    linear-gradient(180deg, rgba(255, 255, 255, .6), transparent 28%);
+}
+
+html:root .experience::after {
+  background-image:
+    linear-gradient(rgba(25, 74, 59, .035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(25, 74, 59, .03) 1px, transparent 1px);
+  mix-blend-mode: multiply;
+  opacity: .5;
+}
+
+html:root .topbar {
+  background: rgba(252, 253, 247, .9);
+  border-bottom-color: rgba(31, 73, 59, .2);
+  box-shadow: 0 10px 35px rgba(39, 74, 62, .08);
+}
+
+html:root .brand-mark,
+html:root .live-state,
+html:root .share-button,
+html:root .panel-button,
+html:root .theme-button {
+  background: #fff;
+  border-color: rgba(31, 73, 59, .24);
+  color: #173229;
+}
+
+html:root .panel-button {
+  background: #315f49;
+  border-color: #315f49;
+  color: #fff;
+}
+
+html:root .live-state time { color: #173229; }
+
+html:root :where(
+  .section-rail,
+  .workspace-heading,
+  .map-stage,
+  .place-context,
+  .freshness-strip,
+  .official-notices,
+  .what-matters-now,
+  .dayline,
+  .sky-light-strip,
+  .forecast-strip,
+  .pulse-card,
+  .explore-panel,
+  .station-card,
+  .history-controls,
+  .source-directory,
+  footer
+) {
+  background: rgba(255, 255, 252, .92);
+  border-color: rgba(31, 73, 59, .18);
+  box-shadow: 0 16px 42px rgba(46, 76, 64, .08);
+  color: var(--ink);
+}
+
+html:root :where(
+  .section-nav a,
+  .map-presets button,
+  .map-navigation button,
+  .layer-list > button,
+  .panel-presets button,
+  .freshness-chip,
+  .source-directory a
+) {
+  background: #f7faf5;
+  border-color: rgba(31, 73, 59, .18);
+  color: #173229;
+}
+
+/* Deliberately not wrapped in :where(): the html[data-theme] attribute must
+   out-rank base hover/active rules that use translucent white overlays which
+   vanish on light surfaces. */
+html:root .section-nav a:hover,
+html:root .section-nav a:focus-visible,
+html:root .section-nav a.active,
+html:root .section-nav a[aria-current="location"],
+html:root .map-presets button.active,
+html:root .layer-list > button.active,
+html:root .panel-presets button.active {
+  background: #dce9dc;
+  border-color: #62826a;
+  color: #173229;
+}
+
+html:root :where(.hero-sentence, .forecast-copy, .map-caption, .station-card p) {
+  color: #263d35;
+}
+
+html:root .map-canvas {
+  background:
+    radial-gradient(circle at 34% 20%, rgba(255, 255, 255, .92), transparent 19rem),
+    linear-gradient(155deg, #c9eeef, #e8f7f3 56%, #cfeae1);
+  border-color: rgba(38, 88, 76, .28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .62), 0 18px 44px rgba(45, 91, 79, .1);
+}
+
+html:root .island-shape path {
+  fill: #a7bf91;
+  stroke: #4f7567;
+}
+
+html:root .map-ocean { fill: #d4f0ef; }
+html:root .road-network path { stroke: rgba(55, 99, 92, .72); }
+html:root .road-network path.motorway { stroke: #396f72; }
+html:root .road-network path.trunk { stroke: #50827b; }
+html:root .sea-lines path { stroke: #4f9293; }
+html:root .night-shade { fill: #6d8790; opacity: .04; }
+
+html:root .map-navigation {
+  background: rgba(255, 255, 252, .88);
+  border-color: rgba(38, 88, 76, .2);
+  box-shadow: 0 .75rem 1.8rem rgba(42, 76, 65, .14);
+}
+
+html:root .map-navigation button,
+html:root .map-navigation .zoom-readout {
+  background: #f9fcf8;
+  border-color: rgba(38, 88, 76, .18);
+  color: #173229;
+}
+
+html:root .panel-backdrop { background: rgba(29, 48, 41, .3); }
+html:root .explore-panel { background: #fbfcf8; }
+
+/* Form controls keep dark navy surfaces in the dark theme only; light theme
+   gives them light surfaces so var(--ink) text stays readable. */
+html:root .movement-browser-filters input,
+html:root .movement-browser-filters select,
+html:root .history-mode-toggle,
+html:root .history-picker input {
+  background: #fff;
+  border-color: rgba(31, 73, 59, .3);
+  color: var(--ink);
+}
+
+html:root a { text-decoration-color: rgba(49, 95, 73, .42); }
+
+/* Second pass over surfaces the first light-theme sweep missed: content cards
+   and map overlays that hardcode dark-navy backgrounds while their text uses
+   variables that flip dark in this theme. */
+html:root :where(
+  .warning-strip,
+  .workspace-facts button,
+  .place-observations dl > div,
+  .guidance-card,
+  .notable-signals button,
+  .timeline-selection,
+  .timeline-data-list,
+  .official-notices-empty,
+  .movement-browser,
+  .movement-results button,
+  .movement-pagination button,
+  .map-presets,
+  .map-legend,
+  .map-context-disclosure,
+  .freshness-details > summary,
+  .history-result,
+  .history-comparison,
+  .history-period-summary
+) {
+  background: rgba(255, 255, 252, .92);
+  border-color: rgba(31, 73, 59, .18);
+  color: var(--ink);
+}
+
+html:root .place-controls select,
+html:root .layer-group-controls > button {
+  background: #fff;
+  border-color: rgba(31, 73, 59, .3);
+  color: var(--ink);
+}
+
+html:root .guidance-card:hover,
+html:root .guidance-card:focus-visible {
+  background: #eef4ec;
+  border-color: rgba(31, 73, 59, .34);
+}
+
+/* Map overlays keep their instrument-panel role but need readable text on the
+   light canvas; give them the same paper surface as the navigation rail. */
+html:root :where(.map-notice, .map-data-panel, .radar-control) {
+  background: rgba(252, 253, 249, .96);
+  border-color: rgba(38, 88, 76, .22);
+  box-shadow: 0 1rem 2.5rem rgba(46, 76, 64, .12);
+}
+
+html:root .map-data-panel dl div { background: #f1f6ef; }
+
+/* Literal accent text tuned for dark surfaces needs darker equivalents here. */
+html:root .info-content a {
+  color: #0b4a56;
+  text-decoration-color: rgba(11, 74, 86, .35);
+}
+html:root .aurora-panel .utility-label,
+html:root .aurora-probability strong { color: #1c6b4a; }
+html:root .iss-panel .utility-label,
+html:root .iss-orbit-value strong { color: #34527a; }
+html:root .guidance-card.localized-notice .guidance-status,
+html:root .warning-key-facts dt,
+html:root .history-ambiguity legend { color: #6b4d0d; }
+html:root .history-result.error,
+html:root .history-result.gap,
+html:root .history-error {
+  border-color: #8a6a14;
+  color: #5d4520;
+}
+html:root .history-retry {
+  border-color: #8a6a14;
+  color: #5d4520;
+}
+html:root .history-result a { color: #0b4a56; }
+
+/* Third pass over pale text literals that survived the two surface sweeps:
+   their containers now flip light, so the dark-theme literals fail contrast
+   (measured 1.02:1 to 2.86:1) until remapped here. */
+html:root .place-picker h2 { color: var(--ink); }
+html:root .warning-strip.red {
+  background: rgba(167, 93, 67, .12);
+  border-color: rgba(139, 57, 42, .45);
+  border-left-color: var(--warning-strong);
+  color: #5d2018;
+}
+html:root .warning-actions a,
+html:root .warning-actions summary { color: #223041; }
+html:root :is(.history-picker label, .history-scrubber, .history-ambiguity label, .timeline-data-list > summary) { color: #263d35; }
+html:root .history-period-summary dd { color: #223041; }
+html:root .guidance-card.relevant-notice .guidance-status { color: #8b392a; }
+html:root .guidance-card.limited-context .guidance-status,
+html:root .guidance-card.no-current-signal .guidance-status,
+html:root .guidance-card.live-coverage .guidance-status,
+html:root .guidance-card.connecting .guidance-status { color: #34527a; }
+html:root .place-limits { color: var(--muted); }
+html:root footer nav a { color: var(--green); }
+html:root footer nav a:hover,
+html:root footer nav a:focus-visible { color: #173229; }
+html:root .detail-emblem.warning { color: var(--warning-strong); }
+
+/* Cluster-count digits sit on circle fills that darken in this theme. */
+html:root .movement-stack-marker text,
+html:root .transit-marker text {
+  fill: #fdfffe;
+  paint-order: stroke;
+  stroke: rgba(23, 50, 41, .4);
+  stroke-width: 2px;
+}
+
+@media (max-width: 600px) {
+  html:root .section-rail {
+    background: rgba(250, 252, 247, .97);
+    box-shadow: 0 -12px 32px rgba(37, 68, 57, .12);
+  }
+}
+
+
+html:root .theme-target-light { display: none; }
+html:root .theme-target-dark { display: inline-flex; align-items: center; gap: .42rem; }
+
+html:root .place-search-results li[aria-selected="true"] { color: white; }

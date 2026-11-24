@@ -92,7 +92,7 @@ export default function AtlasFrame(props: Props) {
   const matches = props.observations.filter(item => observationName(item).toLocaleLowerCase("en-IE").includes(query.toLocaleLowerCase("en-IE")));
   const historicalMovement = props.timeMode === "past" && props.preset === "movement";
   const changeReading = (next: Reading) => { props.onSelect(null); setReading(next); setExpanded(true); };
-  return <main ref={props.experienceRef} className={styles.atlas} data-preset={props.preset} data-time-mode={props.timeMode} data-expanded={isExpanded}>
+  return <main ref={props.experienceRef} className={styles.atlas} data-view="atlas" data-preset={props.preset} data-time-mode={props.timeMode} data-expanded={isExpanded}>
     <a className="skip-link" href="#atlas-reading">Skip to observations</a>
     <header className={styles.header}>
       <div className={styles.identity}><Link href="/v2"><h1>A Day in Ireland</h1></Link><span>Living atlas · v2</span></div>

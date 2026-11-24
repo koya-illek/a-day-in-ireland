@@ -14,6 +14,7 @@ import {
   useState
 } from "react";
 import { createPortal } from "react-dom";
+import { applyInterfaceTheme, INTERFACE_THEME_KEY, type InterfaceTheme } from "../lib/interface-theme";
 import dynamic from "next/dynamic";
 import { geoMercator, geoPath } from "d3-geo";
 import { PRESET_LAYERS, LAYER_GROUPS } from "../lib/map-presets";
@@ -146,7 +147,8 @@ const DeferredIssPanel = dynamic(
 );
 
 export default function IrelandExperience({ initialSnapshot, atlas = false }: { initialSnapshot: LiveSnapshot; atlas?: boolean }) {
-  const [interfaceTheme, setInterfaceTheme] = useState<"dark" | "light">("dark");
+  const [interfaceTheme, setInterfaceTheme] = useState<InterfaceTheme | null>(null);
+  const interfaceThemeOverride = useRef<InterfaceTheme | null>(null);
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
   const [clockReady, setClockReady] = useState(false);
   const [wallClockNow, setWallClockNow] = useState(() => new Date(initialSnapshot.generatedAt));
@@ -2083,30 +2085,42 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   }, [activePreset, atlas, selected, historyState.envelope?.resolvedAt, historyState.requestedAt, layers, mapView, scheduleShareReset, selectedPlace, selectedPlaceIsEphemeral, timeMode]);
 
   useLayoutEffect(() => {
-    let storedTheme: string | null = null;
+    const system = window.matchMedia("(prefers-color-scheme: dark)");
     try {
-      storedTheme = window.localStorage.getItem("ireland-interface-theme");
+      const stored = window.localStorage.getItem(INTERFACE_THEME_KEY);
+      interfaceThemeOverride.current = stored === "light" || stored === "dark" ? stored : null;
     } catch {
-      // The system preference remains available when browser storage is blocked.
+      interfaceThemeOverride.current = null;
     }
-    const preferredTheme = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-    const nextTheme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : preferredTheme;
-    setInterfaceTheme(nextTheme);
-    document.documentElement.dataset.theme = nextTheme;
-  }, []);
+    const sync = () => setInterfaceTheme(applyInterfaceTheme(interfaceThemeOverride.current, atlas));
+    const storage = (event: StorageEvent) => {
+      if (event.key !== INTERFACE_THEME_KEY && event.key !== null) return;
+      interfaceThemeOverride.current = event.newValue === "light" || event.newValue === "dark" ? event.newValue : null;
+      sync();
+    };
+    sync();
+    system.addEventListener("change", sync);
+    window.addEventListener("storage", storage);
+    return () => {
+      system.removeEventListener("change", sync);
+      window.removeEventListener("storage", storage);
+    };
+  }, [atlas]);
 
   const toggleInterfaceTheme = useCallback(() => {
-    setInterfaceTheme((currentTheme) => {
-      const nextTheme = currentTheme === "dark" ? "light" : "dark";
-      document.documentElement.dataset.theme = nextTheme;
-      try {
-        window.localStorage.setItem("ireland-interface-theme", nextTheme);
-      } catch {
-        // The selected theme remains active for this page when storage is blocked.
-      }
-      return nextTheme;
-    });
-  }, []);
+    const system = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    const current = interfaceTheme ?? interfaceThemeOverride.current ?? system;
+    const target = current === "dark" ? "light" : "dark";
+    const preference = target === system ? null : target;
+    interfaceThemeOverride.current = preference;
+    setInterfaceTheme(applyInterfaceTheme(preference, atlas));
+    try {
+      if (preference) window.localStorage.setItem(INTERFACE_THEME_KEY, preference);
+      else window.localStorage.removeItem(INTERFACE_THEME_KEY);
+    } catch {
+      // A blocked store must not prevent a current-page comfort adjustment.
+    }
+  }, [atlas, interfaceTheme]);
 
   const saveBriefing = () => void import("../lib/download-briefing").then(({ downloadBriefing }) => downloadBriefing({
           date: `${formatDate(now)}, ${formatTime(now)} Irish time`,
@@ -2807,11 +2821,11 @@ panelOpen && <ExplorePanel
             type="button"
             className="theme-button"
             aria-label="Dark mode"
-            aria-pressed={interfaceTheme === "dark"}
+            aria-pressed={interfaceTheme === null ? undefined : interfaceTheme === "dark"}
             onClick={toggleInterfaceTheme}
           >
-            <span aria-hidden="true">{interfaceTheme === "dark" ? "☼" : "☾"}</span>
-            {interfaceTheme === "dark" ? "Light" : "Dark"}
+            <span className="theme-target-light"><span aria-hidden="true">☼</span>Light</span>
+            <span className="theme-target-dark"><span aria-hidden="true">☾</span>Dark</span>
           </button>
           <button
             type="button"

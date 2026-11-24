@@ -65,8 +65,13 @@ const totalGzipBytes = (paths) => paths.reduce(
 );
 const initialJavascriptBytes = totalBytes(initialJavascript);
 const initialJavascriptGzipBytes = totalGzipBytes(initialJavascript);
-const initialStylesheetBytes = totalBytes(initialStylesheets);
-const initialStylesheetGzipBytes = totalGzipBytes(initialStylesheets);
+// Inline critical CSS is shipped CSS too; never let moving a stylesheet into
+// the document evade the existing raw/gzip budgets.
+const initialInlineStyles = [...indexHtml.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)].map(([, css]) => css);
+const initialInlineStylesheetBytes = initialInlineStyles.reduce((total, css) => total + Buffer.byteLength(css), 0);
+const initialInlineStylesheetGzipBytes = initialInlineStyles.reduce((total, css) => total + gzipSync(css, { level: 9 }).length, 0);
+const initialStylesheetBytes = totalBytes(initialStylesheets) + initialInlineStylesheetBytes;
+const initialStylesheetGzipBytes = totalGzipBytes(initialStylesheets) + initialInlineStylesheetGzipBytes;
 const initialPageJavascript = initialJavascript.find((path) => /\/chunks\/app\/page-[^/]+\.js$/.test(path));
 if (!initialPageJavascript) throw new Error("The landing page JavaScript chunk is missing");
 const initialPageJavascriptBytes = bytes(initialPageJavascript);
@@ -120,6 +125,8 @@ console.log(JSON.stringify({
     initialJavascriptBytes,
     initialJavascriptGzipBytes,
     initialPageJavascriptBytes,
+    initialInlineStylesheetBytes,
+    initialInlineStylesheetGzipBytes,
     initialStylesheetBytes,
     initialStylesheetGzipBytes,
     initialRequests

@@ -1,7 +1,18 @@
 import type { Metadata, Viewport } from "next";
 import { DM_Sans, Newsreader } from "next/font/google";
+import { createRequire } from "node:module";
+import postcss from "postcss";
+import { readFileSync } from "node:fs";
+import { applyInterfaceTheme } from "../lib/interface-theme";
 import "./globals.css";
 import "./experience.css";
+
+const require = createRequire(import.meta.url);
+const cssnano = require("next/dist/compiled/cssnano-simple");
+// Critical palette is inline: activating an initially nonmatching external
+// stylesheet can paint the wrong theme before its request completes.
+const lightThemeCss = postcss([cssnano({ colormin: false })])
+  .process(readFileSync("styles/theme-light.css", "utf8"), { from: undefined, map: false }).css;
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
@@ -59,7 +70,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  colorScheme: "dark light",
+  colorScheme: "light dark",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#edf2ea" },
     { media: "(prefers-color-scheme: dark)", color: "#071815" }
@@ -72,7 +83,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en-IE" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: `(function(){try{var t=localStorage.getItem('ireland-interface-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme='dark'}})()` }} />
+        <style id="ireland-light-theme" suppressHydrationWarning media="(prefers-color-scheme: light)" dangerouslySetInnerHTML={{ __html: lightThemeCss }} />
+        <script dangerouslySetInnerHTML={{ __html: `(function(){var t=null;try{t=localStorage.getItem('ireland-interface-theme')}catch(e){}(${applyInterfaceTheme.toString()})(t==='light'||t==='dark'?t:null,(location.pathname==='/v2'||location.pathname.startsWith('/v2/')))})()` }} />
       </head>
       <body className={`${dmSans.variable} ${newsreader.variable}`}>{children}</body>
     </html>
