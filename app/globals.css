@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --ink: #f5efdf;
   --muted: #b0b0a2;
   --green: #95ab74;
@@ -139,7 +140,7 @@ button { color: inherit; }
 .brand-mark svg { fill: none; height: 1.55rem; width: 1.55rem; }
 .brand-mark path { stroke-linecap: round; stroke-width: 1.6; }
 .brand b, .brand small { display: block; }
-.brand b { font-family: "Newsreader", serif}
+.brand b {}
 .brand small { text-transform: uppercase}
 .live-state {
   align-items: center;
@@ -186,13 +187,11 @@ button { color: inherit; }
   position: relative}
 .map-presets {
   backdrop-filter: blur(18px);
-  background: rgba(5, 24, 22, .72);
   border: 1px solid var(--line);
   border-radius: 999px;
   bottom: 2rem;
   display: flex;
   gap: .2rem;
-  left: clamp(1rem, 5vw, 5rem);
   padding: .28rem;
   position: absolute;
   z-index: 14;
@@ -213,18 +212,14 @@ button { color: inherit; }
 .map-presets button.active { background: var(--ink); color: var(--deep); }
 .preset-dot { background: var(--amber); border-radius: 50%; height: .42rem; width: .42rem; }
 .ireland-map {
-  height: min(94vh, 60rem);
-  min-width: 63rem;
   position: absolute;
   right: max(-7rem, calc((100vw - 96rem) / 2));
   top: 2.5rem;
-  width: min(67vw, 64rem);
 }
 .sea-lines path {
   animation: tide 14s ease-in-out infinite alternate;
   fill: none;
   opacity: .18;
-  stroke: #6f9b94;
   stroke-width: 1;
 }
 .sun-glow { transition: cx 3s linear, cy 3s linear; }
@@ -242,11 +237,11 @@ button { color: inherit; }
   fill: url("#rainMist");
   opacity: .72;
 }
-.place circle { fill: #f3e6b3; }
-.place text { fill: rgba(248, 245, 229, .74); font-size: 11px; paint-order: stroke; stroke: rgba(17, 44, 39, .8); stroke-width: 4px; }
+.place circle { }
+.place text { font-size: 11px; paint-order: stroke; stroke-width: 4px; }
 .station-marker { cursor: pointer; outline: none; }
-.station-marker text { fill: #fff9e7; font-size: 13px; font-weight: 600; paint-order: stroke; stroke: #1b4238; stroke-width: 5px; }
-.station-halo { fill: rgba(244, 241, 230, .15); stroke: rgba(244, 241, 230, .34); }
+.station-marker text { fill: #fff9e7; font-size: 13px; font-weight: 600; paint-order: stroke; stroke-width: 5px; }
+.station-halo { fill: rgba(244, 241, 230, .15); }
 .station-core { fill: #f7e5a5; }
 .station-marker:hover .station-halo, .station-marker:focus .station-halo, .station-marker.is-active .station-halo { fill: rgba(247, 229, 165, .35); stroke: #f7e5a5; }
 .rain-ring { animation: rainRing 2.5s infinite; fill: none; stroke: #a5daf1; }
@@ -287,12 +282,11 @@ button { color: inherit; }
   stroke-width: 2;
 }
 .night-shade {
-  fill: #071313;
   opacity: .58;
   pointer-events: none;
   transition: x 2s ease, width 2s ease;
 }
-.is-night .night-shade { opacity: .72; }
+.is-night .night-shade { }
 .map-caption {
   color: var(--muted);
   font-size: .66rem;
@@ -309,7 +303,6 @@ button { color: inherit; }
 }
 .station-card {
   backdrop-filter: blur(20px);
-  background: rgba(7, 28, 25, .9);
   border: 1px solid var(--line);
   border-radius: 1rem;
   bottom: calc(2rem + env(safe-area-inset-bottom));
@@ -346,12 +339,9 @@ button { color: inherit; }
 }
 .warning-strip {
   align-items: center;
-  background: #d8b15d;
-  color: #1d2119;
   display: grid;
   gap: 1rem;
   grid-template-columns: auto 1fr auto;
-  margin: 0 clamp(1rem, 3vw, 3rem);
   padding: 1rem 1.25rem;
 }
 .warning-strip > span { border: 1px solid currentColor; border-radius: 2rem; font-size: .65rem; font-weight: 600; padding: .3rem .55rem; text-transform: uppercase; }
@@ -359,21 +349,17 @@ button { color: inherit; }
 .warning-strip small { margin-top: .15rem}
 .warning-strip time { font-size: .72rem; white-space: nowrap; }
 .pulse-card {
-  background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.018));
   border: 1px solid var(--line);
-  border-radius: 1.1rem;
   color: var(--ink);
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  min-height: 16rem;
-  padding: 1.2rem;
   text-align: left;
   transition: transform .2s ease, border-color .2s ease;
 }
-.pulse-card:hover, .pulse-card:focus-visible { border-color: rgba(234, 200, 117, .55); transform: translateY(-4px); }
+.pulse-card:hover, .pulse-card:focus-visible { transform: translateY(-4px); }
 .pulse-card > span { color: var(--amber); font-size: .67rem; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; }
-.pulse-card strong { font-family: "Newsreader", serif; font-size: clamp(3rem, 4.5vw, 5rem); font-weight: 400; letter-spacing: -.05em; line-height: 1; margin-top: 1.7rem; }
+.pulse-card strong { font-family: "Newsreader", serif; font-weight: 400; letter-spacing: -.05em; line-height: 1; margin-top: 1.7rem; }
 .pulse-card small { color: var(--muted); font-size: .7rem; line-height: 1.45; margin-top: .4rem; }
 .pulse-card b { font-size: .7rem; margin-top: auto; padding-top: 1rem; }
 .pulse-card.trains > span { color: #f09a72; }
@@ -381,15 +367,14 @@ button { color: inherit; }
 .dayline {
   margin: 0 auto;
   max-width: 92rem;
-  padding: clamp(4rem, 8vw, 8rem) clamp(1rem, 5vw, 5rem);
 }
 .dayline-heading { align-items: flex-end; display: flex; justify-content: space-between; }
-.dayline-heading h2 { font-family: "Newsreader", serif; font-size: clamp(2.5rem, 4vw, 4rem); font-weight: 400}
+.dayline-heading h2 { font-family: "Newsreader", serif; font-weight: 400}
 .dayline-heading > p { color: var(--muted); font-size: .8rem; max-width: 18rem; }
-.timeline-chart { align-items: flex-end; border-bottom: 1px solid var(--line); display: flex; gap: clamp(.25rem, 1vw, 1rem); height: 12rem; margin-top: 2rem; }
+.timeline-chart { align-items: flex-end; border-bottom: 1px solid var(--line); display: flex; height: 12rem; margin-top: 2rem; }
 .timeline-empty { align-self: center; color: var(--muted); font-family: "Newsreader", serif; margin: auto; text-align: center}
-.timeline-point { align-items: center; display: flex; flex: 1; flex-direction: column; height: 100%; justify-content: flex-end; min-width: 0; }
-.timeline-point .bar { background: linear-gradient(#d6c587, #5e8063); border-radius: 1rem 1rem 0 0; min-height: 4px; opacity: .72; width: 100%; }
+.timeline-point { align-items: center; display: flex; flex-direction: column; height: 100%; justify-content: flex-end; min-width: 0; }
+.timeline-point .bar { min-height: 4px; opacity: .72; width: 100%; }
 .timeline-point small { color: var(--muted); font-size: .58rem; height: 1.3rem; padding-top: .4rem; }
 .explore-panel {
   backdrop-filter: blur(30px);
@@ -413,7 +398,6 @@ button { color: inherit; }
 .layer-list { display: grid; gap: .55rem; }
 .layer-list > button {
   align-items: center;
-  background: rgba(255, 255, 255, .025);
   border: 1px solid var(--line);
   border-radius: .8rem;
   cursor: pointer;
@@ -428,7 +412,7 @@ button { color: inherit; }
 .layer-list small { color: var(--muted); font-size: .66rem; margin-top: .16rem; }
 .layer-toggle { border: 1px solid #6e8175; border-radius: 2rem; height: 1.15rem; position: relative; width: 2rem; }
 .layer-toggle::after { background: #75847b; border-radius: 50%; content: ""; height: .75rem; left: .17rem; position: absolute; top: .14rem; transition: .2s; width: .75rem; }
-.layer-list > button.active .layer-toggle { border-color: var(--amber); }
+.layer-list > button.active .layer-toggle { }
 .layer-list > button.active .layer-toggle::after { background: var(--amber); transform: translateX(.8rem); }
 .source-note { border-top: 1px solid var(--line); color: var(--muted); font-size: .72rem; line-height: 1.55; margin-top: 2rem; padding-top: 1.5rem; }
 .source-note a { align-items: center; color: var(--ink); display: flex; margin-top: .35rem; min-height: 2.75rem; width: fit-content; }
@@ -439,7 +423,6 @@ footer {
   font-size: .7rem;
   gap: 2rem;
   justify-content: space-between;
-  margin: 0 clamp(1rem, 5vw, 5rem);
   padding: 2rem 0 3rem;
 }
 footer p { margin: 0; max-width: 36rem; }
@@ -839,10 +822,8 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
 }
 .aurora-curtain { animation: aurora 7s ease-in-out infinite alternate; pointer-events: none; transform-origin: top; }
 .map-presets {
-  background: rgba(10, 24, 43, .94);
   border-radius: .4rem;
   bottom: auto;
-  display: none;
   left: auto;
   right: 1rem;
   top: 1rem;
@@ -907,13 +888,11 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   background: rgba(9, 23, 41, .95);
   border: 1px solid rgba(109, 151, 178, .34);
   border-radius: .4rem;
-  bottom: 4.15rem;
   display: flex;
   gap: .7rem;
   left: 1rem;
   padding: .65rem;
   position: absolute;
-  width: min(29rem, calc(100% - 2rem));
   z-index: 12;
 }
 .radar-control > button {
@@ -1245,7 +1224,6 @@ footer {
   grid-template-columns: minmax(15rem, .75fr) 1.6fr;
   margin: 0 auto .8rem;
   max-width: 92rem;
-  padding: .85rem 1rem;
 }
 .place-picker {
   border-right: 1px solid var(--line);
@@ -1740,7 +1718,7 @@ footer {
   height: clamp(30rem, 65vh, 48rem);
   margin-top: .5rem;
   width: 100%}
-.map-navigation button { height: 2.75rem}
+.map-navigation button {}
 .ireland-map.is-dense-map .place.priority-secondary text,
 .ireland-map.is-dense-map .station-marker text,
 .ireland-map.is-dense-map .wind-marker text,
@@ -1758,7 +1736,7 @@ footer {
   z-index: 1;
 }
 .radar-control > button { min-height: 2.75rem; }
-.radar-control input { min-height: 2rem; }
+.radar-control input { }
 .map-context-disclosure {
   background: #0b192d;
   border: 1px solid rgba(109, 151, 178, .25);
@@ -3969,308 +3947,6 @@ body {
   }
 }
 
-/* Bright interface theme. Live daylight and night data remain unchanged. */
-html[data-theme="light"] {
-  color-scheme: light;
-  --ink: #12251f;
-  --muted: #52665e;
-  --green: #3f6d4d;
-  --moss: #66825d;
-  --sea: #dcebea;
-  --deep: #edf2ea;
-  --panel: rgba(255, 255, 251, .94);
-  --line: rgba(24, 61, 49, .2);
-  --amber: #8a5e16;
-  --weather-accent: #316f92;
-  --movement-accent: #9a4f2d;
-  --water-accent: #397a9d;
-  --energy-accent: #926415;
-  --air-accent: #527844;
-  --warning-accent: #9d542f;
-  --warning-strong: #8b392a;
-  --panel-soft: rgba(255, 255, 255, .7);
-  --panel-softer: rgba(240, 247, 239, .8);
-  /* Accent text remapped for AA contrast on light surfaces. */
-  --accent-ice: #0b4a56;
-  --accent-gold: #6b4d0d;
-  --accent-warn-head: #223041;
-  --accent-table-dim: #3c4a5c;
-  --accent-cream: #5d4520;
-  background: #edf2ea;
-}
-
-html[data-theme="light"] body {
-  background: #edf2ea;
-  color: var(--ink);
-}
-
-html[data-theme="light"] .experience {
-  background:
-    radial-gradient(circle at 12% 4%, rgba(255, 255, 255, .98), transparent 28rem),
-    radial-gradient(circle at 88% 10%, rgba(185, 218, 213, .55), transparent 30rem),
-    linear-gradient(180deg, #f8faf4 0%, #edf3eb 42%, #e4ede7 100%);
-}
-
-html[data-theme="light"] .experience::before {
-  background:
-    radial-gradient(circle at 76% 10%, rgba(255, 213, 132, .23), transparent 22rem),
-    linear-gradient(180deg, rgba(255, 255, 255, .6), transparent 28%);
-}
-
-html[data-theme="light"] .experience::after {
-  background-image:
-    linear-gradient(rgba(25, 74, 59, .035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(25, 74, 59, .03) 1px, transparent 1px);
-  mix-blend-mode: multiply;
-  opacity: .5;
-}
-
-html[data-theme="light"] .topbar {
-  background: rgba(252, 253, 247, .9);
-  border-bottom-color: rgba(31, 73, 59, .2);
-  box-shadow: 0 10px 35px rgba(39, 74, 62, .08);
-}
-
-html[data-theme="light"] .brand-mark,
-html[data-theme="light"] .live-state,
-html[data-theme="light"] .share-button,
-html[data-theme="light"] .panel-button,
-html[data-theme="light"] .theme-button {
-  background: #fff;
-  border-color: rgba(31, 73, 59, .24);
-  color: #173229;
-}
-
-html[data-theme="light"] .panel-button {
-  background: #315f49;
-  border-color: #315f49;
-  color: #fff;
-}
-
-html[data-theme="light"] .live-state time { color: #173229; }
-
-html[data-theme="light"] :where(
-  .section-rail,
-  .workspace-heading,
-  .map-stage,
-  .place-context,
-  .freshness-strip,
-  .official-notices,
-  .what-matters-now,
-  .dayline,
-  .sky-light-strip,
-  .forecast-strip,
-  .pulse-card,
-  .explore-panel,
-  .station-card,
-  .history-controls,
-  .source-directory,
-  footer
-) {
-  background: rgba(255, 255, 252, .92);
-  border-color: rgba(31, 73, 59, .18);
-  box-shadow: 0 16px 42px rgba(46, 76, 64, .08);
-  color: var(--ink);
-}
-
-html[data-theme="light"] :where(
-  .section-nav a,
-  .map-presets button,
-  .map-navigation button,
-  .layer-list > button,
-  .panel-presets button,
-  .freshness-chip,
-  .source-directory a
-) {
-  background: #f7faf5;
-  border-color: rgba(31, 73, 59, .18);
-  color: #173229;
-}
-
-/* Deliberately not wrapped in :where(): the html[data-theme] attribute must
-   out-rank base hover/active rules that use translucent white overlays which
-   vanish on light surfaces. */
-html[data-theme="light"] .section-nav a:hover,
-html[data-theme="light"] .section-nav a:focus-visible,
-html[data-theme="light"] .section-nav a.active,
-html[data-theme="light"] .section-nav a[aria-current="location"],
-html[data-theme="light"] .map-presets button.active,
-html[data-theme="light"] .layer-list > button.active,
-html[data-theme="light"] .panel-presets button.active {
-  background: #dce9dc;
-  border-color: #62826a;
-  color: #173229;
-}
-
-html[data-theme="light"] :where(.hero-sentence, .forecast-copy, .map-caption, .station-card p) {
-  color: #263d35;
-}
-
-html[data-theme="light"] .map-canvas {
-  background:
-    radial-gradient(circle at 34% 20%, rgba(255, 255, 255, .92), transparent 19rem),
-    linear-gradient(155deg, #c9eeef, #e8f7f3 56%, #cfeae1);
-  border-color: rgba(38, 88, 76, .28);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .62), 0 18px 44px rgba(45, 91, 79, .1);
-}
-
-html[data-theme="light"] .island-shape path {
-  fill: #a7bf91;
-  stroke: #4f7567;
-}
-
-html[data-theme="light"] .map-ocean { fill: #d4f0ef; }
-html[data-theme="light"] .road-network path { stroke: rgba(55, 99, 92, .72); }
-html[data-theme="light"] .road-network path.motorway { stroke: #396f72; }
-html[data-theme="light"] .road-network path.trunk { stroke: #50827b; }
-html[data-theme="light"] .sea-lines path { stroke: #4f9293; }
-html[data-theme="light"] .night-shade { fill: #6d8790; opacity: .04; }
-
-html[data-theme="light"] .map-navigation {
-  background: rgba(255, 255, 252, .88);
-  border-color: rgba(38, 88, 76, .2);
-  box-shadow: 0 .75rem 1.8rem rgba(42, 76, 65, .14);
-}
-
-html[data-theme="light"] .map-navigation button,
-html[data-theme="light"] .map-navigation .zoom-readout {
-  background: #f9fcf8;
-  border-color: rgba(38, 88, 76, .18);
-  color: #173229;
-}
-
-html[data-theme="light"] .panel-backdrop { background: rgba(29, 48, 41, .3); }
-html[data-theme="light"] .explore-panel { background: #fbfcf8; }
-
-/* Form controls keep dark navy surfaces in the dark theme only; light theme
-   gives them light surfaces so var(--ink) text stays readable. */
-html[data-theme="light"] .movement-browser-filters input,
-html[data-theme="light"] .movement-browser-filters select,
-html[data-theme="light"] .history-mode-toggle,
-html[data-theme="light"] .history-picker input {
-  background: #fff;
-  border-color: rgba(31, 73, 59, .3);
-  color: var(--ink);
-}
-
-html[data-theme="light"] a { text-decoration-color: rgba(49, 95, 73, .42); }
-
-/* Second pass over surfaces the first light-theme sweep missed: content cards
-   and map overlays that hardcode dark-navy backgrounds while their text uses
-   variables that flip dark in this theme. */
-html[data-theme="light"] :where(
-  .warning-strip,
-  .workspace-facts button,
-  .place-observations dl > div,
-  .guidance-card,
-  .notable-signals button,
-  .timeline-selection,
-  .timeline-data-list,
-  .official-notices-empty,
-  .movement-browser,
-  .movement-results button,
-  .movement-pagination button,
-  .map-presets,
-  .map-legend,
-  .map-context-disclosure,
-  .freshness-details > summary,
-  .history-result,
-  .history-comparison,
-  .history-period-summary
-) {
-  background: rgba(255, 255, 252, .92);
-  border-color: rgba(31, 73, 59, .18);
-  color: var(--ink);
-}
-
-html[data-theme="light"] .place-controls select,
-html[data-theme="light"] .layer-group-controls > button {
-  background: #fff;
-  border-color: rgba(31, 73, 59, .3);
-  color: var(--ink);
-}
-
-html[data-theme="light"] .guidance-card:hover,
-html[data-theme="light"] .guidance-card:focus-visible {
-  background: #eef4ec;
-  border-color: rgba(31, 73, 59, .34);
-}
-
-/* Map overlays keep their instrument-panel role but need readable text on the
-   light canvas; give them the same paper surface as the navigation rail. */
-html[data-theme="light"] :where(.map-notice, .map-data-panel, .radar-control) {
-  background: rgba(252, 253, 249, .96);
-  border-color: rgba(38, 88, 76, .22);
-  box-shadow: 0 1rem 2.5rem rgba(46, 76, 64, .12);
-}
-
-html[data-theme="light"] .map-data-panel dl div { background: #f1f6ef; }
-
-/* Literal accent text tuned for dark surfaces needs darker equivalents here. */
-html[data-theme="light"] .info-content a {
-  color: #0b4a56;
-  text-decoration-color: rgba(11, 74, 86, .35);
-}
-html[data-theme="light"] .aurora-panel .utility-label,
-html[data-theme="light"] .aurora-probability strong { color: #1c6b4a; }
-html[data-theme="light"] .iss-panel .utility-label,
-html[data-theme="light"] .iss-orbit-value strong { color: #34527a; }
-html[data-theme="light"] .guidance-card.localized-notice .guidance-status,
-html[data-theme="light"] .warning-key-facts dt,
-html[data-theme="light"] .history-ambiguity legend { color: #6b4d0d; }
-html[data-theme="light"] .history-result.error,
-html[data-theme="light"] .history-result.gap,
-html[data-theme="light"] .history-error {
-  border-color: #8a6a14;
-  color: #5d4520;
-}
-html[data-theme="light"] .history-retry {
-  border-color: #8a6a14;
-  color: #5d4520;
-}
-html[data-theme="light"] .history-result a { color: #0b4a56; }
-
-/* Third pass over pale text literals that survived the two surface sweeps:
-   their containers now flip light, so the dark-theme literals fail contrast
-   (measured 1.02:1 to 2.86:1) until remapped here. */
-html[data-theme="light"] .place-picker h2 { color: var(--ink); }
-html[data-theme="light"] .warning-strip.red {
-  background: rgba(167, 93, 67, .12);
-  border-color: rgba(139, 57, 42, .45);
-  border-left-color: var(--warning-strong);
-  color: #5d2018;
-}
-html[data-theme="light"] .warning-actions a,
-html[data-theme="light"] .warning-actions summary { color: #223041; }
-html[data-theme="light"] :is(.history-picker label, .history-scrubber, .history-ambiguity label, .timeline-data-list > summary) { color: #263d35; }
-html[data-theme="light"] .history-period-summary dd { color: #223041; }
-html[data-theme="light"] .guidance-card.relevant-notice .guidance-status { color: #8b392a; }
-html[data-theme="light"] .guidance-card.limited-context .guidance-status,
-html[data-theme="light"] .guidance-card.no-current-signal .guidance-status,
-html[data-theme="light"] .guidance-card.live-coverage .guidance-status,
-html[data-theme="light"] .guidance-card.connecting .guidance-status { color: #34527a; }
-html[data-theme="light"] .place-limits { color: var(--muted); }
-html[data-theme="light"] footer nav a { color: var(--green); }
-html[data-theme="light"] footer nav a:hover,
-html[data-theme="light"] footer nav a:focus-visible { color: #173229; }
-html[data-theme="light"] .detail-emblem.warning { color: var(--warning-strong); }
-
-/* Cluster-count digits sit on circle fills that darken in this theme. */
-html[data-theme="light"] .movement-stack-marker text,
-html[data-theme="light"] .transit-marker text {
-  fill: #fdfffe;
-  paint-order: stroke;
-  stroke: rgba(23, 50, 41, .4);
-  stroke-width: 2px;
-}
-
-@media (max-width: 600px) {
-  html[data-theme="light"] .section-rail {
-    background: rgba(250, 252, 247, .97);
-    box-shadow: 0 -12px 32px rgba(37, 68, 57, .12);
-  }
-}
-
 @media (max-width: 600px) {
   .section-rail .section-nav {
     display: grid;
@@ -4297,3 +3973,8 @@ html[data-theme="light"] .transit-marker text {
 
 /* Provider paragraphs and list items stay readable without rendering HTML. */
 .warning-copy > .warning-description { white-space: pre-line; }
+
+/* Action labels follow the actual stylesheet, including the no-JS fallback. */
+.theme-target-light { display: inline-flex; align-items: center; gap: .42rem; }
+.theme-target-dark { display: none; }
+html:has(main[data-view="atlas"]) { color-scheme: light; }

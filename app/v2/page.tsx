@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import IrelandExperience from "../../components/IrelandExperience";
 import { createInitialSnapshot } from "../../lib/initial-snapshot";
 
@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   robots: { index: false, follow: true },
   alternates: { canonical: null }
 };
+
+export const viewport: Viewport = { colorScheme: "light", themeColor: "#123b40" };
 
 export default function AtlasPreview() {
   return <IrelandExperience atlas initialSnapshot={createInitialSnapshot()} />;

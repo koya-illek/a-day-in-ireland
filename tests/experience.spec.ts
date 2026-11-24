@@ -1234,18 +1234,21 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
     await expect(chip.locator("b")).not.toHaveText("");
     await expect(chip.locator("small")).not.toHaveText("");
   }
-  const timelinePoints = await page.locator(".timeline-point").count();
-  if (timelinePoints === 0) {
-    await expect(page.getByText(/Connecting to hourly weather observations|current provider response contains no hourly observations|No saved hourly observations|Hourly weather observations are unavailable/)).toBeVisible();
-    await expect(page.locator(".timeline-empty-state")).toBeVisible();
-    await expect(page.locator(".timeline-plot-scroll")).toHaveCount(0);
-  } else {
-    expect(timelinePoints).toBeGreaterThanOrEqual(1);
-    const firstPoint = page.locator(".timeline-point").first();
-    await expect(firstPoint).toHaveAttribute("aria-label", /temperature.*degrees.*rainfall.*millimetres/);
-    const ariaLabel = await firstPoint.getAttribute("aria-label");
-    expect(ariaLabel).toMatch(/\d/);
-  }
+  // The lazy hourly panel can change from empty to populated during hydration.
+  await expect(async () => {
+    const timelinePoints = await page.locator(".timeline-point").count();
+    if (timelinePoints === 0) {
+      await expect(page.getByText(/Connecting to hourly weather observations|current provider response contains no hourly observations|No saved hourly observations|Hourly weather observations are unavailable/)).toBeVisible();
+      await expect(page.locator(".timeline-empty-state")).toBeVisible();
+      await expect(page.locator(".timeline-plot-scroll")).toHaveCount(0);
+    } else {
+      expect(timelinePoints).toBeGreaterThanOrEqual(1);
+      const firstPoint = page.locator(".timeline-point").first();
+      await expect(firstPoint).toHaveAttribute("aria-label", /temperature.*degrees.*rainfall.*millimetres/);
+      const ariaLabel = await firstPoint.getAttribute("aria-label");
+      expect(ariaLabel).toMatch(/\d/);
+    }
+  }).toPass({ timeout: 10_000 });
 });
 
 test("rail and water presets expose the live transport and gauge layers", async ({ page }) => {

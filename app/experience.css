@@ -4,11 +4,7 @@
   --chart-rain: #85bdd5;
   --surface-line: rgba(180, 198, 179, .25);
 }
-html[data-theme="light"] {
-  --chart-temperature: #84601f;
-  --chart-rain: #286982;
-  --surface-line: #b7c7b9;
-}
+
 .experience .utility-label { display: none; }
 .experience .topbar { position: relative; padding: .7rem 1.25rem; box-shadow: none; gap: .65rem; }
 .experience .brand small { display: none; }
@@ -44,7 +40,7 @@ html[data-theme="light"] {
 .place-search-results ul { list-style: none; padding: 0; margin: 0; max-height: 18rem; overflow-y: auto; }
 .place-search-results li { padding: .65rem; min-height: 44px; cursor: pointer; }
 .place-search-results li[aria-selected="true"] { background: var(--green); color: #11261d; }
-html[data-theme="light"] .place-search-results li[aria-selected="true"] { color: white; }
+
 .place-search-results p { padding: .5rem .65rem; margin: 0; font-size: .8rem; }
 .experience .place-coverage { display: block; flex-basis: 100%; min-width: 0; margin-top: .35rem; font-size: .8rem; line-height: 1.5; }
 .experience .place-coverage summary { min-height: 44px; padding: .55rem 0; cursor: pointer; }

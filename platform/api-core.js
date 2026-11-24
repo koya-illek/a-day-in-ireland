@@ -196,7 +196,7 @@ const fetchRiversThroughBrowser = async (env) => {
   try {
     return JSON.parse(normalized);
   } catch (error) {
-    throw new Error(`${error.message}; response starts ${JSON.stringify(normalized.slice(0, 240))}`);
+    throw new Error(`${error.message}; response starts ${JSON.stringify(normalized.slice(0, 240))}`, { cause: error });
   }
 };
 
@@ -240,7 +240,7 @@ export const acquireRiverRaw = async (env, fetcher = fetch, { allowBrowserFallba
         bodyBytes: null, sourceFeatureCount: features.length, truncated: features.length > 1200,
         fetchedAt, status: features.length > 1200 ? "partial" : "fallback", fallback: "Cloudflare Browser Run" };
     }
-    catch (browserError) { throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`); }
+    catch (browserError) { throw new Error(`OPW returned ${response.status}: ${detail}; Browser Run fallback failed: ${browserError.message}`, { cause: browserError }); }
   }
   // The hosted river bridge is an operator-configured fallback for the
   // non-Cloudflare adapter only. It stays disabled unless a valid HTTPS
@@ -277,7 +277,7 @@ export const acquireRiverRaw = async (env, fetcher = fetch, { allowBrowserFallba
     throw new Error(`configured river bridge returned ${bridge.status}`);
   } catch (bridgeError) {
     const cause = String(bridgeError?.message ?? bridgeError).slice(0, 240);
-    throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable (${cause})`);
+    throw new Error(`OPW returned ${response.status}: ${detail}; fallback unavailable (${cause})`, { cause: bridgeError });
   }
 };
 
@@ -440,7 +440,7 @@ export const fetchTides = async () => {
     const row = rows.at(-1);
     const observedAt = String(row[3]);
     if (!freshEnough(observedAt, 3)) return [];
-    const surge = [...surges].sort((a, b) => distance(row, a) - distance(row, b))[0];
+    const surge = surges.toSorted((a, b) => distance(row, a) - distance(row, b))[0];
     const nearby = predictions.filter((item) => distance(row, item) < .08);
     // "Next" means earliest future event, not first row in provider order;
     // ERDDAP only guarantees ordering when the query asks for it.
