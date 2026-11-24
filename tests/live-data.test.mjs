@@ -49,7 +49,7 @@ test("NTA coordinator serves a fresh globally stored snapshot without refetching
           label: "15",
           bearing: 180,
           speedKmh: null,
-          observedAt: "2026-07-25T12:00:00.000Z"
+          observedAt: new Date(Date.now() - 1_000).toISOString()
         }]
       }
     }]

@@ -57,14 +57,7 @@ export function WeatherTimeline({
           {timeMode !== "past" && (sourceStatus === "stale" || serviceDisplayState === "offline") && (
             <p className="timeline-empty">Saved hourly observations from the last successful refresh are shown below and are not labelled as current.</p>
           )}
-          <div
-            ref={scrollRef}
-            className="timeline-plot-scroll"
-            role="region"
-            aria-label="Scrollable hourly chart"
-            tabIndex={0}
-          >
-            <div className="timeline-plot">
+          <div className="timeline-frame">
               <div className="timeline-axis temperature-axis" aria-hidden="true">
                 {/* Without any finite reading an invented 0-20 scale would
                     fabricate data the chart does not hold. */}
@@ -72,6 +65,7 @@ export function WeatherTimeline({
                 <strong>Temperature</strong>
                 <span>{temperatureMin !== null ? `${temperatureMin}°C` : "–"}</span>
               </div>
+            <div ref={scrollRef} className="timeline-plot-scroll" role="region" aria-label="Scrollable hourly chart" tabIndex={0}>
               <div className="timeline-chart" style={{ minWidth: timeline.length * 48, display: "grid", gridTemplateColumns: `repeat(${timeline.length}, minmax(0, 1fr))`, gap: 0 }} role="group" aria-label={`${timeMode === "past" ? "Stored" : sourceStatus === "stale" || serviceDisplayState === "offline" ? "Saved" : "Current"} hourly average temperature, rainfall, and wind across reporting Met Éireann stations`}>
             <svg className="timeline-temperature-line" viewBox={`0 0 ${timeline.length * 48} 100`} preserveAspectRatio="none" aria-hidden="true">
               {timeline.map((point, index) => {
@@ -107,14 +101,14 @@ export function WeatherTimeline({
               );
             })}
               </div>
+            </div>
               <div className="timeline-axis rain-axis" aria-hidden="true">
                 <span>{rainMax.toFixed(1)} mm</span>
                 <strong>Average rain</strong>
                 <span>0 mm</span>
               </div>
-              <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
-            </div>
           </div>
+          <p className="timeline-x-axis" aria-hidden="true">Hour of day · Irish time</p>
           <details className="timeline-data-list">
             <summary>View hourly values as a list</summary>
             <div className="timeline-table-scroll" role="region" aria-label="Hourly weather data table" tabIndex={0}>

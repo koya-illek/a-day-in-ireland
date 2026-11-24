@@ -1,6 +1,6 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 "use client";
 
-import Link from "next/link";
 
 // A render error anywhere in the experience must not blank the whole page.
 // This boundary keeps the failure scoped, honest about what happened, and
@@ -20,7 +20,7 @@ export default function ExperienceError({ error, reset }: { error: Error & { dig
             <h2>Try again</h2>
             <p>
               <button type="button" onClick={reset}>Reload the map</button>{" "}
-              or return to the <Link href="/">live map</Link> from a fresh load.
+              or return to the <a href="/">live map</a> from a fresh load.
             </p>
             {error.digest ? (
               <p>
@@ -31,8 +31,8 @@ export default function ExperienceError({ error, reset }: { error: Error & { dig
           <section>
             <h2>If it keeps failing</h2>
             <p>
-              The project pages stay available: <Link href="/about">about</Link>,{" "}
-              <Link href="/data">data sources</Link> and <Link href="/privacy">privacy</Link>. Official providers remain
+              The project pages stay available: <a href="/about">about</a>,{" "}
+              <a href="/data">data sources</a> and <a href="/privacy">privacy</a>. Official providers remain
               authoritative for safety and travel decisions.
             </p>
           </section>

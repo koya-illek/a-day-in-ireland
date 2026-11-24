@@ -65,7 +65,7 @@ test("authoritative sky and official forecast remain compact, attributed and ver
   }));
   await page.goto("/");
   await expect(page.locator(".sky-light-strip")).toContainText("Source: Sunrise-Sunset.org");
-  await expect(page.locator(".forecast-strip")).toContainText("Next across Ireland");
+  await expect(page.locator(".forecast-strip")).toContainText("Official outlook for Ireland");
   await expect(page.locator(".forecast-excerpt")).toContainText(/Exact official copy/);
   await expect(page.locator(".forecast-strip")).toHaveAttribute("aria-labelledby", "forecast-heading");
   const disclosure = page.locator(".forecast-disclosure");

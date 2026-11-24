@@ -1,4 +1,4 @@
-import { humaniseWarningRegions } from "../lib/presentation.js";
+import { humaniseWarningRegions, warningDescriptionText } from "../lib/presentation.js";
 import type { LiveSnapshot, WeatherWarning } from "../lib/types";
 import type { HistoryGap } from "../lib/history";
 import { warningTiming } from "../platform/river-source.js";
@@ -110,7 +110,7 @@ export function OfficialNotices({
                           <dd><time dateTime={isActive ? warning.expiry : warning.onset}>{formatWarningDate(isActive ? warning.expiry : warning.onset)}</time></dd>
                         </div>
                       </dl>
-                      <p>{warning.description || "Met Éireann has not supplied a description for this notice."}</p>
+                      <p className="warning-description">{warningDescriptionText(warning.description) || "Met Éireann has not supplied a description for this notice."}</p>
                       <div className="warning-actions">
                         <a href={OFFICIAL_WARNING_URL} target="_blank" rel="noreferrer">{timeMode === "past" ? "Open current Met Éireann warning page" : "Check official Met Éireann notice"} <span aria-hidden="true">↗</span></a>
                         <details>

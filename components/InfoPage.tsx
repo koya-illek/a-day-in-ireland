@@ -1,4 +1,4 @@
-import Link from "next/link";
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 import type { ReactNode } from "react";
 
 const INFO_LINKS = [
@@ -27,19 +27,19 @@ export default function InfoPage({
     <main className="info-page">
       <a className="skip-link" href="#info-content">Skip to page content</a>
       <header className="info-header">
-        <Link className="info-brand" href="/">
+        <a className="info-brand" href="/">
           <span aria-hidden="true">←</span>
           <span><b>A Day in Ireland</b><small>Live island view</small></span>
-        </Link>
+        </a>
         <nav className="info-nav" aria-label="Project information">
           {INFO_LINKS.map((item) => (
-            <Link
+            <a
               key={item.href}
               href={item.href}
               aria-current={item.href === `/${current}` ? "page" : undefined}
             >
               {item.label}
-            </Link>
+            </a>
           ))}
         </nav>
       </header>
@@ -52,13 +52,13 @@ export default function InfoPage({
       <footer className="info-footer">
         <nav aria-label="Project information, footer">
           {INFO_LINKS.filter((item) => item.href !== "/").map((item) => (
-            <Link
+            <a
               key={item.href}
               href={item.href}
               aria-current={item.href === `/${current}` ? "page" : undefined}
             >
               {item.label}
-            </Link>
+            </a>
           ))}
         </nav>
       </footer>

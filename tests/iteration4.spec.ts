@@ -5,7 +5,7 @@ test("light theme keeps place names and footer links readable after the third co
     window.localStorage.setItem("ireland-interface-theme", "light");
     document.documentElement.dataset.theme = "light";
   });
-  await page.goto("/");
+  await page.goto("/?place=cork");
   await expect(page.locator(".place-picker h2")).toBeVisible();
   const headingColor = await page.locator(".place-picker h2").evaluate((element) => getComputedStyle(element).color);
   expect(headingColor).toBe("rgb(18, 37, 31)");

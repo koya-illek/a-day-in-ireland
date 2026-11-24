@@ -85,7 +85,7 @@ export function ForecastStrip({ forecast, status, now }: {
     return (
       <section className="forecast-strip unavailable" aria-labelledby="forecast-heading">
         <div><p className="utility-label">FORECAST · Met Éireann</p><h2 id="forecast-heading">Official forecast unavailable</h2></div>
-        <p>{status === "stale" ? "The last official forecast is cached and is not shown as current." : "The official forecast and current warnings could not be confirmed together."}</p>
+        <p>{status === "stale" ? "The last official forecast is cached and is not shown as current." : "The official forecast could not be confirmed. Official notices have a separate availability status below."}</p><a href="#official-notices">Check official notices</a>
       </section>
     );
   }

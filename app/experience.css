@@ -46,8 +46,8 @@ html[data-theme="light"] {
 .place-search-results li[aria-selected="true"] { background: var(--green); color: #11261d; }
 html[data-theme="light"] .place-search-results li[aria-selected="true"] { color: white; }
 .place-search-results p { padding: .5rem .65rem; margin: 0; font-size: .8rem; }
-.experience .place-coverage { margin-top: .35rem; font-size: .8rem; line-height: 1.5; }
-.experience .place-coverage summary { min-height: 28px; cursor: pointer; }
+.experience .place-coverage { display: block; flex-basis: 100%; min-width: 0; margin-top: .35rem; font-size: .8rem; line-height: 1.5; }
+.experience .place-coverage summary { min-height: 44px; padding: .55rem 0; cursor: pointer; }
 .experience .place-coverage p { margin: .5rem 0; }
 .experience .map-stage { order: 2; display: grid; grid-template-columns: 1fr auto; gap: .5rem .8rem; padding: .6rem 0 0; border-top: 1px solid var(--surface-line); }
 .experience .map-explorer-heading { grid-column: 1; order: 0; align-self: center; }
@@ -118,7 +118,7 @@ html[data-theme="light"] .place-search-results li[aria-selected="true"] { color:
   .experience .hero-sentence { font-size: .96rem; line-height: 1.45; }
   .experience .place-picker-compact { display: block; }
   .experience .place-compact-copy { display: none; }
-  .experience .place-controls { flex-wrap: nowrap; gap: .4rem; }
+  .experience .place-controls { flex-wrap: wrap; gap: .4rem; }
   .experience .place-controls .locate-button { font-size: .75rem; }
   .experience .place-search { flex-basis: 9rem; }
   .experience .map-canvas { height: 380px; }
@@ -135,10 +135,30 @@ html[data-theme="light"] .place-search-results li[aria-selected="true"] { color:
 /* Reset legacy mobile control direction and top-anchored map controls. */
 .experience .header-actions { flex-direction: row; flex-wrap: nowrap; }
 .experience .header-actions button { width: auto; }
+@media (max-width: 520px) {
+  .experience .header-actions { width: 100%; max-width: 100%; flex-wrap: wrap; justify-content: flex-start; }
+}
 .experience .place-controls { flex-direction: row; }
 .experience .place-controls .locate-button { width: auto; flex: 0 0 auto; }
 .experience #live-map .map-canvas .map-navigation { top: auto; bottom: .5rem; left: auto; right: .5rem; height: auto; width: auto; max-width: calc(100% - 1rem); display: flex; }
+@media (max-width: 520px) {
+  .experience #live-map { grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); }
+  .experience:not(.is-history) #live-map .history-controls { grid-column: auto; }
+  .experience #live-map > * { min-width: 0; max-width: 100%; }
+  .experience #live-map .map-canvas .map-navigation { display: grid; grid-template-columns: 44px 44px minmax(44px, 1fr) 52px; box-sizing: border-box; min-width: 0; width: calc(100% - 8px); gap: 2px; padding: 2px; left: 4px; right: 4px; max-width: calc(100% - 8px); }
+}
 .experience .workspace-heading .workspace-copy .briefing-date { display: block; }
 
 .experience .ireland-map .marker-symbol text, .experience .ireland-map .place-symbol text { fill: var(--ink); stroke: var(--panel); stroke-width: 3px; paint-order: stroke; stroke-linejoin: round; }
 .experience .timeline-x-axis { position: sticky; left: 0; text-align: center; }
+
+/* Recovery is a themed surface, not an inherited accent on a legacy dark panel. */
+.freshness-strip .refresh-data-button { background: var(--panel); color: var(--ink); font-size: .8rem; border-color: var(--muted); }
+.forecast-copy, .forecast-full-copy, footer p { max-width: 72ch; }
+.timeline-frame { display: grid; grid-template-columns: 3.25rem minmax(0, 1fr) 3.25rem; align-items: stretch; margin-top: 1rem; }
+.timeline-frame .timeline-plot-scroll { min-width: 0; margin-top: 0; }
+.timeline-frame .timeline-axis { padding: .25rem .1rem 3rem; }
+.timeline-frame .timeline-axis strong { font-size: .75rem; letter-spacing: 0; }
+.experience .what-matters-now { margin-top: 1.5rem; border-top: 1px solid var(--surface-line); padding-top: 1rem; }
+
+.experience .place-observations dl > div { background: var(--panel); color: var(--ink); border-color: var(--surface-line); }

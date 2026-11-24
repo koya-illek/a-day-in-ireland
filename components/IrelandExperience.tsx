@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 "use client";
 
 import {
@@ -14,7 +15,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
 import { PRESET_LAYERS, LAYER_GROUPS } from "../lib/map-presets";
 import { dailyBriefing } from "../lib/daily-briefing";
@@ -25,11 +25,11 @@ import type {
   LiveSnapshot
 } from "../lib/types";
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
-import { applyTransitDestinations, enrichTransitDestinations, refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
-import { ForecastStrip, SkyLightStrip } from "./SkyBriefing";
+const ForecastStrip = dynamic(() => import("./SkyBriefing").then(m => m.ForecastStrip), { ssr: false });
+const SkyLightStrip = dynamic(() => import("./SkyBriefing").then(m => m.SkyLightStrip), { ssr: false });
 import {
   DEFAULT_PLACE_ID,
   parseViewState,
@@ -117,15 +117,15 @@ import { historyResolutionLabel } from "../lib/history";
 const HistoryControls = dynamic(() => import("./HistoryControls").then((module) => module.HistoryControls));
 const BriefingComparison = dynamic(() => import("./BriefingComparison").then((module) => module.BriefingComparison));
 const ExplorePanel = dynamic(() => import("./ExplorePanel").then((module) => module.ExplorePanel));
-import { OfficialNotices } from "./OfficialNotices";
+const OfficialNotices = dynamic(() => import("./OfficialNotices").then(m => m.OfficialNotices), { ssr: false });
 const AtlasFrame = dynamic(() => import("./atlas/AtlasFrame"));
 
-import { PlacePicker } from "./PlacePicker";
-import { WeatherTimeline } from "./WeatherTimeline";
+const PlacePicker = dynamic(() => import("./PlacePicker").then(m => m.PlacePicker), { ssr: false });
+const WeatherTimeline = dynamic(() => import("./WeatherTimeline").then(m => m.WeatherTimeline), { ssr: false, loading: () => <section id="day-so-far" className="dayline"><h2>The shape of the day</h2><p>Loading hourly observations…</p></section> });
 import { MapCanvas } from "./MapCanvas";
 import { WorkspaceHeading } from "./WorkspaceHeading";
-import { PlaceContext } from "./PlaceContext";
-import { FreshnessStrip } from "./FreshnessStrip";
+const PlaceContext = dynamic(() => import("./PlaceContext").then(m => m.PlaceContext), { ssr: false });
+const FreshnessStrip = dynamic(() => import("./FreshnessStrip").then(m => m.FreshnessStrip), { ssr: false });
 import { constrainMapView, useMapGestures } from "./use-map-gestures";
 
 const DeferredDetailCard = dynamic(
@@ -148,6 +148,7 @@ const DeferredIssPanel = dynamic(
 export default function IrelandExperience({ initialSnapshot, atlas = false }: { initialSnapshot: LiveSnapshot; atlas?: boolean }) {
   const [interfaceTheme, setInterfaceTheme] = useState<"dark" | "light">("dark");
   const [liveSnapshot, setLiveSnapshot] = useState(() => initialSnapshot);
+  const [clockReady, setClockReady] = useState(false);
   const [wallClockNow, setWallClockNow] = useState(() => new Date(initialSnapshot.generatedAt));
   const [timeMode, setTimeMode] = useState<TimeMode>("now");
   const [historyRange, setHistoryRange] = useState<HistoryRange | null>(null);
@@ -221,7 +222,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   // simply leaves the roads out; no data layer depends on them.
   const [roadFeatures, setRoadFeatures] = useState<RoadFeature[] | null>(null);
   const [mapFeedback, setMapFeedback] = useState("");
-  const [lastCheckedAt, setLastCheckedAt] = useState(() => new Date(initialSnapshot.generatedAt));
+  const [lastCheckedAt, setLastCheckedAt] = useState<Date | null>(() => initialSnapshot.lastSuccessAt ? new Date(initialSnapshot.generatedAt) : null);
   const setExplorePanelOpen = useCallback((open: boolean) => setPanelOpen(open), []);
   // When a detail dialog closes and its opening marker no longer exists (the
   // item expired underneath it), park keyboard focus on a surviving marker
@@ -475,6 +476,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
 
   useLayoutEffect(() => {
     setWallClockNow(new Date());
+    setClockReady(true);
   }, []);
 
   useEffect(() => {
@@ -505,7 +507,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       });
     };
     const update = async () => {
-      const next = await refreshWeather(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshWeather(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         generatedAt: next.generatedAt,
@@ -523,7 +525,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       }));
     };
     const updateLivingLayers = async () => {
-      const next = await refreshLivingLayers(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshLivingLayers(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         trains: next.trains,
@@ -540,7 +542,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     const updateCurrentContexts = async () => {
       const previousRadar = liveSnapshotRef.current.radar;
       const selectedRadarFrameIndex = radarFrameIndexRef.current;
-      const next = await refreshCurrentContexts(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshCurrentContexts(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
@@ -564,7 +566,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       if (active) setRadarFrameIndex(restoredRadarFrameIndex(previousRadar, selectedRadarFrameIndex, next.radar));
     };
     const updateTransit = async () => {
-      const next = await refreshTransit(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshTransit(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
@@ -643,7 +645,8 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     const vehicles = liveSnapshotRef.current.transit;
     if (!vehicles.some((vehicle) => vehicle.tripId && !vehicle.destination)) return;
     let active = true;
-    void enrichTransitDestinations(vehicles).then((enriched) => {
+    void import("../lib/browser-live").then(async ({ enrichTransitDestinations, applyTransitDestinations }) => {
+      const enriched = await enrichTransitDestinations(vehicles);
       if (!active) return;
       // Trips missing from the destinations manifest stay unresolved. The
       // merge targets whichever array is current, so a transit poll that
@@ -666,9 +669,10 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     return () => { active = false; };
   }, [layers, snapshot.transit, timeMode]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const experience = experienceRef.current;
     if (!experience) return;
+    // Restore interactivity during commit, before deferred dialog focus returns.
     // The detail card and the explore drawer are both modal surfaces. While
     // either is open, everything behind it is inert so pointer and
     // screen-reader browse mode cannot reach hidden content.
@@ -1344,6 +1348,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
   const weatherDisplayStatus = online ? snapshot.sourceStatus : snapshot.stations.length ? "stale" : "unavailable";
   const trainDisplayStatus = online ? snapshot.sourceProvenance?.trains.status ?? "unavailable" : snapshot.trains.length ? "stale" : "unavailable";
   const riverDisplayStatus = online ? snapshot.sourceProvenance?.rivers.status ?? "unavailable" : snapshot.rivers.length ? "stale" : "unavailable";
+  const checkedLabel = lastCheckedAt ? `Checked ${formatTime(lastCheckedAt)}` : "Not checked yet";
   const lastSuccessLabel = timeMode === "past" && historyState.envelope?.resolvedAt
     ? formatIrelandHistoryTime(historyState.envelope.resolvedAt)
     : snapshot.lastSuccessAt ? formatAge(snapshot.lastSuccessAt, now) : "not yet";
@@ -2140,6 +2145,8 @@ timeMode === "past" ? <HistoryControls
   );
   const placeSurface = (
 <PlaceContext
+            notices={visibleWarnings}
+            noticesCurrent={warningsCurrent}
             selectedPlace={selectedPlace}
             selectedPlaceIsEphemeral={selectedPlaceIsEphemeral}
             placeOptions={placeOptions}
@@ -2430,7 +2437,7 @@ timeMode === "past" ? <HistoryControls
                   {windDirectionDegrees(station.windDirection) !== null && (
                     <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
                   )}
-                  <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>
+                  {!atlas && <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>}
                 </>
               );
               return windInteraction ? (
@@ -2693,8 +2700,8 @@ panelOpen && <ExplorePanel
       preset={activePreset}
       placeName={selectedPlace.name}
       placeId={selectedPlace.id}
-      dateLabel={formatDate(now)}
-      timeLabel={timeMode === "past" ? `Stored ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}
+      dateLabel={timeMode === "past" || clockReady ? formatDate(now) : "Connecting…"}
+      timeLabel={timeMode === "past" ? `Stored ${lastSuccessLabel}` : checkedLabel}
       statusLabel={timeMode === "past" ? "Stored observations" : serviceDisplayState === "live" ? "Live observations" : connectionLabel}
       summary={timeMode === "past" ? heroSentence : briefingLines.join(" ") || heroSentence}
       search={<PlacePicker places={placeOptions} selected={selectedPlace} onChoose={choosePlace} onSearch={() => { if (!directoryLoaded || directoryError) void loadPlaceDirectory(); }} />}
@@ -2714,6 +2721,10 @@ panelOpen && <ExplorePanel
       </dl>}
       national={<DeferredGridPanel historical={timeMode === "past"} grid={online && retainedContextStatuses.has(snapshot.contextStatus.grid) ? snapshot.grid : null} status={snapshot.contextStatus.grid} />}
       changes={timeMode === "now" ? <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} /> : null}
+      onRefresh={() => void refreshAllRef.current()}
+      refreshing={servicesRefreshing}
+      canRefresh={online}
+      needsRecovery={serviceDisplayState === "unavailable" || serviceDisplayState === "offline" || serviceDisplayState === "degraded"}
       onNow={returnToNow}
       onPast={() => void enterPast()}
       onSave={saveBriefing}
@@ -2755,7 +2766,7 @@ panelOpen && <ExplorePanel
     >
       <a className="skip-link" href="#live-map">Skip to {timeMode === "past" ? "historical" : "live"} map</a>
       <header className="topbar">
-        <Link className="brand" href="/" aria-label="A Day in Ireland, home">
+        <a className="brand" href="/" aria-label="A Day in Ireland, home">
           <span className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32">
               <path className="brand-sun" d="M11 15a5 5 0 0 1 10 0" />
@@ -2769,14 +2780,14 @@ panelOpen && <ExplorePanel
               : serviceDisplayState === "unavailable"
                 ? "Island view"
                 : "Live island view"}</small></span>
-        </Link>
+        </a>
         <div
           className="live-state"
           data-connection-status={connectionStatus}
           data-service-state={serviceDisplayState}
           title={timeMode === "past"
             ? `${connectionLabel}. Stored record ${lastSuccessLabel}.`
-            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. Checked ${formatTime(lastCheckedAt)}.`}
+            : `${connectionLabel}. Last successful refresh ${lastSuccessLabel}. ${checkedLabel}.`}
         >
           {/* Only the state words are a live region; the volatile clock text
               below would re-read the whole strip every refresh otherwise. */}
@@ -2789,10 +2800,9 @@ panelOpen && <ExplorePanel
                 : historyState.status === "loading" ? "Loading history" : "History unavailable"
               : serviceDisplayState === "live" ? "Live observations" : serviceDisplayState === "cached" || serviceDisplayState === "offline" ? "Saved observations" : serviceDisplayState === "unavailable" ? "Observations unavailable" : serviceDisplayState === "connecting" ? "Connecting" : "Partial observations"}</span>
           </span>
-          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : `Checked ${formatTime(lastCheckedAt)}`}</time>
+          <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : checkedLabel}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
-          <Link href={comparisonHref} prefetch={false} className="share-button">Try v2</Link>
           <button
             type="button"
             className="theme-button"
@@ -2853,8 +2863,8 @@ panelOpen && <ExplorePanel
           <WorkspaceHeading
             now={now}
             timeMode={timeMode}
-            heroSentence={timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
-            heroSecondary={timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. Checked ${formatTime(lastCheckedAt)} Irish time.` : heroSecondary}
+            heroSentence={timeMode === "now" && selectedPlace.id!=="island" ? localStation ? `${selectedPlace.name}: nearest weather observation at ${localStation.item.name}, ${localStation.distanceKm.toFixed(1)} km away. ${localStation.item.temperature===null?"Temperature unavailable":`${localStation.item.temperature}°C`}; ${localStation.item.rainfall===null?"rainfall unavailable":`${localStation.item.rainfall} mm rain`}.` : `${selectedPlace.name}: no nearby weather observation is available within the selected coverage. Check local coverage below.` : timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
+            heroSecondary={timeMode === "now" && selectedPlace.id!=="island" ? localStation ? `Weather observed ${formatAge(localStation.item.observedAt,now)}. Provider age and coverage gaps are listed below; national context remains under Across Ireland.` : "Local coverage is limited. National context remains under Across Ireland." : timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
             facts={heroFacts}
             onFact={(action) => {
               if (action === "notices") {
@@ -2872,7 +2882,7 @@ panelOpen && <ExplorePanel
         <div className="what-matters-heading">
           <div>
             <p className="utility-label">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
-            <h2 id="what-matters-heading">What {timeMode === "past" ? "mattered then" : "matters now"}.</h2>
+            <h2 id="what-matters-heading">Across Ireland{timeMode === "past" ? ", then" : ", now"}.</h2>
           </div>
 
         </div>
@@ -2914,7 +2924,7 @@ panelOpen && <ExplorePanel
           <p className="signal-assessment"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
         )}
 
-        <p className="briefing-introduction">{briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
+        <p className="briefing-introduction">{selectedPlace.id !== "island" ? "National background, separate from your nearby observations." : briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
         {timeMode === "now" && <details className="morning-comparison" onToggle={(event) => setComparisonOpen(event.currentTarget.open)}>
           <summary>What changed since morning?</summary>
           {comparisonOpen && <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} />}
@@ -3054,10 +3064,11 @@ panelOpen && <ExplorePanel
         <div>
           <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
           <nav aria-label="Project information">
-            <Link href="/about">About</Link>
-            <Link href="/data">Data &amp; methodology</Link>
-            <Link href="/privacy">Privacy</Link>
-            <Link href="/contact">Contact</Link>
+            <a href={comparisonHref} title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</a>
+            <a href="/about">About</a>
+            <a href="/data">Data &amp; methodology</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/contact">Contact</a>
           </nav>
         </div>
         <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; Sunrise-Sunset.org solar events; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>

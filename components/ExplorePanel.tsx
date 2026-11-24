@@ -55,7 +55,7 @@ export function ExplorePanel({
   historyEnvelope: HistoryEnvelope | null;
   historyGaps: HistoryGap[];
 }) {
-  const panelRef = useRef<HTMLElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const [openLayerGroups, setOpenLayerGroups] = useState<Set<string>>(() => new Set(["weather"]));
 
@@ -125,7 +125,7 @@ export function ExplorePanel({
           onClick={() => onOpenChange(false)}
         />
       )}
-      <aside
+      <div
         ref={panelRef}
         className={`explore-panel ${open ? "is-open" : ""}`}
         data-explore-drawer=""
@@ -215,7 +215,7 @@ export function ExplorePanel({
           <a href="https://sunrise-sunset.org/" target="_blank" rel="noreferrer">Sunrise-Sunset.org solar events ↗</a>
           <a href="https://www.met.ie/Open_Data/json/National.json" target="_blank" rel="noreferrer">Met Éireann live text forecast ↗</a>
         </div>
-      </aside>
+      </div>
     </>
   );
 }

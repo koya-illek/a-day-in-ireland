@@ -1,4 +1,4 @@
-import Link from "next/link";
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 import type { Metadata } from "next";
 import InfoPage from "../components/InfoPage";
 
@@ -43,9 +43,9 @@ export default function NotFound() {
       <section>
         <h2>Where to go next</h2>
         <p>
-          Open the <Link href="/">live map</Link> for current weather, transport, rivers, sea and energy
-          conditions across Ireland, or read <Link href="/about">about the project</Link> and{" "}
-          <Link href="/data">where the data comes from</Link>.
+          Open the <a href="/">live map</a> for current weather, transport, rivers, sea and energy
+          conditions across Ireland, or read <a href="/about">about the project</a> and{" "}
+          <a href="/data">where the data comes from</a>.
         </p>
       </section>
       <section>

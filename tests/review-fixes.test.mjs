@@ -125,7 +125,7 @@ test("alternate adapter transit response mirrors production tiers", async () => 
   const { default: worker } = await import("../platform/server-entry.js?living-status=transit-tiers");
   const coordinatorPayload = (status) => new Response(JSON.stringify({
     generatedAt: "2026-08-22T12:00:00.000Z",
-    transit: [{ id: "v1", latitude: 53.3, longitude: -6.2, observedAt: "2026-08-22T11:59:00.000Z" }],
+    transit: [{ id: "v1", latitude: 53.3, longitude: -6.2, observedAt: new Date().toISOString() }],
     transitStatus: status
   }), { status: 200 });
   const env = {
