@@ -789,7 +789,14 @@ export const normalizeTransitEntities = (entities, now = Date.now()) => (Array.i
 export const fetchTransit = async (env, fetcher = fetch, captureNow = Date.now()) => {
   const raw = await acquireTransitRaw(env, fetcher);
   if (raw.status === "credential-required") return raw;
-  const vehicles = normalizeTransitEntities(raw.entities, captureNow);
+  // Callers often freeze the clock before the upstream fetch so the rate-limit
+  // window and this refresh share one instant. GTFS-RT vehicle timestamps are
+  // whole seconds and are stamped while that fetch is in flight, so the
+  // earlier clock classifies a live position as future whenever the request
+  // crosses a second — and an all-future feed is reported unavailable.
+  // Judge freshness against receipt time when that is later.
+  const freshnessNow = Math.max(captureNow, raw.acquiredAt ?? captureNow);
+  const vehicles = normalizeTransitEntities(raw.entities, freshnessNow);
   if (!vehicles.length) return { vehicles: [], status: "unavailable" };
   return raw.truncated
     ? { vehicles, status: "partial", truncated: true, sourceEntityCount: raw.sourceEntityCount }
