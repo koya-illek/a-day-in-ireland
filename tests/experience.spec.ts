@@ -1176,6 +1176,11 @@ test("partial OPW coverage remains visible and explicitly labelled", async ({ pa
   await expect(page.locator(".river-marker")).toHaveCount(1);
   await expect(page.locator(".pulse-card.rivers")).toContainText("partial coverage");
   await expect(page.locator(".river-marker")).toHaveAttribute("aria-label", /Partial coverage gauge/);
+  await page.getByRole("button", { name: "Layers", exact: true }).click();
+  const sourceNote = page.locator(".explore-panel .source-note");
+  await expect(sourceNote).toContainText("river observations: partial");
+  await expect(sourceNote).not.toContainText("Cloudflare Browser Run");
+  await expect(sourceNote.getByRole("link", { name: "Sources and coverage" })).toHaveAttribute("href", "/data");
 });
 
 test("a slower context refresh cannot erase a newer public transport refresh", async ({ page }) => {

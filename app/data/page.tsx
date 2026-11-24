@@ -45,7 +45,7 @@ export default function DataPage() {
       </section>
       <section>
         <h2>River acquisition</h2>
-        <p>OPW gauge readings are requested from waterlevel.ie. When that origin rejects ordinary Cloudflare Worker requests, the Worker may use Cloudflare Browser Run or a hosted bridge as a temporary fetch path. Those fallbacks are labelled in the interface; they do not change the meaning of the OPW levels, and they are not a second dataset.</p>
+        <p>OPW gauge readings are requested from waterlevel.ie. When that origin rejects ordinary Cloudflare Worker requests, the Worker may use Cloudflare Browser Run or a hosted bridge as a temporary fetch path. Coverage and source status are labelled in the interface. Alternative connections do not change the meaning of the OPW levels, and they are not a second dataset.</p>
       </section>
       <section>
         <h2>Historical coverage and retention</h2>
