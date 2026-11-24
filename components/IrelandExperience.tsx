@@ -668,9 +668,10 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     return () => { active = false; };
   }, [layers, snapshot.transit, timeMode]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const experience = experienceRef.current;
     if (!experience) return;
+    // Restore interactivity during commit, before deferred dialog focus returns.
     // The detail card and the explore drawer are both modal surfaces. While
     // either is open, everything behind it is inert so pointer and
     // screen-reader browse mode cannot reach hidden content.
@@ -2435,7 +2436,7 @@ timeMode === "past" ? <HistoryControls
                   {windDirectionDegrees(station.windDirection) !== null && (
                     <path transform={`rotate(${windDirectionDegrees(station.windDirection)})`} d="M0 -10L4 1L0 -1L-4 1Z" />
                   )}
-                  <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>
+                  {!atlas && <text aria-hidden="true" x="14" y="4">{station.windSpeed} km/h</text>}
                 </>
               );
               return windInteraction ? (
@@ -2719,6 +2720,10 @@ panelOpen && <ExplorePanel
       </dl>}
       national={<DeferredGridPanel historical={timeMode === "past"} grid={online && retainedContextStatuses.has(snapshot.contextStatus.grid) ? snapshot.grid : null} status={snapshot.contextStatus.grid} />}
       changes={timeMode === "now" ? <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} /> : null}
+      onRefresh={() => void refreshAllRef.current()}
+      refreshing={servicesRefreshing}
+      canRefresh={online}
+      needsRecovery={serviceDisplayState === "unavailable" || serviceDisplayState === "offline" || serviceDisplayState === "degraded"}
       onNow={returnToNow}
       onPast={() => void enterPast()}
       onSave={saveBriefing}
@@ -2797,7 +2802,6 @@ panelOpen && <ExplorePanel
           <time>{timeMode === "past" ? `Captured ${lastSuccessLabel}` : checkedLabel}</time>
         </div>
         <nav className="header-actions" aria-label="Experience controls">
-          <Link href={comparisonHref} prefetch={false} className="share-button" title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</Link>
           <button
             type="button"
             className="theme-button"
@@ -2858,8 +2862,8 @@ panelOpen && <ExplorePanel
           <WorkspaceHeading
             now={now}
             timeMode={timeMode}
-            heroSentence={selectedPlace.id!=="island" ? localStation ? `${selectedPlace.name}: nearest weather observation at ${localStation.item.name}, ${localStation.distanceKm.toFixed(1)} km away. ${localStation.item.temperature===null?"Temperature unavailable":`${localStation.item.temperature}°C`}; ${localStation.item.rainfall===null?"rainfall unavailable":`${localStation.item.rainfall} mm rain`}.` : `${selectedPlace.name}: no nearby weather observation is available within the selected coverage. Check local coverage below.` : timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
-            heroSecondary={selectedPlace.id!=="island" ? localStation ? `Weather observed ${formatAge(localStation.item.observedAt,now)}. Provider age and coverage gaps are listed below; national context remains under Across Ireland.` : "Local coverage is limited. National context remains under Across Ireland." : timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
+            heroSentence={timeMode === "now" && selectedPlace.id!=="island" ? localStation ? `${selectedPlace.name}: nearest weather observation at ${localStation.item.name}, ${localStation.distanceKm.toFixed(1)} km away. ${localStation.item.temperature===null?"Temperature unavailable":`${localStation.item.temperature}°C`}; ${localStation.item.rainfall===null?"rainfall unavailable":`${localStation.item.rainfall} mm rain`}.` : `${selectedPlace.name}: no nearby weather observation is available within the selected coverage. Check local coverage below.` : timeMode === "now" && briefingLines.length ? briefingLines.join(" ") : heroSentence}
+            heroSecondary={timeMode === "now" && selectedPlace.id!=="island" ? localStation ? `Weather observed ${formatAge(localStation.item.observedAt,now)}. Provider age and coverage gaps are listed below; national context remains under Across Ireland.` : "Local coverage is limited. National context remains under Across Ireland." : timeMode === "now" && briefingLines.length ? `Observed conditions at reporting locations. ${checkedLabel}${lastCheckedAt ? " Irish time" : ""}.` : heroSecondary}
             facts={heroFacts}
             onFact={(action) => {
               if (action === "notices") {
@@ -2877,7 +2881,7 @@ panelOpen && <ExplorePanel
         <div className="what-matters-heading">
           <div>
             <p className="utility-label">Across Ireland · {timeMode === "past" ? "historical record" : "national briefing"}</p>
-            <h2 id="what-matters-heading">What {timeMode === "past" ? "mattered then" : "matters now"}.</h2>
+            <h2 id="what-matters-heading">Across Ireland{timeMode === "past" ? ", then" : ", now"}.</h2>
           </div>
 
         </div>
@@ -2919,7 +2923,7 @@ panelOpen && <ExplorePanel
           <p className="signal-assessment"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
         )}
 
-        <p className="briefing-introduction">{briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
+        <p className="briefing-introduction">{selectedPlace.id !== "island" ? "National background, separate from your nearby observations." : briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
         {timeMode === "now" && <details className="morning-comparison" onToggle={(event) => setComparisonOpen(event.currentTarget.open)}>
           <summary>What changed since morning?</summary>
           {comparisonOpen && <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} />}
@@ -3059,6 +3063,7 @@ panelOpen && <ExplorePanel
         <div>
           <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
           <nav aria-label="Project information">
+            <Link href={comparisonHref} prefetch={false} title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</Link>
             <Link href="/about">About</Link>
             <Link href="/data">Data &amp; methodology</Link>
             <Link href="/privacy">Privacy</Link>

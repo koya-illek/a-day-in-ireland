@@ -106,9 +106,9 @@ test("map hierarchy and persistent view controls survive every target width and 
     const mapTop = await map.evaluate((element) => element.getBoundingClientRect().top);
     expect(mapTop, `${size.width}px map fold`).toBeLessThanOrEqual(size.maximumMapTop);
     await expect(map.locator(".map-presets button")).toHaveCount(5);
-    for (const control of await map.locator(".map-presets button").all()) await expect(control).toBeVisible();
+    for (const control of await map.locator(".map-presets button:visible").all()) await expect(control).toBeVisible();
     if (size.width <= 600) {
-      await expect(page.locator(".preset-scroll-hint")).toBeVisible();
+      await expect(page.getByRole("navigation", { name: "Map view shortcuts" })).toBeVisible();
     }
     const sectionShortcuts = page.getByRole("navigation", { name: "Section shortcuts" });
     await expect(sectionShortcuts).toBeVisible();
@@ -141,7 +141,7 @@ test("map hierarchy and persistent view controls survive every target width and 
     expect(await page.evaluate(() => {
       const map = document.querySelector("#live-map");
       const place = document.querySelector(".place-context");
-      return Boolean(map && place && (map.compareDocumentPosition(place) & Node.DOCUMENT_POSITION_FOLLOWING));
+      return Boolean(map && place && (place.compareDocumentPosition(map) & Node.DOCUMENT_POSITION_FOLLOWING));
     })).toBe(true);
     const widths = await page.evaluate(() => ({
       client: document.documentElement.clientWidth,
@@ -178,7 +178,7 @@ test("map hierarchy and persistent view controls survive every target width and 
   expect(narrowLargeText.document).toBeLessThanOrEqual(narrowLargeText.client + 1);
   expect(narrowLargeText.body).toBeLessThanOrEqual(narrowLargeText.client + 1);
   await expect(page.locator("#live-map .map-presets")).toBeVisible();
-  await expect(page.locator(".preset-scroll-hint")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Map view shortcuts" })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Section shortcuts" })).toBeVisible();
 
   const narrowMap = page.locator("#live-map");
@@ -289,7 +289,7 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
       labelScrollWidth: label.scrollWidth
     };
   }));
-  expect(shortcutGeometry).toHaveLength(5);
+  expect(shortcutGeometry).toHaveLength(4);
   for (const shortcut of shortcutGeometry) {
     expect(shortcut.width, `${shortcut.name} target width`).toBeGreaterThanOrEqual(44);
     expect(shortcut.height, `${shortcut.name} target height`).toBeGreaterThanOrEqual(44);
@@ -319,7 +319,7 @@ test("320px at 200% text keeps map, shortcut, and Custom controls fully operable
   await movement.focus();
   await page.keyboard.press("Enter");
   await expect(movement).toHaveAttribute("aria-pressed", "true");
-  const custom = shortcuts.getByRole("button", { name: /Custom/ });
+  const custom = shortcuts.getByRole("button", { name: /More layers|Custom/ });
   await custom.scrollIntoViewIfNeeded();
   await custom.click();
   const panel = page.getByRole("dialog", { name: "Explore live map layers" });

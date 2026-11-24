@@ -33,6 +33,10 @@ type Props = {
   selected: MapSelection | null;
   observations: MapSelection[];
   onSelect: (selection: MapSelection | null) => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  canRefresh: boolean;
+  needsRecovery: boolean;
   onNow: () => void;
   onPast: () => void;
   onShare: () => void;
@@ -81,7 +85,7 @@ export default function AtlasFrame(props: Props) {
   const [limit, setLimit] = useState(30);
   useEffect(() => { if (props.selected) setExpanded(true); }, [props.selected]);
   useEffect(() => {
-    if (props.placeId !== "island") { setReading("place"); setExpanded(true); }
+    if (props.placeId !== "island") { setReading("place"); setExpanded(false); }
   }, [props.placeId]);
   useEffect(() => { if (props.timeMode === "past") setExpanded(true); }, [props.timeMode]);
   const isExpanded = expanded || Boolean(props.selected);
@@ -154,7 +158,8 @@ export default function AtlasFrame(props: Props) {
           </>}
           <footer className={styles.footer}><p>An independent portrait of Ireland, made from public observations.</p><nav aria-label="Project information"><Link href="/about">About</Link><Link href="/data">Data &amp; credits</Link><Link href="/privacy">Privacy</Link><Link href="/contact">Contact</Link></nav><p>For weather, travel and safety decisions, consult the official provider.</p></footer>
         </div>
-        <p className={styles.collapsedSummary}>{props.summary}</p>
+        <p className={styles.collapsedSummary}>{props.placeId !== "island" ? `Nearby observations for ${props.placeName}. Read more for weather, water and air coverage.` : props.summary}</p>
+        {props.needsRecovery && props.timeMode === "now" && <div className={styles.recovery} role="group" aria-label="Live data recovery"><button type="button" onClick={props.onRefresh} disabled={!props.canRefresh || props.refreshing}>{props.refreshing ? "Refreshing…" : "Retry live data"}</button><button type="button" onClick={() => changeReading("sources")}>Source status</button></div>}
       </aside>
     </div>
   </main>;

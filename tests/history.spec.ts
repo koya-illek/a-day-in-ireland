@@ -150,10 +150,11 @@ test("deep-linked Past mode stays separate from live refresh, shares at, compare
   await page.goto(`/?at=${encodeURIComponent(selectedAt)}&place=cork&view=weather`);
   await expect(page.getByRole("button", { name: "Past", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".history-result")).toContainText("Showing Tue 4 Aug 2026");
-  await expect(page.locator(".workspace-heading")).toContainText("Ireland then");
+  await expect(page.locator(".workspace-heading")).toContainText("Ireland at that moment.");
   await expect(page.locator("#live-map")).toHaveAttribute("aria-label", "Historical map of Ireland");
   await expect(page.locator(".live-state")).toContainText("Stored observations");
-  await expect(page.locator(".history-result")).toContainText("Rail history is not retained — permission pending.");
+  await page.locator(".history-coverage > summary").click();
+  await expect(page.locator(".history-coverage")).toContainText("Rail history is not retained — permission pending.");
   await expect.poll(liveCalls).toBe(0);
   expect(new URL(page.url()).searchParams.get("at")).toBe(selectedAt);
 
@@ -170,7 +171,7 @@ test("deep-linked Past mode stays separate from live refresh, shares at, compare
 
   await page.getByRole("button", { name: "Now", exact: true }).click();
   await expect(page.getByRole("button", { name: "Now", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".workspace-heading")).toContainText("Ireland now");
+  await expect(page.locator(".workspace-heading")).toContainText("A daily portrait of Ireland.");
   await expect.poll(liveCalls).toBeGreaterThan(0);
   expect(new URL(page.url()).searchParams.has("at")).toBe(false);
 });
@@ -359,7 +360,7 @@ test("a slow historical response cannot overwrite Now and controls reflow at 320
   await page.getByRole("button", { name: "Now", exact: true }).click();
   await page.waitForTimeout(500);
   await expect(page.getByRole("button", { name: "Now", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".workspace-heading")).toContainText("Ireland now");
+  await expect(page.locator(".workspace-heading")).toContainText("A daily portrait of Ireland.");
   expect(new URL(page.url()).searchParams.has("at")).toBe(false);
 
   await page.addStyleTag({ content: "html { font-size: 200% !important; }" });

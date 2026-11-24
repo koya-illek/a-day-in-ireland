@@ -180,7 +180,8 @@ test("transit answers through one resolver with shared tiers and failure contrac
   const serverWorker = await loadWorker("server-entry.js", "transit-server");
   const edgeWorker = await loadWorker("cloudflare-entry.js", "transit-edge");
   const request = new Request("https://day.illek.ie/api/transit");
-  const liveEnv = () => transitCoordinator({ status: "live", transit: [liveVehicle] });
+  const observedAt = new Date().toISOString();
+  const liveEnv = () => transitCoordinator({ status: "live", transit: [{ ...liveVehicle, observedAt }] });
 
   const serverLive = await serverWorker.fetch(request, liveEnv());
   const edgeLive = await edgeWorker.fetch(request, liveEnv());

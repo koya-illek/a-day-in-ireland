@@ -762,7 +762,7 @@ footer nav a:hover, footer nav a:focus-visible { color: white; }
   stroke-width: 2.5px !important;
   vector-effect: non-scaling-stroke;
 }
-[data-map-marker]:focus-visible > .map-marker-focus-ring {
+[data-map-marker]:focus-visible > .marker-symbol > .map-marker-focus-ring {
   filter: drop-shadow(0 0 4px var(--weather-accent));
   opacity: .95 !important;
 }
@@ -1181,7 +1181,7 @@ footer {
 @media (max-width: 520px) {
   .map-explorer-heading > div > p:last-child { font-size: .82rem; line-height: 1.5; }
   .map-caption, .place-context p, .freshness-strip, .official-notices p, .forecast-strip p { font-size: .8rem; line-height: 1.5; }
-  
+
   .workspace-heading, .map-stage, .place-context, .freshness-strip, .official-notices, .what-matters-now, .dayline { border-radius: 1rem; }
   .what-matters-grid .pulse-card small { font-size: .82rem; line-height: 1.5; }
   .dayline-heading > p { font-size: .8rem; line-height: 1.45; }
@@ -2205,9 +2205,6 @@ footer {
 .map-navigation button { height: 44px; }
 .radar-control input { min-height: 44px; }
 
-.preset-scroll-hint {
-  font-family: ui-monospace, monospace;
-  margin: .35rem .55rem 0}
 
 .freshness-strip .refresh-data-button:disabled {
   color: var(--muted);
@@ -2437,8 +2434,7 @@ footer {
   .section-rail nav::-webkit-scrollbar { height: 8px; }
   .section-rail nav::-webkit-scrollbar-thumb { background: var(--green); }
   .section-rail nav::-webkit-scrollbar-track { background: #101d33; }
-  .preset-scroll-hint { display: block; }
-}
+  }
 
 @media (max-width: 600px) {
   .topbar {
@@ -2507,7 +2503,7 @@ footer {
 
 @media (forced-colors: active) {
   [data-map-marker] > circle.map-marker-hit-target { forced-color-adjust: none; }
-  [data-map-marker]:focus-visible > .map-marker-focus-ring {
+  [data-map-marker]:focus-visible > .marker-symbol > .map-marker-focus-ring {
     filter: none;
     opacity: 1 !important;
     stroke: Highlight !important;
@@ -3385,12 +3381,6 @@ body {
   border: 1px dashed rgba(198, 161, 96, .3);
 }
 
-.preset-scroll-hint {
-  color: var(--muted);
-  display: none;
-  font-size: .78rem;
-  line-height: 1.35;
-}
 
 .preset-dot.weather { background: var(--weather-accent); }
 .preset-dot.movement { background: var(--movement-accent); }
@@ -3810,9 +3800,6 @@ body {
     flex: 0 0 auto;
   }
 
-  .preset-scroll-hint {
-    display: block;
-  }
 
   .map-stage {
     padding: .85rem;

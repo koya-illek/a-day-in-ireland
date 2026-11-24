@@ -23,7 +23,7 @@ const formatLocalObservation = (
       ? `observed ${formatIrelandHistoryTime(item.observedAt)}`
       : "observation time unavailable"
     : formatAge(item.observedAt, now);
-  return `${provider} · ${item.name} · ${formatDistance(distanceKm)} away · ${timing}`;
+  return `${provider} · ${item.name} · ${formatDistance(distanceKm)} · ${timing}`;
 };
 
 export function PlaceContext({
