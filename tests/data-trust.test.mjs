@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
-import { importBrowserLive, importStandaloneTypeScript } from "./import-ts.mjs";
+import { importBrowserLive, importStandaloneTypeScript, transpileTypeScript } from "./import-ts.mjs";
 
 import {
   isIrelandCoordinate,
@@ -28,9 +27,7 @@ test("provider links accept only absolute HTTPS URLs", () => {
 const importDataStateAdapter = async () => {
   const source = await readFile(new URL("../lib/data-state.ts", import.meta.url), "utf8");
   const weatherUrl = new URL("../platform/weather-stations.js", import.meta.url).href;
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText.replace('"./weather-stations"', JSON.stringify(weatherUrl));
+  const output = (await transpileTypeScript(source, "es2020")).replace('"./weather-stations"', JSON.stringify(weatherUrl));
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 
@@ -1577,9 +1574,7 @@ test("transit feed rejects old provider positions instead of calling them live",
 
 test("shared view state round-trips constrained map pan coordinates", async () => {
   const source = await readFile(new URL("../lib/view-state.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  const output = await transpileTypeScript(source, "es2020");
   const viewState = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   const url = viewState.serializeViewState("https://day.illek.ie/?ignored=1", {
     placeId: "cork",
@@ -1605,9 +1600,7 @@ test("shared view state round-trips constrained map pan coordinates", async () =
 
 test("shared view state round-trips only explicit RFC3339 history instants", async () => {
   const source = await readFile(new URL("../lib/view-state.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  const output = await transpileTypeScript(source, "es2020");
   const viewState = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   const historicalUrl = viewState.serializeViewState("https://day.illek.ie/?at=discard-me", {
     placeId: "island",
