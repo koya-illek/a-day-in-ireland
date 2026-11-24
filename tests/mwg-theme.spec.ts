@@ -25,11 +25,14 @@ async function read(page: Page) {
 }
 async function state(page: Page, theme: 'light' | 'dark', scheme: string) {
   await page.getByRole('combobox', { name: 'Town or city' }).waitFor();
-  await expect.poll(async () => (await read(page)).theme).toBe(theme);
-  const value = await read(page);
-  expect(value.meta).toBe(scheme); expect(value.scheme).toBe(scheme); expect(value.inputScheme).toBe(scheme);
-  expect(value.overflow).toBe(false);
-  expect(value.body).toBe(theme === 'light' ? 'rgb(237, 242, 234)' : 'rgb(17, 25, 23)');
+  let value: Awaited<ReturnType<typeof read>> | undefined;
+  await expect(async () => {
+    value = await read(page);
+    expect(value.theme).toBe(theme);
+    expect(value.meta).toBe(scheme); expect(value.scheme).toBe(scheme); expect(value.inputScheme).toBe(scheme);
+    expect(value.overflow).toBe(false);
+    expect(value.body).toBe(theme === 'light' ? 'rgb(237, 242, 234)' : 'rgb(17, 25, 23)');
+  }).toPass({ timeout: 10000 });
   return value;
 }
 async function audit(page: Page) {
@@ -66,6 +69,9 @@ for (const width of [320, 390, 1440]) for (const os of ['light', 'dark'] as cons
       await page.getByRole('button', { name: 'Dark mode', exact: true }).click();
       await state(page, os, os); expect(await page.evaluate(key => localStorage.getItem(key), key)).toBe(os);
       await page.reload(); await state(page, os, os);
+      // A route's head reconciliation must not reset an explicit preference.
+      await page.locator('meta[name="color-scheme"]').first().evaluate(meta => meta.setAttribute('content', 'light dark'));
+      await state(page, os, os);
       await page.goto('/v2'); await page.getByRole('combobox', { name: 'Town or city' }).waitFor();
       records.push({ state: 'fixed-atlas', ...(await read(page)) });
       await expect.poll(async () => (await read(page)).meta).toBe('light');
