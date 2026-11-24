@@ -1,6 +1,6 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 "use client";
 
-import Link from "next/link";
 
 // Last-resort boundary for failures thrown by the root layout itself, where
 // app/error.tsx is not mounted. It must render its own html/body shell.
@@ -25,9 +25,9 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
           </p>
           <p style={{ lineHeight: 1.6 }}>
             If that does not help, these pages are served separately:{" "}
-            <Link href="/" style={{ color: "#1d4d3b" }}>the live map</Link>,{" "}
-            <Link href="/data" style={{ color: "#1d4d3b" }}>data &amp; methodology</Link> or{" "}
-            <Link href="/about" style={{ color: "#1d4d3b" }}>about this project</Link>.
+            <a href="/" style={{ color: "#1d4d3b" }}>the live map</a>,{" "}
+            <a href="/data" style={{ color: "#1d4d3b" }}>data &amp; methodology</a> or{" "}
+            <a href="/about" style={{ color: "#1d4d3b" }}>about this project</a>.
           </p>
           {error.digest ? (
             <p style={{ color: "#52665e" }}>

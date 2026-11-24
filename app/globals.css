@@ -2073,7 +2073,6 @@ footer {
 .layer-group-heading h3,
 .guidance-status,
 .place-picker label,
-.preset-scroll-hint,
 .freshness-chip b,
 .place-observations dt,
 .dayline-heading > p,
@@ -2309,11 +2308,7 @@ footer {
   scrollbar-gutter: stable;
 }
 
-.timeline-plot {
-  display: grid;
-  grid-template-columns: 4.25rem minmax(40rem, 1fr) 4.25rem;
-  min-width: 52rem;
-}
+
 
 .timeline-chart {
   gap: 4px;
@@ -2476,7 +2471,7 @@ footer {
   .warning-key-facts { grid-template-columns: 1fr; }
   .warning-actions { display: block; }
   .warning-actions details { margin-top: .35rem; }
-  .timeline-plot { min-width: 50rem; }
+
   .timeline-data-list { margin-top: .8rem; }
   .dayline { padding-left: .85rem; padding-right: .85rem; }
 }

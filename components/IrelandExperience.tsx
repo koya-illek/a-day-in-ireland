@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-html-link-for-pages -- Static export uses native document navigation; no router or prefetch is needed for these links. */
 "use client";
 
 import {
@@ -14,7 +15,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { geoMercator, geoPath } from "d3-geo";
 import { PRESET_LAYERS, LAYER_GROUPS } from "../lib/map-presets";
 import { dailyBriefing } from "../lib/daily-briefing";
@@ -25,11 +25,11 @@ import type {
   LiveSnapshot
 } from "../lib/types";
 import { getSelectedSourceAssessment, getServiceDisplayState } from "../lib/data-state";
-import { applyTransitDestinations, enrichTransitDestinations, refreshCurrentContexts, refreshLivingLayers, refreshTransit, refreshWeather } from "../lib/browser-live";
 import { getActivityGuidance, type ActivityId, type GuidancePlace } from "../lib/activity-guidance";
 import { transitPresentation } from "../lib/presentation.js";
 import { sortOfficialWeatherWarnings, warningTiming } from "../platform/river-source.js";
-import { ForecastStrip, SkyLightStrip } from "./SkyBriefing";
+const ForecastStrip = dynamic(() => import("./SkyBriefing").then(m => m.ForecastStrip), { ssr: false });
+const SkyLightStrip = dynamic(() => import("./SkyBriefing").then(m => m.SkyLightStrip), { ssr: false });
 import {
   DEFAULT_PLACE_ID,
   parseViewState,
@@ -117,15 +117,15 @@ import { historyResolutionLabel } from "../lib/history";
 const HistoryControls = dynamic(() => import("./HistoryControls").then((module) => module.HistoryControls));
 const BriefingComparison = dynamic(() => import("./BriefingComparison").then((module) => module.BriefingComparison));
 const ExplorePanel = dynamic(() => import("./ExplorePanel").then((module) => module.ExplorePanel));
-import { OfficialNotices } from "./OfficialNotices";
+const OfficialNotices = dynamic(() => import("./OfficialNotices").then(m => m.OfficialNotices), { ssr: false });
 const AtlasFrame = dynamic(() => import("./atlas/AtlasFrame"));
 
-import { PlacePicker } from "./PlacePicker";
-import { WeatherTimeline } from "./WeatherTimeline";
+const PlacePicker = dynamic(() => import("./PlacePicker").then(m => m.PlacePicker), { ssr: false });
+const WeatherTimeline = dynamic(() => import("./WeatherTimeline").then(m => m.WeatherTimeline), { ssr: false, loading: () => <section id="day-so-far" className="dayline"><h2>The shape of the day</h2><p>Loading hourly observations…</p></section> });
 import { MapCanvas } from "./MapCanvas";
 import { WorkspaceHeading } from "./WorkspaceHeading";
-import { PlaceContext } from "./PlaceContext";
-import { FreshnessStrip } from "./FreshnessStrip";
+const PlaceContext = dynamic(() => import("./PlaceContext").then(m => m.PlaceContext), { ssr: false });
+const FreshnessStrip = dynamic(() => import("./FreshnessStrip").then(m => m.FreshnessStrip), { ssr: false });
 import { constrainMapView, useMapGestures } from "./use-map-gestures";
 
 const DeferredDetailCard = dynamic(
@@ -507,7 +507,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       });
     };
     const update = async () => {
-      const next = await refreshWeather(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshWeather(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         generatedAt: next.generatedAt,
@@ -525,7 +525,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       }));
     };
     const updateLivingLayers = async () => {
-      const next = await refreshLivingLayers(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshLivingLayers(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         trains: next.trains,
@@ -542,7 +542,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     const updateCurrentContexts = async () => {
       const previousRadar = liveSnapshotRef.current.radar;
       const selectedRadarFrameIndex = radarFrameIndexRef.current;
-      const next = await refreshCurrentContexts(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshCurrentContexts(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
@@ -566,7 +566,7 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       if (active) setRadarFrameIndex(restoredRadarFrameIndex(previousRadar, selectedRadarFrameIndex, next.radar));
     };
     const updateTransit = async () => {
-      const next = await refreshTransit(liveSnapshotRef.current);
+      const next = await (await import("../lib/browser-live")).refreshTransit(liveSnapshotRef.current);
       commit((current) => ({
         ...current,
         lastSuccessAt: newestTimestamp(current.lastSuccessAt, next.lastSuccessAt),
@@ -645,7 +645,8 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
     const vehicles = liveSnapshotRef.current.transit;
     if (!vehicles.some((vehicle) => vehicle.tripId && !vehicle.destination)) return;
     let active = true;
-    void enrichTransitDestinations(vehicles).then((enriched) => {
+    void import("../lib/browser-live").then(async ({ enrichTransitDestinations, applyTransitDestinations }) => {
+      const enriched = await enrichTransitDestinations(vehicles);
       if (!active) return;
       // Trips missing from the destinations manifest stay unresolved. The
       // merge targets whichever array is current, so a transit poll that
@@ -2765,7 +2766,7 @@ panelOpen && <ExplorePanel
     >
       <a className="skip-link" href="#live-map">Skip to {timeMode === "past" ? "historical" : "live"} map</a>
       <header className="topbar">
-        <Link className="brand" href="/" aria-label="A Day in Ireland, home">
+        <a className="brand" href="/" aria-label="A Day in Ireland, home">
           <span className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32">
               <path className="brand-sun" d="M11 15a5 5 0 0 1 10 0" />
@@ -2779,7 +2780,7 @@ panelOpen && <ExplorePanel
               : serviceDisplayState === "unavailable"
                 ? "Island view"
                 : "Live island view"}</small></span>
-        </Link>
+        </a>
         <div
           className="live-state"
           data-connection-status={connectionStatus}
@@ -3063,11 +3064,11 @@ panelOpen && <ExplorePanel
         <div>
           <p><b>A Day in Ireland</b> turns public observations into a living portrait of the island.</p>
           <nav aria-label="Project information">
-            <Link href={comparisonHref} prefetch={false} title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</Link>
-            <Link href="/about">About</Link>
-            <Link href="/data">Data &amp; methodology</Link>
-            <Link href="/privacy">Privacy</Link>
-            <Link href="/contact">Contact</Link>
+            <a href={comparisonHref} title="Preview the compact map and list layout; the original retains all controls">Compact view · preview</a>
+            <a href="/about">About</a>
+            <a href="/data">Data &amp; methodology</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/contact">Contact</a>
           </nav>
         </div>
         <p>Copyright Met Éireann; source met.ie; CC BY 4.0; presentation modified. Contains Irish Public Sector Information from waterlevel.ie, the Marine Institute and EPA; EirGrid operational data; EEA air-quality reports; CAMS model output via Open-Meteo; Sunrise-Sunset.org solar events; NOAA aurora guidance; NASA GIBS imagery; CelesTrak orbital elements; and USGS seismic detections. NTA GTFS data is licensed under CC BY 4.0, provided “as is”, and the NTA is not responsible for errors or inaccuracies. Road and boundary data © OpenStreetMap contributors, ODbL. Providers accept no liability for errors or omissions. Not for safety-critical decisions.</p>

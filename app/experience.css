@@ -160,3 +160,5 @@ html[data-theme="light"] .place-search-results li[aria-selected="true"] { color:
 .timeline-frame .timeline-axis { padding: .25rem .1rem 3rem; }
 .timeline-frame .timeline-axis strong { font-size: .75rem; letter-spacing: 0; }
 .experience .what-matters-now { margin-top: 1.5rem; border-top: 1px solid var(--surface-line); padding-top: 1rem; }
+
+.experience .place-observations dl > div { background: var(--panel); color: var(--ink); border-color: var(--surface-line); }

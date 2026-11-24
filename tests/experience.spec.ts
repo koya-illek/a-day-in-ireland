@@ -1220,7 +1220,7 @@ test("page exposes live freshness and source provenance", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#connection-summary")).toContainText(/Online|Checking for newer data/);
   await expect(page.getByText(/Copyright Met Éireann/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What matters now." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Across Ireland, now." })).toBeVisible();
   await expect(page.getByRole("heading", { name: /Ireland, at a glance|Signals that matter|What the live data shows/ })).toHaveCount(0);
   const dataDetails = page.locator("details.freshness-details");
   await expect(dataDetails).not.toHaveAttribute("open", "");
@@ -2180,7 +2180,7 @@ test("new public contexts are discoverable and honestly describe unavailable dat
 
 test("what-matters board only presents selected-layer signals when they exist", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "What matters now." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Across Ireland, now." })).toBeVisible();
   await expect(page.getByText("Bathing water", { exact: true })).toHaveCount(0);
   await page.getByRole("navigation", { name: "Map view shortcuts" }).getByRole("button", { name: /Water/ }).click();
   const signals = page.locator(".notable-signals .signal-item");
@@ -2806,6 +2806,10 @@ test("shape of the day has labelled dual scales, independent rain bars, and a da
 
   await expect(page.locator(".temperature-axis")).toContainText(/Temperature/);
   await expect(page.locator(".rain-axis")).toContainText(/rain/i);
+  const scalesBefore = await page.locator(".timeline-axis").evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().x));
+  await page.getByRole("button", { name: "Start of day", exact: true }).click();
+  await page.getByRole("button", { name: "Latest hours", exact: true }).click();
+  expect(await page.locator(".timeline-axis").evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().x))).toEqual(scalesBefore);
   await expect(page.locator(".timeline-x-axis")).toContainText(/Hour of day · Irish time/);
   const firstPoint = page.locator(".timeline-point").first();
   await expect(firstPoint).toHaveAccessibleName(/average temperature.*degrees Celsius.*average observed rainfall.*millimetres per reporting station.*average wind.*kilometres per hour/);
