@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { transpileTypeScript } from "./import-ts.mjs";
 
 const { inlineScriptHashes, renderHeadersWithPerPageCsp } = await import(
   new URL("../scripts/write-csp-headers.mjs", import.meta.url).href
@@ -10,9 +10,7 @@ const { inlineScriptHashes, renderHeadersWithPerPageCsp } = await import(
 
 const importRoadGeometry = async () => {
   const source = await readFile(new URL("../lib/road-geometry.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  const output = await transpileTypeScript(source, "es2020");
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 

@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { transpileTypeScript } from "./import-ts.mjs";
 
 const importHistory = async () => {
   const source = await readFile(new URL("../lib/history.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  const output = await transpileTypeScript(source, "es2022");
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 };
 

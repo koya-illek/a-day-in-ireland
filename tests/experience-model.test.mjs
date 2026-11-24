@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+import { transpileTypeScript } from "./import-ts.mjs";
 
 const { irelandClockParts, irelandEditorialMoment, formatTime, restoredRadarFrameIndex, weatherNarrative, buildHeroFacts } = await (async () => {
   const source = await readFile(new URL("../components/experience-model.ts", import.meta.url), "utf8");
-  const output = ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  const output = await transpileTypeScript(source, "es2020");
   return import(`data:text/javascript,${encodeURIComponent(output)}`);
 })();
 

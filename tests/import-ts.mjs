@@ -1,15 +1,24 @@
 // Shared transpile-and-remap harness for importing the lib TypeScript modules
 // from node:test. These modules import platform code and satellite.js through
 // package-relative specifiers that only resolve once rewritten to file URLs.
+// TypeScript 7 has no in-process transpile API, so this uses esbuild, which
+// wrangler already depends on.
 import { readFile } from "node:fs/promises";
 import { URL } from "node:url";
-import ts from "typescript";
+import * as esbuild from "esbuild";
+
+export const transpileTypeScript = async (source, target = "es2020") => {
+  const result = await esbuild.transform(source, {
+    loader: "ts",
+    format: "esm",
+    target
+  });
+  return result.code;
+};
 
 const transpile = async (relativePath) => {
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
-  return ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.ESNext }
-  }).outputText;
+  return transpileTypeScript(source);
 };
 
 export const importStandaloneTypeScript = async (relativePath) =>
