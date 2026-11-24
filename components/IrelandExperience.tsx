@@ -2099,9 +2099,13 @@ export default function IrelandExperience({ initialSnapshot, atlas = false }: { 
       sync();
     };
     sync();
+    // Route metadata can reconcile after the theme's layout effect.
+    const metadata = new MutationObserver(sync);
+    metadata.observe(document.head, { subtree: true, childList: true, attributeFilter: ["content"] });
     system.addEventListener("change", sync);
     window.addEventListener("storage", storage);
     return () => {
+      metadata.disconnect();
       system.removeEventListener("change", sync);
       window.removeEventListener("storage", storage);
     };

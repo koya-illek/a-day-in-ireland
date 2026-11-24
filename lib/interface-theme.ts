@@ -10,11 +10,12 @@ export function applyInterfaceTheme(preference: InterfaceTheme | null, atlas = f
   root.dataset.theme = theme;
   root.style.colorScheme = scheme;
   const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
-  if (meta) meta.content = scheme;
+  if (meta && meta.content !== scheme) meta.content = scheme;
   const light = document.getElementById("ireland-light-theme") as HTMLStyleElement | null;
   if (light) light.media = atlas || preference === "light" ? "all" : preference === "dark" ? "not all" : "(prefers-color-scheme: light)";
   for (const color of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
-    color.content = atlas ? "#123b40" : preference ? theme === "light" ? "#edf2ea" : "#071815" : color.media.includes("dark") ? "#071815" : "#edf2ea";
+    const value = atlas ? "#123b40" : preference ? theme === "light" ? "#edf2ea" : "#071815" : color.media.includes("dark") ? "#071815" : "#edf2ea";
+    if (color.content !== value) color.content = value;
   }
   return theme;
 }
