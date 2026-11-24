@@ -2877,6 +2877,7 @@ panelOpen && <ExplorePanel
 {placeSurface}
 
 {mapSurface}
+{freshnessSurface}
 
       <section id="what-matters-now" className="what-matters-now" data-scope="across-ireland" tabIndex={-1} aria-labelledby="what-matters-heading">
         <div className="what-matters-heading">
@@ -2924,7 +2925,7 @@ panelOpen && <ExplorePanel
           <p className="signal-assessment"><span className="live-dot partial" />Unable to assess every selected signal source. Unavailable or non-current: {selectedSourceAssessment.unavailableSources.join(", ")}.</p>
         )}
 
-        <p className="briefing-introduction">{selectedPlace.id !== "island" ? "National background, separate from your nearby observations." : briefingLines.length ? briefingLines.join(" ") : "Current source coverage is shown below. Missing observations cannot describe current conditions."}</p>
+        {(selectedPlace.id !== "island" || !briefingLines.length) && <p className="briefing-introduction">{selectedPlace.id !== "island" ? "National background, separate from your nearby observations." : "Check source coverage beside the map. Missing observations cannot describe current conditions."}</p>}
         {timeMode === "now" && <details className="morning-comparison" onToggle={(event) => setComparisonOpen(event.currentTarget.open)}>
           <summary>What changed since morning?</summary>
           {comparisonOpen && <BriefingComparison snapshot={snapshot} now={now} enabled={online && !isConnectingWithoutSnapshot && serviceDisplayState !== "stale" && serviceDisplayState !== "cached"} />}
@@ -3030,9 +3031,11 @@ panelOpen && <ExplorePanel
         </details>
       </section>
 
+        <details className="supporting-outlook">
+          <summary>Daylight and official forecast</summary>
           <SkyLightStrip solar={snapshot.solar} status={snapshot.contextStatus.solar} now={now} />
           <ForecastStrip forecast={snapshot.forecast} status={snapshot.contextStatus.forecast} now={now} />
-{freshnessSurface}
+        </details>
 {noticesSurface}
         </div>
       </section>
